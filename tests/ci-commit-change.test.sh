@@ -27,12 +27,12 @@ fake_token() { printf 'ghp_%s' '0123456789abcdefghijABCDEFGHIJ012345'; }
 # nothing else.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/scripts" "$base/repo/.ci-handoff" "$base/bin"
+  mkdir -p "$base/repo/scripts" "$base/repo/lib" "$base/repo/.ci-handoff" "$base/bin"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
   cp "$REPO_ROOT/scripts/ci-commit-change.sh" "$base/repo/scripts/"
-  cp "$REPO_ROOT/scripts/ci-secret-scan.sh" "$base/repo/scripts/"
+  cp "$REPO_ROOT/lib/scan.sh" "$base/repo/lib/"
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
   printf '.ci-handoff/\n' >"$base/repo/.gitignore"
   git -C "$base/repo" add -A

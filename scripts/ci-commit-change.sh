@@ -71,7 +71,7 @@
 # ---------------------------------------------------------------------------
 # The publish-boundary secret scan
 # ---------------------------------------------------------------------------
-# scripts/ci-secret-scan.sh — gitleaks over commit-msg.txt, needs-info.md and
+# lib/scan.sh — gitleaks over commit-msg.txt, needs-info.md and
 # the staged diff, before anything is committed. Issue #41: the agent can read
 # the job's push token out of .git/config, and until this scan existed the two
 # handoff files above carried whatever it wrote straight to the GitHub API,
@@ -132,7 +132,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$REPO_ROOT/.ci-handoff"
 TOFU="${TOFU:-tofu}"
-SECRET_SCAN="$SCRIPT_DIR/ci-secret-scan.sh"
+# lib/, not beside this script: the scan is internal but it is not this
+# stage's private helper — see the header of lib/scan.sh.
+SECRET_SCAN="$REPO_ROOT/lib/scan.sh"
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
 

@@ -31,11 +31,11 @@ fake_token() { printf 'ghp_%s' '0123456789abcdefghijABCDEFGHIJ012345'; }
 # stdin and nothing else.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/scripts" "$base/bin"
+  mkdir -p "$base/repo/lib" "$base/bin"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  cp "$REPO_ROOT/scripts/ci-secret-scan.sh" "$base/repo/scripts/"
+  cp "$REPO_ROOT/lib/scan.sh" "$base/repo/lib/"
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
@@ -61,7 +61,7 @@ scan_in() { # checkout argument... -> runs the script, stdout only
   local c="$1"; shift
   ( cd "$c/repo" \
     && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-       ./scripts/ci-secret-scan.sh "$@" 2>/dev/null )
+       ./lib/scan.sh "$@" 2>/dev/null )
 }
 
 # --- a clean channel ---------------------------------------------------------
@@ -195,7 +195,7 @@ assert_eq "msg.txt" "$out" "stdout"
 
 c="$(new_checkout no_binary)"
 printf 'anything at all\n' >"$c/repo/msg.txt"
-out="$( cd "$c/repo" && GITLEAKS="$c/bin/nope" ./scripts/ci-secret-scan.sh -- msg.txt 2>/dev/null )"
+out="$( cd "$c/repo" && GITLEAKS="$c/bin/nope" ./lib/scan.sh -- msg.txt 2>/dev/null )"
 rc=$?
 
 it "a missing gitleaks exits 1, never 0"

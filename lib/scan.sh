@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 #
-# ci-secret-scan.sh — read the text this pipeline is about to publish and stop
-# the run if any of it is shaped like a credential.
+# scan.sh — read the text this pipeline is about to publish and stop the run if
+# any of it is shaped like a credential.
+#
+# INTERNAL. This is not a verb and must not become one. ADR-0003's rule is
+# that a script becomes public vocabulary if and only if the original workflow
+# called it directly, and nothing ever called this but the commit stage —
+# once over the agent's drafts, once --staged just before `git commit`. So it
+# lives in lib/ with its fail-closed exit discipline intact, and the commit
+# verb is its only caller.
+#
+# The commit verb INVOKES it as a subprocess rather than sourcing it, which is
+# load-bearing rather than incidental: this script's stdout is the list of
+# channels that matched, and the commit verb's stdout is exactly one outcome
+# word. Capturing the former is what stops it becoming the latter.
 #
 # Issue #41. The implementing agent's instructions ARE the issue title, body
 # and comment thread — attacker-controlled text — and its `Read` grant is
@@ -9,10 +21,10 @@
 # token, because actions/checkout defaults to persist-credentials: true. Two
 # of the files that agent writes leave the runner verbatim:
 #
-#   .ci-handoff/commit-msg.txt  becomes the commit message, then
+#   .falconet/commit-msg.txt  becomes the commit message, then
 #                               commit-body.md, then (ci-pr-body.sh) the
 #                               pull-request body
-#   .ci-handoff/needs-info.md   becomes a comment on the requester's issue
+#   .falconet/needs-info.md   becomes a comment on the requester's issue
 #                               (ci-park-issue.sh), unfenced
 #
 # Neither is a COMMITTED file, and committed files are the whole of what
@@ -28,7 +40,7 @@
 # never pushed, and a pull request is never opened for a run that failed here.
 #
 # Modes:
-#   ci-secret-scan.sh [--staged] [--] [FILE ...]
+#   lib/scan.sh [--staged] [--] [FILE ...]
 #
 #     FILE      scanned if it exists and is non-empty; a missing or empty
 #               file is not a finding and not an error, because the pipeline
@@ -116,7 +128,7 @@ if [[ -z "$STAGED" && "${#targets[@]}" -eq 0 ]]; then
 fi
 
 if ! command -v "$GITLEAKS" >/dev/null 2>&1; then
-  echo "ci-secret-scan.sh: '$GITLEAKS' not found — refusing to report a" >&2
+  echo "scan.sh: '$GITLEAKS' not found — refusing to report a" >&2
   echo "clean scan that never happened. Install it, or set \$GITLEAKS." >&2
   exit 1
 fi
@@ -152,7 +164,7 @@ scan_one() {
       hits=1
       return 0 ;;
     *)
-      echo "ci-secret-scan.sh: gitleaks exited $rc scanning $label — the" >&2
+      echo "scan.sh: gitleaks exited $rc scanning $label — the" >&2
       echo "scan did not complete, so nothing may be published on its word." >&2
       exit 1 ;;
   esac
@@ -166,9 +178,9 @@ if [[ "${#targets[@]}" -gt 0 ]]; then
     [[ -s "$target" ]] || continue
     # Named relative to the repository when it is inside it. The caller passes
     # absolute paths, and the label ends up in a comment on a public-facing
-    # issue: ".ci-handoff/commit-msg.txt" is the name the pipeline's own
+    # issue: ".falconet/commit-msg.txt" is the name the pipeline's own
     # documentation uses, where
-    # "/home/runner/work/wayfinders-infra/wayfinders-infra/.ci-handoff/..." is
+    # "/home/runner/work/repo/repo/.falconet/..." is
     # a runner detail the requester cannot use and nobody needs published.
     #
     # Resolved to a physical path first, because REPO_ROOT is one (it comes
@@ -184,7 +196,7 @@ fi
 if [[ -n "$STAGED" ]]; then
   diff_file="$TMP_DIR/staged.diff"
   if ! git -C "$REPO_ROOT" diff --cached >"$diff_file"; then
-    echo "ci-secret-scan.sh: git diff --cached failed" >&2
+    echo "scan.sh: git diff --cached failed" >&2
     exit 1
   fi
   if [[ -s "$diff_file" ]]; then

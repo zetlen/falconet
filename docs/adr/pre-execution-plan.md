@@ -69,7 +69,7 @@ violate one should stop and say so rather than proceed.
 ```text
 before                              after
 ──────                              ─────
-scripts/ci-secret-scan.sh      →    lib/scan.sh                    (sourced by commit)
+scripts/ci-secret-scan.sh      →    lib/scan.sh                    (invoked by commit)
 scripts/ci-commit-change.sh    →    libexec/falconet/commit.sh
 scripts/ci-push-branch.sh      →    libexec/falconet/push.sh
 scripts/ci-validate.sh         →    libexec/falconet/validate.sh
@@ -183,6 +183,12 @@ intact (0 clean, 1 scanner broken, 2 usage, 3 finding).
       copy at line 38 to `<scratch>/repo/lib/scan.sh`.
 - [ ] All 241 lines of assertions survive, including the `GITLEAKS=` override
       and the "no targets is a usage error, not a silent pass" case.
+- [ ] **Sequencing correction, found in execution.** Moving the scan breaks
+      `commit` in the same instant, so this task must also carry the minimal
+      rewiring that keeps the suite green: point `SECRET_SCAN` at
+      `$REPO_ROOT/lib/scan.sh` and retarget the copy in
+      `tests/ci-commit-change.test.sh:35`. Both were originally listed under
+      Task 3a, which is one commit too late.
 
 **Verify:** `bash tests/run.sh` green; `scan.test.sh` passes with the same
 count it had as `ci-secret-scan.test.sh`.
@@ -199,7 +205,8 @@ work so a failure is attributable.
 
 - [ ] `git mv scripts/ci-commit-change.sh libexec/falconet/commit.sh`.
 - [ ] Second `dirname` for `REPO_ROOT` (see "the one trap").
-- [ ] `SECRET_SCAN="$SCRIPT_DIR/ci-secret-scan.sh"` → `"$REPO_ROOT/lib/scan.sh"`.
+- [ ] ~~`SECRET_SCAN` rewiring~~ — done in Task 2, which could not leave it
+      undone and stay green.
 - [ ] `OUT_DIR` default `.ci-handoff` → `handoff_dir` via `lib/handoff.sh`,
       `--out-dir` still overriding.
 - [ ] `git mv tests/ci-commit-change.test.sh tests/commit.test.sh`; retarget
