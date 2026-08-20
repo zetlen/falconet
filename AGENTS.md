@@ -83,14 +83,25 @@ decision, not a convenience.
   print exactly one outcome word on stdout; anything a helper emits must be
   captured, not allowed through.
 
-## Porting from the provenance
+## Reading the provenance
 
 Header comments in [`docs/provenance/`](docs/provenance/) describe the
 pipeline in the present tense, because they were taken from the commit where
-it was live. They reference paths that have moved. That is expected — **fix
-the paths as you port a file, never in a sweep.**
+it was live, and they reference paths that no longer exist. That is expected:
+it is a record, not a copy to keep in sync. Do not "fix" it.
 
-The scripts are stage-shaped, not subcommand-shaped: a workflow called them,
-they do not call each other, and they communicate through files in a handoff
-directory. Turning that into a coherent CLI is real design work, and
-[ADR-0003](docs/adr/0003-the-cli-surface.md) is where it was done.
+The port from those stage-shaped scripts to the six verbs is done
+([ADR-0003](docs/adr/0003-the-cli-surface.md) designed it,
+[the plan](docs/adr/pre-execution-plan.md) records what executing it turned
+up). If you are adding a verb, the criterion is ADR-0003's: a thing becomes
+public vocabulary if and only if a caller invokes it directly. The secret
+scan is the worked example of something that stayed internal.
+
+## Two roots, never one variable
+
+`FALCONET_HOME` is where the tool lives; `REPO_ROOT` is the repository being
+worked on. The origin's scripts lived inside the repo they operated on, so
+one answer served both — and a verb that keeps that assumption operates on
+falconet instead of on the consumer's repository, silently, reporting an
+outcome about the wrong tree. `lib/repo.sh` is the whole of the fix. Never
+derive the working tree from `$BASH_SOURCE`.

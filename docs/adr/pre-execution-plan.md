@@ -1,6 +1,20 @@
 # Implementation plan — port the corpus onto the CLI surface
 
-**Status:** ready to execute · 2026-08-20
+**Status:** executed · 2026-08-20
+
+> **This plan has been carried out.** All twelve tasks landed, each with a
+> green suite, from `c5f408a` to the tip. The checkboxes below are left
+> unticked on purpose: what makes this document worth keeping is not the
+> tracking but the record of what executing it turned up — the mis-sequenced
+> Task 2, the six bugs in the untested `validate`, the contradiction in Task
+> 8's own precedence list, and the root-resolution bug that no test could see
+> because the tests were copying each script into the fixture. Those notes
+> are inline, marked *found in execution* or *corrected during execution*.
+>
+> One thing the plan did not anticipate at all: falconet had been assuming it
+> lives inside the repository it operates on, which is true of the origin's
+> scripts and false of a separate tool. See the commit that splits
+> `FALCONET_HOME` from `REPO_ROOT`.
 **Implements:** [ADR-0003](0003-the-cli-surface.md), which decided the surface.
 **Governed by:** [ADR-0004](0004-the-strangler-reaffirmed.md), [ADR-0002](0002-extract-the-pipeline-into-falconet.md) and `HANDOFF.md` §3 (settled decisions) and §5 (landmines).
 

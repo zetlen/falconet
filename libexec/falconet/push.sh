@@ -25,7 +25,7 @@
 # silence, because a person acts on it.
 #
 # So this script runs the moment there is a commit to push — directly after
-# scripts/ci-commit-change.sh, before validation, before the review, and
+# the commit verb, before validation, and
 # before any of the branches that decide what to do with the change. There is
 # no second push and nothing to amend: the repair loops are gone, and each run
 # makes exactly one commit and pushes it once. Pushing is unconditional on the

@@ -5,11 +5,13 @@ picked on purpose. This one turns a plain-language infrastructure request into
 a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
-**Status: not a working tool yet.** This repository currently holds the
-extracted corpus and the record that motivated it. Nothing here runs as a
-GitHub Action today. See [Where this stands](#where-this-stands).
+**Status: the CLI works; nothing has run as an Action yet.** All six verbs
+are implemented and tested — `bash tests/run.sh`, 12 files, 435 assertions.
+The composite action and the reusable workflow are written and their
+structural invariants are tested, but they have never executed on a real
+runner. See [Where this stands](#where-this-stands).
 
-## What it will do
+## What it does
 
 Someone files an issue that says, in ordinary words, what they want changed.
 falconet:
@@ -27,6 +29,51 @@ or a hand-off to a human. A request never disappears into a green run that
 produced nothing.
 
 What it will **not** do is apply anything. The gate at the end is a person.
+
+## The verbs
+
+Six of them, one per stage. They never call each other; they pass files
+through a handoff directory, so the same sequence runs in CI and on a
+workstation. Uniform exit codes: **0** an outcome was determined, **1**
+refused or a check failed, **2** usage. The verbs that decide something
+print exactly one word on stdout.
+
+| Verb | What it does | Words |
+| --- | --- | --- |
+| `prepare --issue N` | eligibility gate, claim, branch, baseline plan | `ready` `in-flight` `ineligible` |
+| `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
+| `push --branch B` | the branch onto the remote, the moment a commit exists | — |
+| `validate --base S` | validate and plan each stack, collecting failures | — |
+| `park --issue N --label L` | a terminal state, said where the requester reads it | — |
+| `assemble --plan F --out F` | a PR body carrying the whole plan | — |
+
+Configuration is one optional JSON file at `.github/falconet.json`
+([schema](docs/adr/0003-the-cli-surface.md#the-config-file)); every key has a
+default and the defaults reproduce the pipeline this was extracted from.
+
+## Using it
+
+Two things only the operator can do — registering a GitHub App as a
+credential and cutting an API key with a budget alert — are described in
+[operating](docs/operating.md). Then, from a consuming repository:
+
+```yaml
+jobs:
+  infra-request:
+    uses: zetlen/falconet/.github/workflows/falconet.yml@main
+    with:
+      issue: ${{ github.event.issue.number }}
+    secrets:
+      app-id: ${{ secrets.FALCONET_APP_ID }}
+      app-private-key: ${{ secrets.FALCONET_APP_PRIVATE_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Or run a verb by hand, against the repository you are standing in:
+
+```sh
+falconet validate --base "$(git rev-parse main)"
+```
 
 ## Why it exists
 
@@ -60,19 +107,20 @@ off-the-shelf option.
 
 | Piece | State |
 | --- | --- |
-| `scripts/` — the seven pipeline stages | extracted verbatim, tested |
-| `tests/` — 6 files, ~1,600 lines | passing (`bash tests/run.sh`) |
-| `docs/provenance/` — the retired orchestrator, its prompts, the alternatives | reference only |
-| `docs/adr/` — the decisions | ADR-0002 founding, [0003](docs/adr/0003-the-cli-surface.md) the CLI surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
-| CLI entry point | designed, not written |
-| Composite action + reusable workflow | designed, not written |
-| Config file | [designed](docs/adr/0003-the-cli-surface.md#the-config-file), not written |
+| `bin/`, `lib/`, `libexec/falconet/` — the CLI | six verbs, working |
+| `tests/` — 12 files, 435 assertions | passing (`bash tests/run.sh`) |
+| `action.yml` + `.github/workflows/falconet.yml` | written, invariants tested, never run |
+| `prompts/` | extracted from the provenance |
+| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
+| `docs/provenance/` — the retired orchestrator | reference only |
+| A live run | **not yet** — the next thing that has to happen |
 | Bun rewrite | deferred on purpose ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)) |
 
-The scripts are stage-shaped, not subcommand-shaped: they were called by a
-workflow, not by each other. Turning them into one CLI is the next job, and
-[the port plan](docs/adr/pre-execution-plan.md) is how it proceeds — twelve
-tasks, each ending with a green test suite.
+The port from stage-shaped scripts to a coherent CLI is done; [the plan it
+followed](docs/adr/pre-execution-plan.md) records what changed and what was
+found on the way. What has not happened is a real run: development *is*
+integration here, so the next step is a consuming repository and a canary
+issue of known shape.
 
 Two further documents: [operating](docs/operating.md) covers the credentials
 only the operator can create and where the pieces live; [AGENTS.md](AGENTS.md)
