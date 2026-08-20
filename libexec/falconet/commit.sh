@@ -171,6 +171,57 @@ cd "$REPO_ROOT" || exit 1
 config_init "$CONFIG"
 handoff_init "$OUT_DIR"
 OUT_DIR="$HANDOFF"
+
+# --- the policy, out of config and into arrays ------------------------------
+#
+# Read once, here, rather than at each use: a guard that re-reads its own rule
+# mid-run is a guard whose behavior depends on when you look.
+#
+# The empty-array guards below are for macOS bash 3.2, where expanding an
+# empty array under `set -u` is an unbound-variable error rather than nothing.
+
+ALLOW=()
+while IFS= read -r _entry; do
+  [ -n "$_entry" ] && ALLOW+=("$_entry")
+done < <(config_get_array '.paths.allow')
+
+DENY=()
+while IFS= read -r _entry; do
+  [ -n "$_entry" ] && DENY+=("$_entry")
+done < <(config_get_array '.paths.deny_content')
+
+# A denylist entry is written the way a person writes the construct —
+# `templatefile(`, `data "external"` — and matched the way HCL actually spells
+# it, which is with whitespace in the joints. `templatefile (` and
+# `data  "external"` are the same construct and must not be a way past the
+# guard. So the literal becomes a regex: metacharacters escaped, then
+# whitespace tolerated before an opening paren, around a quote, and wherever
+# the literal has a space.
+#
+# This reproduces the hand-written regexes it replaces, character for
+# character. That is the point: the config's default IS the old behavior.
+deny_pattern() { # literal -> ERE
+  local p
+  p="$(printf '%s' "$1" | sed -e 's/[][\\.^$*+?{}|()]/\\&/g')"
+  p="${p//\\(/[[:space:]]*\\(}"
+  p="${p//\"/[[:space:]]*\"[[:space:]]*}"
+  p="${p// /[[:space:]]*}"
+  printf '%s' "$p"
+}
+
+# What the requester is told was found. `templatefile(` is how you write the
+# rule; `templatefile()` is how you name the thing.
+deny_label() { # literal -> display form
+  case "$1" in
+    *\() printf '%s)' "$1" ;;
+    *)   printf '%s' "$1" ;;
+  esac
+}
+
+DENY_PAT=()
+for _entry in ${DENY[@]+"${DENY[@]}"}; do
+  DENY_PAT+=("$(deny_pattern "$_entry")")
+done
 QUESTIONS="$OUT_DIR/needs-info.md"
 MESSAGE="$OUT_DIR/commit-msg.txt"
 REASON="$OUT_DIR/failure-reason.txt"
@@ -266,14 +317,27 @@ done <"$STATUS_FILE"
 # Guarded: macOS ships bash 3.2, where expanding an EMPTY array under
 # `set -u` is an "unbound variable" error rather than nothing, and `changed`
 # is legitimately empty whenever the agent touched nothing.
+# A path is allowed if ANY paths.allow glob matches it. The globs are matched
+# unquoted in a `case`, which is what makes them globs rather than literals.
+path_allowed() { # path
+  local p="$1" pat
+  for pat in ${ALLOW[@]+"${ALLOW[@]}"}; do
+    case "$p" in $pat) return 0 ;; esac
+  done
+  return 1
+}
+
 denied=()
 tf_changed=()
 if [[ "${#changed[@]}" -gt 0 ]]; then
   for path in "${changed[@]}"; do
-    case "$path" in
-      *.tf) [[ -f "$path" ]] && tf_changed+=("$path") ;;
-      *)    denied+=("$path") ;;
-    esac
+    if path_allowed "$path"; then
+      # An allowed path that no longer exists on disk is neither scanned nor
+      # refused: a deleted file cannot carry new executable content.
+      [[ -f "$path" ]] && tf_changed+=("$path")
+    else
+      denied+=("$path")
+    fi
   done
 fi
 
@@ -282,22 +346,20 @@ fi
 # See "The content denylist" above. Only files that still exist on disk are
 # readable (tf_changed already filters that); a deleted .tf file cannot carry
 # new executable content.
+# First match wins, IN CONFIG ORDER, which is why the order is load-bearing
+# and why lib/config.sh preserves it. `templatefile(` contains a `file(`, so a
+# denylist that tested `file(` first would report a templatefile() call as
+# file() — the right refusal naming the wrong construct, and nothing
+# downstream can recover the distinction.
 tf_denylist_hit() { # file -> echoes the matched construct; else exit 1
-  local file="$1"
-  grep -Eq 'data[[:space:]]*"[[:space:]]*external[[:space:]]*"' "$file" \
-    && { echo 'data "external"'; return 0; }
-  grep -qF 'provisioner'  "$file" && { echo 'provisioner';  return 0; }
-  grep -qF 'local-exec'   "$file" && { echo 'local-exec';   return 0; }
-  grep -qF 'remote-exec'  "$file" && { echo 'remote-exec';  return 0; }
-  # Reading, not executing — see the header. Most specific first, so the
-  # construct this reports is the one actually written: `templatefile(`
-  # contains a `file(` that the last pattern would otherwise claim.
-  grep -Eq 'templatefile[[:space:]]*\(' "$file" \
-    && { echo 'templatefile()'; return 0; }
-  grep -Eq 'filebase64[[:space:]]*\('  "$file" \
-    && { echo 'filebase64()';  return 0; }
-  grep -Eq 'file[[:space:]]*\('        "$file" \
-    && { echo 'file()';        return 0; }
+  local file="$1" i=0
+  while [ "$i" -lt "${#DENY_PAT[@]}" ]; do
+    if grep -Eq "${DENY_PAT[$i]}" "$file"; then
+      deny_label "${DENY[$i]}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
   return 1
 }
 
@@ -314,16 +376,17 @@ fi
 # question should fail loudly rather than park quietly.
 if [[ "${#denied[@]}" -gt 0 ]]; then
   give_up "The agent changed files it is not allowed to change, so nothing" \
-          "was committed. Only .tf files may be edited in response to an" \
-          "issue. Refused paths:" \
+          "was committed. Only these paths may be changed in response to" \
+          "an issue: ${ALLOW[*]}. Refused paths:" \
           "$(printf '  %s\n' "${denied[@]}")"
 fi
 
 if [[ "${#tf_denied[@]}" -gt 0 ]]; then
   give_up "The agent's .tf changes contain a construct that runs code, or" \
           "reads a file off the runner, during tofu plan or apply, so" \
-          "nothing was committed. data \"external\", provisioner, local-exec" \
-          "and remote-exec run a command; file(), templatefile() and" \
+          "nothing was committed. Constructs like data \"external\"," \
+          "provisioner, local-exec and remote-exec run a command; file()," \
+          "templatefile() and" \
           "filebase64() read a path and can print what they read into the" \
           "plan. All of them are refused wherever they appear, whatever the" \
           "commit message says. Refused:" \

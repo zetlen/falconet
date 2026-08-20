@@ -495,6 +495,113 @@ run_in "$c" >/dev/null; rc=$?
 it "a failure outcome exits 0"
 assert_eq 0 "$rc" "exit code"
 
+# --- the policy comes from config -------------------------------------------
+#
+# The defaults reproduce the hardcoded behavior every case above asserts, so
+# those 59 cases already prove the default path. These prove the config path,
+# and the ordering guard that the hardcoded version encoded in the sequence of
+# its greps and nothing tested.
+
+c="$(new_checkout allow_configured)"
+printf '{"paths":{"allow":["*.tf","docs/*.md"]}}\n' >"$c/repo/.github/falconet.json"
+printf '.falconet/\n' >"$c/repo/.gitignore"
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+mkdir -p "$c/repo/docs"
+printf 'a note\n' >"$c/repo/docs/note.md"
+printf 'Add a note\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a path the default refuses is committed when paths.allow admits it"
+assert_eq "success" "$out" "outcome"
+
+it "and it really is in the commit"
+assert_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" "docs/note.md"
+
+c="$(new_checkout allow_narrowed)"
+printf '{"paths":{"allow":["dns/*.tf"]}}\n' >"$c/repo/.github/falconet.json"
+printf '.falconet/\n' >"$c/repo/.gitignore"
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "and narrowing paths.allow refuses a path the default would have taken"
+assert_eq "failure" "$out" "outcome"
+
+it "naming the path, and the allowlist it was measured against"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" "records-example-tech.tf" "failure reason"
+assert_contains "$reason" "dns/*.tf" "failure reason"
+
+# --- the denylist, and the order it is tested in ----------------------------
+#
+# `templatefile(` contains a `file(`. The hardcoded version encoded "most
+# specific first" as the order of its greps and nothing asserted it; the
+# config version encodes it as array order, which is easier to get wrong and
+# now impossible to get wrong silently. A run that reports file() when the
+# agent wrote templatefile() is the right refusal naming the wrong construct,
+# and nothing downstream can recover the distinction.
+
+c="$(new_checkout denylist_order)"
+printf 'locals {\n  a = templatefile("x.tpl", {})\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a templatefile() call is refused"
+assert_eq "failure" "$out" "outcome"
+
+it "and is named as templatefile(), not as the file( hiding inside it"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" "templatefile()" "failure reason"
+assert_not_contains "$reason" ": file()" "failure reason"
+
+# HCL does not care about the whitespace in the joints, so neither may the
+# guard: `templatefile (` is the same construct and must not be a way past it.
+c="$(new_checkout denylist_whitespace)"
+printf 'locals {\n  a = templatefile ("x.tpl", {})\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "whitespace before the paren is not a way past the denylist"
+assert_eq "failure" "$out" "outcome"
+
+c="$(new_checkout denylist_spaced_quotes)"
+printf 'data  "external"  "d" {\n  program = ["sh"]\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "nor is whitespace around the quotes of a data \"external\" block"
+assert_eq "failure" "$out" "outcome"
+
+c="$(new_checkout denylist_configured)"
+printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '.falconet/\n' >"$c/repo/.gitignore"
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+printf 'locals {\n  a = jsondecode("{}")\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a construct only the config names is refused"
+assert_eq "failure" "$out" "outcome"
+
+it "and is named in the reason"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "jsondecode()" "failure reason"
+
+c="$(new_checkout denylist_replaced)"
+printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '.falconet/\n' >"$c/repo/.gitignore"
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+printf 'locals {\n  a = file("x")\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "and a configured denylist REPLACES the default rather than extending it"
+assert_eq "success" "$out" "outcome"
+
 # --- the handoff directory, when nobody names one ---------------------------
 #
 # Every case above passes --out-dir, because the workflow always did. The
