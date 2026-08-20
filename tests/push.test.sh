@@ -29,9 +29,6 @@ new_checkout() { # name -> echoes the checkout path
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib"
-  cp "$REPO_ROOT/libexec/falconet/push.sh" "$base/repo/libexec/falconet/"
-  cp "$REPO_ROOT/lib/config.sh" "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   echo base >"$base/repo/base.txt"
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
@@ -49,7 +46,7 @@ commit_in() { # checkout message
 
 push_in() { # checkout [extra args...] -> runs the script, output on stdout
   local c="$1"; shift
-  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh "$@" 2>&1 )
+  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" "$@" 2>&1 )
 }
 
 remote_tip() { # checkout -> subject of the remote branch tip, or empty
@@ -165,7 +162,7 @@ git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1
 it "the origin URL is rebuilt without any credential in it"
 ( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
+    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
       --branch issue-1-thing --base-sha "$base_sha" >/dev/null 2>&1 )
 assert_eq "https://127.0.0.1:1/o/r.git" \
   "$(git -C "$c/repo" remote get-url origin)" "origin URL"
@@ -180,7 +177,7 @@ assert_not_contains "$config" "fresh-token" ".git/config"
 it "an unreachable remote fails the step rather than passing quietly"
 out="$( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
+    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 assert_contains "$out" "::error::could not push" "output"
 
@@ -206,7 +203,7 @@ commit_in "$c" "work to push"
 git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1:1/o/r.git"
 out="$( cd "$c/repo" && GH_TOKEN=fake-token-value \
     GITHUB_SERVER_URL="$c" GITHUB_REPOSITORY=remote \
-    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
+    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 
 it "the branch lands with the helper flags in place"

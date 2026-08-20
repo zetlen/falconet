@@ -132,17 +132,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
 # Getting this wrong is silent — a wrong-but-existing directory is found and
 # everything downstream misbehaves somewhere else entirely.
-REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+FALCONET_HOME="$(dirname "$(dirname "$SCRIPT_DIR")")"
 TOFU="${TOFU:-tofu}"
 # lib/, not beside this script: the scan is internal but it is not this
 # stage's private helper — see the header of lib/scan.sh.
-SECRET_SCAN="$REPO_ROOT/lib/scan.sh"
+SECRET_SCAN="$FALCONET_HOME/lib/scan.sh"
 
-. "$REPO_ROOT/lib/config.sh"
-. "$REPO_ROOT/lib/handoff.sh"
+. "$FALCONET_HOME/lib/config.sh"
+. "$FALCONET_HOME/lib/repo.sh"
+. "$FALCONET_HOME/lib/handoff.sh"
 
 OUT_DIR=""
 CONFIG=""
+
+repo_root_init
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
 

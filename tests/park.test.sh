@@ -141,9 +141,6 @@ git init --bare -q "$checkout/remote.git"
 git init -q -b main "$checkout/repo"
 git -C "$checkout/repo" config user.email ci@example.invalid
 git -C "$checkout/repo" config user.name ci
-mkdir -p "$checkout/repo/libexec/falconet" "$checkout/repo/lib"
-cp "$REPO_ROOT/libexec/falconet/push.sh" "$checkout/repo/libexec/falconet/"
-cp "$REPO_ROOT/lib/config.sh" "$REPO_ROOT/lib/handoff.sh" "$checkout/repo/lib/"
 echo base >"$checkout/repo/base.txt"
 git -C "$checkout/repo" add -A
 git -C "$checkout/repo" commit -qm base
@@ -160,7 +157,7 @@ git -C "$checkout/repo" commit -qm "Add Ozamataz Buckshank to the employees list
 # The step right after it pushes, and records the branch it pushed.
 : >"$checkout/github_env"
 ( cd "$checkout/repo" && GITHUB_ENV="$checkout/github_env" \
-    ./libexec/falconet/push.sh --branch issue-36-onboard --base-sha "$BASE_SHA" ) >/dev/null 2>&1
+    "$REPO_ROOT/libexec/falconet/push.sh" --branch issue-36-onboard --base-sha "$BASE_SHA" ) >/dev/null 2>&1
 
 # The review verdict comes back unusable, exactly as it did on #36, and the
 # hand-over step reads PUSHED_BRANCH out of the environment the push wrote.

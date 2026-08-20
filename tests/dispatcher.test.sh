@@ -110,6 +110,55 @@ run commit --bogus-flag-no-verb-would-accept
 assert_eq "2" "$RC" "exit code"
 assert_contains "$ERR" "unknown argument"
 
+# --- the tool and the repository it works on are different places -----------
+#
+# The origin's scripts lived INSIDE the repository they operated on, so "one
+# directory above scripts/" answered both questions at once. falconet is a
+# separate tool: in CI the composite action checks it out somewhere of its
+# own, and in the strangler's endgame it is a binary on $PATH. A verb that
+# still used its own location to find the working tree would operate on
+# falconet — silently, reporting an outcome about the wrong repository.
+#
+# Every other test in this suite now runs the verb from here and the fixture
+# from a temp directory, so they all cover this incidentally. This one says it
+# out loud, because it is the property and not a side effect.
+
+PROJ="$WORK/elsewhere"
+mkdir -p "$PROJ/dns"
+git init -q -b main "$PROJ"
+git -C "$PROJ" config user.email ci@example.invalid
+git -C "$PROJ" config user.name ci
+printf 'locals {\n  a = 1\n}\n' >"$PROJ/dns/main.tf"
+printf '.falconet/\n' >"$PROJ/.gitignore"
+git -C "$PROJ" add -A
+git -C "$PROJ" commit -qm "base commit"
+
+# A scanner that finds nothing, so these cases are about which repository the
+# verb chose and not about whether gitleaks is installed on this machine.
+mkdir -p "$WORK/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$WORK/bin/gitleaks"
+chmod +x "$WORK/bin/gitleaks"
+export GITLEAKS="$WORK/bin/gitleaks"
+
+it "a verb run from another repository operates on THAT repository"
+out="$( cd "$PROJ" && "$FALCONET" commit 2>&1 )"
+assert_eq "failure" "$out" "outcome"
+
+it "and its reason names that repository's state, not falconet's"
+assert_contains "$(cat "$PROJ/.falconet/failure-reason.txt" 2>/dev/null)" \
+  "left the repository unchanged" "failure reason"
+
+it "and falconet's own tree is not where the handoff landed"
+assert_file_missing "$REPO_ROOT/.falconet/failure-reason.txt"
+
+it "\$FALCONET_REPO names the working repository explicitly"
+out="$( cd "$WORK" && FALCONET_REPO="$PROJ" "$FALCONET" commit 2>&1 )"
+assert_eq "failure" "$out" "outcome"
+
+it "and a \$FALCONET_REPO that names nothing is a legible failure"
+out="$( cd "$WORK" && FALCONET_REPO="$WORK/nope" "$FALCONET" commit 2>&1 )"; rc=$?
+assert_eq 1 "$rc" "exit code"
+
 # --- the handoff directory is ignored ---------------------------------------
 #
 # First line of the defence, exactly as .ci-handoff/ was: a `git add -A`

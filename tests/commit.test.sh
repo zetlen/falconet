@@ -27,14 +27,10 @@ fake_token() { printf 'ghp_%s' '0123456789abcdefghijABCDEFGHIJ012345'; }
 # nothing else.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib" "$base/repo/.falconet" \
-           "$base/repo/.github" "$base/bin"
+  mkdir -p "$base/repo/.falconet" "$base/repo/.github" "$base/bin"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  cp "$REPO_ROOT/libexec/falconet/commit.sh" "$base/repo/libexec/falconet/"
-  cp "$REPO_ROOT/lib/scan.sh" "$REPO_ROOT/lib/config.sh" \
-     "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
   printf '.falconet/\n' >"$base/repo/.gitignore"
   git -C "$base/repo" add -A
@@ -73,7 +69,7 @@ run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   ( cd "$c/repo" \
     && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
        GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-       ./libexec/falconet/commit.sh --out-dir "$c/repo/.falconet" 2>/dev/null )
+       "$REPO_ROOT/libexec/falconet/commit.sh" --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
 run_in() { # checkout -> runs the script, stdout only
@@ -615,7 +611,7 @@ printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/com
 out="$( cd "$c/repo" \
         && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
            GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-           ./libexec/falconet/commit.sh 2>/dev/null )"
+           "$REPO_ROOT/libexec/falconet/commit.sh" 2>/dev/null )"
 
 it "with no --out-dir the handoff directory defaults to .falconet"
 assert_eq "success" "$out" "outcome"
@@ -639,7 +635,7 @@ printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/c
 out="$( cd "$c/repo" \
         && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
            GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-           ./libexec/falconet/commit.sh 2>/dev/null )"
+           "$REPO_ROOT/libexec/falconet/commit.sh" 2>/dev/null )"
 
 it "and handoff_dir in config moves it, which is how a consumer migrates"
 assert_eq "success" "$out" "outcome"

@@ -121,10 +121,13 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
-REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+FALCONET_HOME="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
-. "$REPO_ROOT/lib/config.sh"
-. "$REPO_ROOT/lib/handoff.sh"
+. "$FALCONET_HOME/lib/config.sh"
+. "$FALCONET_HOME/lib/repo.sh"
+. "$FALCONET_HOME/lib/handoff.sh"
+
+repo_root_init
 
 BRANCH=""
 BASE_SHA=""

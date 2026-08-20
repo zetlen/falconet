@@ -48,14 +48,11 @@ make_tofu() { # path
 
 new_checkout() { # name -> echoes path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib" "$base/repo/.github" \
-           "$base/bin" "$base/repo/dns"
+  mkdir -p "$base/repo/.github" "$base/bin" "$base/repo/dns"
   git init --bare -q "$base/origin.git"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  cp "$REPO_ROOT/libexec/falconet/prepare.sh" "$base/repo/libexec/falconet/"
-  cp "$REPO_ROOT/lib/config.sh" "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/dns/main.tf"
   printf '.falconet/\n' >"$base/repo/.gitignore"
   git -C "$base/repo" add -A
@@ -88,7 +85,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
        GH_REMOVE_RC="${REMOVE_RC:-0}" GH_COMMENT_RC="${COMMENT_RC:-0}" \
        TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
        GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
-       ./libexec/falconet/prepare.sh --issue 42 "$@" 2>"$c/err" )"
+       "$REPO_ROOT/libexec/falconet/prepare.sh" --issue 42 "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
   return 0

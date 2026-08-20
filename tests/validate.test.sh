@@ -67,13 +67,10 @@ STUB
 # location), a git repo around it, three stacks, and one commit on top of base.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib" "$base/repo/.github" \
-           "$base/repo/.falconet" "$base/bin"
+  mkdir -p "$base/repo/.github" "$base/repo/.falconet" "$base/bin"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  cp "$REPO_ROOT/libexec/falconet/validate.sh" "$base/repo/libexec/falconet/"
-  cp "$REPO_ROOT/lib/config.sh" "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   local s
   for s in dns workspace site; do
     mkdir -p "$base/repo/$s"
@@ -97,6 +94,10 @@ with_change() { # checkout [subject]
 
 base_of() { git -C "$1/repo" rev-parse main; }
 
+# git reports the PHYSICAL path, and on a Mac $WORK is under a symlinked
+# /var. Assertions about paths the tool printed have to speak its dialect.
+phys() { ( cd "$1/repo" && pwd -P ); }
+
 v() { # checkout base [extra args...] -> sets OUT ERR RC
   local c="$1" b="$2"; shift 2
   OUT="$( cd "$c/repo" \
@@ -105,7 +106,7 @@ v() { # checkout base [extra args...] -> sets OUT ERR RC
        TOFU_FAIL_VALIDATE="${FAIL_VALIDATE:-}" \
        TOFU_FAIL_PLAN="${FAIL_PLAN:-}" \
        GITHUB_ENV="${GH_ENV:-}" \
-       ./libexec/falconet/validate.sh --base "$b" "$@" 2>"$c/err" )"
+       "$REPO_ROOT/libexec/falconet/validate.sh" --base "$b" "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
   return 0
@@ -233,16 +234,16 @@ it "and records VALIDATED for the wrappers"
 assert_contains "$(cat "$c/github_env" 2>/dev/null)" "VALIDATED=true" "GITHUB_ENV"
 
 it "the planned stack gets a real init, so validate and plan share one"
-assert_contains "$(calls "$c")" "-chdir=$c/repo/dns init -input=false" "tofu calls"
+assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns init -input=false" "tofu calls"
 
 it "and is initialized exactly once for both"
-assert_eq 1 "$(grep -c -- "-chdir=$c/repo/dns init" "$c/tofu-calls.txt")" "dns inits"
+assert_eq 1 "$(grep -c -- "-chdir=$(phys "$c")/dns init" "$c/tofu-calls.txt")" "dns inits"
 
 it "a validate-only stack is initialized without its backend"
-assert_contains "$(calls "$c")" "-chdir=$c/repo/workspace init -backend=false" "tofu calls"
+assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/workspace init -backend=false" "tofu calls"
 
 it "and the planned stack is not"
-assert_not_contains "$(calls "$c")" "-chdir=$c/repo/dns init -backend=false" "tofu calls"
+assert_not_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns init -backend=false" "tofu calls"
 
 it "the plan is asked for no color, because its next reader is a file"
 assert_contains "$(calls "$c")" "plan -no-color" "tofu calls"
@@ -339,10 +340,10 @@ with_change "$c"
 v "$c" "$b"
 
 it "a consumer names its own stacks"
-assert_contains "$(calls "$c")" "-chdir=$c/repo/infra init -input=false" "tofu calls"
+assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/infra init -input=false" "tofu calls"
 
 it "and the defaults stop being consulted"
-assert_not_contains "$(calls "$c")" "-chdir=$c/repo/dns" "tofu calls"
+assert_not_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns" "tofu calls"
 
 c="$(new_checkout cfgplan)"; b="$(base_of "$c")"
 printf '{"plan":{"command":"tofu -chdir={stack} plan -no-color -compact-warnings"}}\n' \

@@ -97,7 +97,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+FALCONET_HOME="$(dirname "$SCRIPT_DIR")"
+. "$FALCONET_HOME/lib/repo.sh"
+repo_root_init
 GITLEAKS="${GITLEAKS:-gitleaks}"
 
 # gitleaks exits 1 for its own fatal errors, so "leaks found" is moved off 1
@@ -183,11 +185,12 @@ if [[ "${#targets[@]}" -gt 0 ]]; then
     # "/home/runner/work/repo/repo/.falconet/..." is
     # a runner detail the requester cannot use and nobody needs published.
     #
-    # Resolved to a physical path first, because REPO_ROOT is one (it comes
-    # from `cd && pwd`) and a caller's path need not be: on a Mac /var is a
-    # symlink to /private/var, and comparing the two as strings would leave
-    # every label absolute on exactly the machine the tests run on.
-    label="$(cd "$(dirname "$target")" && pwd)/$(basename "$target")"
+    # Resolved to a PHYSICAL path first, because REPO_ROOT is one (it comes
+    # from `git rev-parse --show-toplevel`) and a caller's path need not be:
+    # on a Mac /var is a symlink to /private/var, and comparing the two as
+    # strings would leave every label absolute on exactly the machine the
+    # tests run on. `pwd` alone is logical; the -P is the whole point.
+    label="$(cd "$(dirname "$target")" && pwd -P)/$(basename "$target")"
     case "$label" in "$REPO_ROOT"/*) label="${label#"$REPO_ROOT"/}" ;; esac
     scan_one "$label" "$target"
   done

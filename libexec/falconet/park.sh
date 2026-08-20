@@ -54,9 +54,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
 # This verb never needed the repository root before -- it only ever talked to
 # GitHub -- and needs it now only to find lib/.
-REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+FALCONET_HOME="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
-. "$REPO_ROOT/lib/config.sh"
+. "$FALCONET_HOME/lib/config.sh"
 
 ISSUE=""
 LABEL=""

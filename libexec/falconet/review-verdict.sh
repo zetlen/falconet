@@ -106,7 +106,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT_DIR="$(dirname "$SCRIPT_DIR")/.ci-handoff"
+OUT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.falconet"
 EXEC_FILE=""
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
