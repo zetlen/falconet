@@ -50,8 +50,17 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
+# This verb never needed the repository root before -- it only ever talked to
+# GitHub -- and needs it now only to find lib/.
+REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+
+. "$REPO_ROOT/lib/config.sh"
+
 ISSUE=""
 LABEL=""
+CONFIG=""
 PREAMBLE=""
 BODY=""
 BODY_TITLE=""
@@ -78,16 +87,25 @@ while [[ $# -gt 0 ]]; do
     --branch)
       [[ $# -ge 2 ]] || { echo "--branch needs a value (the empty string is fine)" >&2; exit 2; }
       BRANCH="$2"; shift 2 ;;
-    -h|--help)    usage; exit 0 ;;
+    --config)     CONFIG="${2:?--config needs a file}"; shift 2 ;;
+    -h|--help)    usage >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 [[ -n "$ISSUE" && -n "$LABEL" && -n "$PREAMBLE" ]] || { usage >&2; exit 2; }
 [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "--issue must be a number" >&2; exit 2; }
+# The two parking labels, from config. This stays an allowlist rather than
+# becoming "any label the caller names": every route into this verb is one of
+# the two terminal states, and a typo that invented a third would park an
+# issue under a label nothing queries and no one is watching -- which is the
+# silent-disappearance failure this whole verb exists to prevent.
+config_init "$CONFIG"
+NEEDS_INFO="$(config_get '.labels.needs_info')"
+HUMAN="$(config_get '.labels.human')"
 case "$LABEL" in
-  needs-info|ready-for-human) ;;
-  *) echo "--label must be needs-info or ready-for-human (the two parking labels in docs/agents/triage-labels.md)" >&2; exit 2 ;;
+  "$NEEDS_INFO"|"$HUMAN") ;;
+  *) echo "--label must be $NEEDS_INFO or $HUMAN (the two parking labels; set labels.needs_info and labels.human to change them)" >&2; exit 2 ;;
 esac
 
 comment="$(mktemp)"

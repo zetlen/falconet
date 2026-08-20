@@ -18,7 +18,7 @@
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-PARK="$REPO_ROOT/scripts/ci-park-issue.sh"
+PARK="$REPO_ROOT/libexec/falconet/park.sh"
 
 # --- the gh stub ------------------------------------------------------------
 
@@ -187,5 +187,41 @@ it "and the commit on it is the work the comment promises"
 assert_contains \
   "$(git -C "$checkout/remote.git" show --name-only --format= issue-36-onboard)" \
   "records-papernapkin-tech.tf" "files on the remote branch"
+
+# --- the parking labels come from config ------------------------------------
+#
+# The allowlist survives the move; only its contents are configurable now. It
+# stays an allowlist because every route in is one of two terminal states, and
+# a typo that invented a third would park an issue under a label nothing
+# queries and nobody is watching -- the silent disappearance this verb exists
+# to prevent.
+
+cfgdir="$WORK/parkcfg"; mkdir -p "$cfgdir/.github"
+printf '{"labels":{"needs_info":"awaiting-reply","human":"escalated"}}\n' \
+  >"$cfgdir/.github/falconet.json"
+
+it "a label the config names is accepted"
+( cd "$cfgdir" && PATH="$WORK/bin:$PATH" GH_STUB_LOG="$WORK/cfg-gh.log" \
+    "$PARK" --issue 7 --label escalated --preamble "This needs a person." \
+    >/dev/null 2>&1 )
+assert_eq 0 "$?" "exit code"
+
+it "and the default label is refused once the config has replaced it"
+out=$( cd "$cfgdir" && PATH="$WORK/bin:$PATH" GH_STUB_LOG="$WORK/cfg-gh.log" \
+    "$PARK" --issue 7 --label ready-for-human --preamble x 2>&1 )
+rc=$?
+assert_eq 2 "$rc" "exit code"
+
+it "and the message names the labels that would have worked"
+assert_contains "$out" "awaiting-reply" "usage message"
+
+it "an invented label is a usage error, not a silent third terminal state"
+( cd "$WORK" && PATH="$WORK/bin:$PATH" \
+    "$PARK" --issue 7 --label parked-somewhere --preamble x >/dev/null 2>&1 )
+assert_eq 2 "$?" "exit code"
+
+it "-h/--help is a usage error"
+( cd "$WORK" && "$PARK" --help >/dev/null 2>&1 )
+assert_eq 2 "$?" "exit code"
 
 summary

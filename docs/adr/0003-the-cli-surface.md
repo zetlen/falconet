@@ -34,9 +34,16 @@ it. Two consequences, both deliberate:
 
 - `ci-secret-scan.sh` does **not** become a verb. It was only ever invoked by
   the commit stage — once over the agent's drafts, once `--staged` before
-  `git commit` — and it stays exactly there: `lib/` bash, sourced by the
+  `git commit` — and it stays exactly there: `lib/` bash, invoked by the
   commit verb, with its fail-closed exit discipline (1 = scanner broken,
   3 = finding) intact. The guard survives whole; it just isn't vocabulary.
+
+  > **Amended during execution (2026-08-20).** This paragraph said *sourced*.
+  > The commit verb invokes the scan as a subprocess, and the distinction is
+  > load-bearing rather than incidental: the scan's stdout is the list of
+  > channels that matched, the commit verb's stdout is exactly one outcome
+  > word, and capturing the former is what stops it becoming the latter.
+  > Sourcing would remove the boundary that makes the capture possible.
 - `ci-review-verdict.sh` ships **unwired** in `libexec/` as the reference
   verdict protocol, per ADR-0002. No verb, no caller.
 
@@ -59,7 +66,7 @@ something print exactly one outcome word on stdout — the contract
 | `commit` | working tree, handoff | `commit-subject.txt`, `commit-body.md`, `failure-reason.txt`; all guards ride here: path allowlist, content denylist, internal secret scan (drafts then `--staged`), per-file `tofu fmt`, vetted-path-only `git add`, refusal precedence over needs-info | `success` \| `needs-info` \| `failure` |
 | `push --branch N [--base-sha S]` | handoff | tokenless origin + one-shot single-quoted credential helper, `--force-with-lease`; exports `PUSHED_BRANCH` **only** when the push lands | — |
 | `validate --base S` | config stacks | `plan.txt`, `diff.patch`, `changed-files.txt`, `validation-failure.txt`; plan stacks get real init, `validate_only` get `-backend=false` | — |
-| `park --issue N --label L --preamble T [--body F] [--branch B] [--unassign U] [--run-url R]` | handoff, `PUSHED_BRANCH` | comment + label + best-effort unassign; 60000-char cap, whole-line truncation with explicit cut note | — |
+| `park --issue N --label L --preamble T [--body F] [--body-title T] [--branch B] [--unassign U] [--run-url R]` | handoff, `PUSHED_BRANCH` | comment + label + best-effort unassign; 60000-char cap, whole-line truncation with explicit cut note | — |
 | `assemble --body F --plan F --issue N [--plan-url U] [--run-url R] --out F` | handoff | `pr.md`; whole plan in the body, 70/30 head/tail whole-line truncation, fence = longest-backtick-run + 1, exit 1 if the description alone exceeds the limit | — |
 
 `prepare`'s third word is the one deliberate behavior change. Eligibility —
@@ -121,6 +128,14 @@ Every key is optional; defaults reproduce the origin repository's behavior.
   }
 }
 ```
+
+> **Amended during execution (2026-08-20).** The `park` signature above
+> originally omitted `--body-title`, which folds `--body` into a collapsed,
+> fenced `<details>` block. The flag exists in the ported script and the
+> routing table needs it: validation logs and plan errors are machine output
+> and belong in a fence, while `needs-info.md` and `failure-reason.txt` are
+> already prose written for a human and must not be. Dropping the flag would
+> have meant one of those two shapes rendering wrongly. The verb keeps it.
 
 `prepare` builds its in-flight regex from `issue.branch_prefix` and
 `issue.in_flight_prefixes`, reproducing `^(claude/)?issue-<n>-` by default.
