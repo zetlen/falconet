@@ -369,11 +369,61 @@ Prints one word: `ready` | `in-flight` | `ineligible`.
 
 **Precedence, in this order** (the first match wins):
 
+0. issue not open → `ineligible`
 1. blocking label present → `ineligible`
 2. opt-out checkbox ticked in the body → `ineligible`
 3. queue label absent → `ineligible`
 4. open PR on a branch matching `^(claude/)?issue-<n>-` → `in-flight`
 5. otherwise → `ready`
+
+> **Corrected during execution.** This list was wrong in a way that made the
+> issue-#25 re-entry path unreachable, and the correction is the single most
+> important decision in the task.
+>
+> `needs-info` is in `issue.blocking_labels`, so rule 1 makes every parked
+> issue ineligible — but the origin's second admission path *required*
+> `needs-info` to be present, and the ready path's first act was to remove it.
+> A flat precedence list cannot say both. So there are two modes:
+>
+> - **re-entry** — the event is an `issue_comment` on an issue (not a PR), the
+>   commenter is not a bot, the queue label is present, and `needs-info` is
+>   present. Or `--re-entry` says so, which is how a workstation with no event
+>   payload says it.
+> - **claim** — everything else.
+>
+> In claim mode every blocking label blocks. In re-entry mode `needs-info` is
+> the ticket in and the others still block. Re-entry is never *inferred* from
+> the comment thread: "the last comment is not mine" is a judgment, and a gate
+> that reaches a different answer on an unchanged issue is not a gate.
+>
+> Rule 0 is also an addition. The origin's job `if:` checked `state == 'open'`
+> on both paths; the plan's list omitted it.
+
+**Other decisions the two sources forced, all pinned by tests:**
+
+- **Opt-out matching is anchored.** The workflow used an unanchored,
+  case-insensitive substring test, so the sentence appearing anywhere — quoted
+  from another issue, say — opted the issue out. The human-facing skill
+  anchored it to a list item. Anchored wins, widened by leading-whitespace
+  tolerance because issue forms indent nested checkboxes. The configured text
+  is regex-escaped before it enters the pattern.
+- **The clean-tree assertion moves first.** The workflow asserted it after the
+  claim, the acknowledgment and the branch, so a dirty tree thanked the
+  requester, assigned the issue, cut a branch and then died. The skill put it
+  in preflight. It now sits after the gate — which touches nothing — and
+  before the first mutating call.
+- **`--assignee` > `$GITHUB_TRIGGERING_ACTOR` > `@me`.** The workflow used the
+  triggering actor because a bot cannot be an assignee; the skill used `@me`.
+  Both are right in their own context, so the caller decides.
+- **`$GITHUB_RUN_ID` is guarded.** The collision rename dereferenced it
+  unguarded under `set -u` — a bug that appears only on a retry, on a
+  workstation.
+- **`--issue` must match `^[0-9]+$`.** The event schema used to guarantee it;
+  a CLI caller guarantees nothing, and the number goes into a regex and a
+  branch name.
+- **`issue.json` and `ack.md` are written** though ADR-0003's handoff table
+  omits them. The table lists contracts between verbs; these two are
+  `prepare`'s own snapshot and artifact.
 
 `ineligible` and `in-flight` write **no handoff files and park nothing** —
 duplicate and ineligible events are silent no-ops (ADR-0003's routing table).
