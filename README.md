@@ -63,13 +63,20 @@ off-the-shelf option.
 | `scripts/` — the seven pipeline stages | extracted verbatim, tested |
 | `tests/` — 6 files, ~1,600 lines | passing (`bash tests/run.sh`) |
 | `docs/provenance/` — the retired orchestrator, its prompts, the alternatives | reference only |
-| CLI entry point | not written |
-| Composite action + reusable workflow | not written |
-| Config file | not designed |
-| Bun rewrite | planned, after the bash works |
+| `docs/adr/` — the decisions | ADR-0002 founding, [0003](docs/adr/0003-the-cli-surface.md) the CLI surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
+| CLI entry point | designed, not written |
+| Composite action + reusable workflow | designed, not written |
+| Config file | [designed](docs/adr/0003-the-cli-surface.md#the-config-file), not written |
+| Bun rewrite | deferred on purpose ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)) |
 
 The scripts are stage-shaped, not subcommand-shaped: they were called by a
-workflow, not by each other. Turning them into one CLI is the next job.
+workflow, not by each other. Turning them into one CLI is the next job, and
+[the port plan](docs/adr/pre-execution-plan.md) is how it proceeds — twelve
+tasks, each ending with a green test suite.
+
+Two further documents: [operating](docs/operating.md) covers the credentials
+only the operator can create and where the pieces live; [AGENTS.md](AGENTS.md)
+is what to read before changing anything here.
 
 ## Running the tests
 
