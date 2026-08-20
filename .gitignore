@@ -1,9 +1,13 @@
-# Stage handoff. The pipeline stages leave files here for the next one — the
-# request, both plans, the commits patch, the validation report, the assembled
-# PR body. It is scratch, never part of a change: nothing in it may ever be
+# Stage handoff. The verbs leave files here for each other — the request,
+# both plans, the commit message, the validation report, the assembled PR
+# body. It is scratch, never part of a change: nothing in it may ever be
 # committed. This entry is the first line of that defence (a `git add -A`
-# cannot pick up an ignored path); ci-validate.sh is the second, and fails any
-# commit that touches .ci-handoff/ anyway, because `git add -f` exists.
+# cannot pick up an ignored path); the validate verb is the second, and fails
+# any commit that touches it anyway, because `git add -f` exists.
+.falconet/
+
+# The same directory under its old name, kept while wayfinders-infra is still
+# running the stage scripts. handoff_dir is configurable for exactly this.
 .ci-handoff/
 
 # Test scratch
