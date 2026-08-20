@@ -13,7 +13,7 @@
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-VERDICT="$REPO_ROOT/scripts/ci-review-verdict.sh"
+VERDICT="$REPO_ROOT/libexec/falconet/review-verdict.sh"
 FIXTURES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
 
 # Each case gets its own out-dir, so a file left behind by one is never
@@ -171,5 +171,17 @@ mkdir -p "$WORK/stale"
 echo "round one's approval" >"$WORK/stale/pr-body.md"
 "$VERDICT" --execution-file "$WORK/changes.json" --out-dir "$WORK/stale" >/dev/null 2>&1
 assert_file_missing "$WORK/stale/pr-body.md"
+
+it "-h/--help is a usage error"
+"$VERDICT" --help >/dev/null 2>&1
+assert_eq 2 "$?" "exit code"
+
+# The protocol ships unwired (ADR-0002; ADR-0001 risk 9). Nothing dispatches
+# it, and the contract test in Task 11 asserts the reusable workflow names it
+# zero times. This is the half of that invariant that lives here.
+it "review-verdict is not a verb"
+out=$("$REPO_ROOT/bin/falconet" review-verdict 2>&1); rc=$?
+assert_eq 2 "$rc" "exit code"
+assert_contains "$out" "unknown verb" "dispatcher output"
 
 summary

@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
     --run-url) RUN_URL="${2:?--run-url needs a URL}"; shift 2 ;;
     --plan-url) PLAN_URL="${2:?--plan-url needs a URL}"; shift 2 ;;
     --limit)   LIMIT="${2:?--limit needs a number}"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help) usage >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done

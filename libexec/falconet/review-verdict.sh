@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 #
-# ci-review-verdict.sh — turn the review agent's final message into the files
-# the rest of .github/workflows/infra-issues.yml reads.
+# review-verdict.sh — turn the review agent's final message into the files a
+# workflow reads.
+#
+# UNWIRED, ON PURPOSE. There is no `falconet review-verdict` verb, no entry in
+# bin/falconet's verb list, and no caller anywhere in this repository. It
+# ships as the reference implementation of the verdict protocol and nothing
+# else.
+#
+# ADR-0002 dropped the independent review agent on measurements: the watchdog
+# cost ~44% of the worker on a small task, and two cold contexts cost more
+# than one warm one. ADR-0001 risk 9 stands, including its bar for any
+# future replacement — which this file is the record of, not an invitation.
+# Anything that wires it up must first clear that bar: an independent,
+# uncontaminated read of the diff, the commit message and the plan, before a
+# human is asked to look. A review that reads the implementing agent's
+# reasoning, or that shares its context, is not that.
+#
+# The invariant is asserted, not merely written down: the contract test
+# requires this file be referenced zero times by the reusable workflow.
 #
 # The reviewing agent is granted exactly Read, Grep and Glob. No Bash, no
 # Edit, no Write: it cannot run a command, cannot touch the working tree, and
@@ -98,7 +115,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --execution-file) EXEC_FILE="${2:?--execution-file needs a path}"; shift 2 ;;
     --out-dir)        OUT_DIR="${2:?--out-dir needs a directory}"; shift 2 ;;
-    -h|--help)        usage; exit 0 ;;
+    -h|--help)        usage >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
