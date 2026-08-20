@@ -9,6 +9,14 @@
 # with no GitHub context around it.
 #
 # Requires config_init to have run: the directory is configurable.
+#
+# If you move handoff_dir, gitignore the new location. The commit verb's path
+# allowlist looks at everything the working tree reports as changed, so an
+# un-ignored handoff directory turns into a run that refuses its own scratch
+# files and names them in the failure a requester reads. The allowlist is
+# right to do that; the fix is the .gitignore entry, and the entry is the
+# first line of the defence anyway (a `git add -A` cannot pick up an ignored
+# path).
 
 # handoff_init sets HANDOFF and creates it. An explicit override — the
 # --out-dir flag several verbs carry — wins over the config, and is resolved

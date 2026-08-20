@@ -129,18 +129,27 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="$REPO_ROOT/.ci-handoff"
+# Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
+# Getting this wrong is silent — a wrong-but-existing directory is found and
+# everything downstream misbehaves somewhere else entirely.
+REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 TOFU="${TOFU:-tofu}"
 # lib/, not beside this script: the scan is internal but it is not this
 # stage's private helper — see the header of lib/scan.sh.
 SECRET_SCAN="$REPO_ROOT/lib/scan.sh"
+
+. "$REPO_ROOT/lib/config.sh"
+. "$REPO_ROOT/lib/handoff.sh"
+
+OUT_DIR=""
+CONFIG=""
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out-dir) OUT_DIR="${2:?--out-dir needs a directory}"; shift 2 ;;
+    --config)  CONFIG="${2:?--config needs a file}"; shift 2 ;;
     -h|--help) usage; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -151,13 +160,17 @@ done
 # those reports (the [[ -f ]] checks, tofu fmt, git add) only resolves
 # correctly if this process is standing in REPO_ROOT when it uses them.
 case "$OUT_DIR" in
-  /*) ;;
+  ""|/*) ;;
   *) OUT_DIR="$PWD/$OUT_DIR" ;;
 esac
 
 cd "$REPO_ROOT" || exit 1
 
-mkdir -p "$OUT_DIR" || exit 1
+# Config is read from the repository root, so this follows the cd. An explicit
+# --out-dir still wins over handoff_dir; that is what handoff_init is given.
+config_init "$CONFIG"
+handoff_init "$OUT_DIR"
+OUT_DIR="$HANDOFF"
 QUESTIONS="$OUT_DIR/needs-info.md"
 MESSAGE="$OUT_DIR/commit-msg.txt"
 REASON="$OUT_DIR/failure-reason.txt"

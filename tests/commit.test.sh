@@ -27,14 +27,16 @@ fake_token() { printf 'ghp_%s' '0123456789abcdefghijABCDEFGHIJ012345'; }
 # nothing else.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
-  mkdir -p "$base/repo/scripts" "$base/repo/lib" "$base/repo/.ci-handoff" "$base/bin"
+  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib" "$base/repo/.falconet" \
+           "$base/repo/.github" "$base/bin"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  cp "$REPO_ROOT/scripts/ci-commit-change.sh" "$base/repo/scripts/"
-  cp "$REPO_ROOT/lib/scan.sh" "$base/repo/lib/"
+  cp "$REPO_ROOT/libexec/falconet/commit.sh" "$base/repo/libexec/falconet/"
+  cp "$REPO_ROOT/lib/scan.sh" "$REPO_ROOT/lib/config.sh" \
+     "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
-  printf '.ci-handoff/\n' >"$base/repo/.gitignore"
+  printf '.falconet/\n' >"$base/repo/.gitignore"
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" switch -qc issue-1-thing
@@ -71,7 +73,7 @@ run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   ( cd "$c/repo" \
     && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
        GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-       ./scripts/ci-commit-change.sh --out-dir "$c/repo/.ci-handoff" 2>/dev/null )
+       ./libexec/falconet/commit.sh --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
 run_in() { # checkout -> runs the script, stdout only
@@ -84,7 +86,7 @@ commit_count() { git -C "$1/repo" rev-list --count HEAD; }
 # --- the agent asked a question and changed nothing -------------------------
 
 c="$(new_checkout parked)"
-printf -- '- Which zone did you mean?\n' >"$c/repo/.ci-handoff/needs-info.md"
+printf -- '- Which zone did you mean?\n' >"$c/repo/.falconet/needs-info.md"
 out="$(run_in "$c")"
 
 it "a questions file alone routes to needs-info"
@@ -98,7 +100,7 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 c="$(new_checkout success)"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked for the thing.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "an edit plus a message routes to success"
@@ -108,11 +110,11 @@ it "the commit is made with the agent's subject"
 assert_eq "Add the thing" "$(head_subject "$c")" "commit subject"
 
 it "the subject is filed for the pull-request title"
-assert_eq "Add the thing" "$(cat "$c/repo/.ci-handoff/commit-subject.txt")" "commit-subject.txt"
+assert_eq "Add the thing" "$(cat "$c/repo/.falconet/commit-subject.txt")" "commit-subject.txt"
 
 it "the body is filed for the pull-request description, without the subject"
 assert_eq "Because the requester asked for the thing." \
-  "$(cat "$c/repo/.ci-handoff/commit-body.md")" "commit-body.md"
+  "$(cat "$c/repo/.falconet/commit-body.md")" "commit-body.md"
 
 it "tofu fmt ran on the changed .tf file before the commit"
 assert_contains "$(cat "$c/tofu-calls.txt")" "fmt -- records-example-tech.tf" "tofu calls"
@@ -121,10 +123,10 @@ it "tofu fmt was not run recursively"
 assert_not_contains "$(cat "$c/tofu-calls.txt")" "-recursive" "tofu calls"
 
 it "the handoff directory stays out of the commit"
-assert_not_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" ".ci-handoff" "committed paths"
+assert_not_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" ".falconet" "committed paths"
 
 it "and no failure-reason.txt is left behind on success"
-assert_file_missing "$c/repo/.ci-handoff/failure-reason.txt"
+assert_file_missing "$c/repo/.falconet/failure-reason.txt"
 
 # --- tofu fmt's own stdout must not leak into the outcome word -------------
 #
@@ -141,7 +143,7 @@ printf '%s\n' "$*"
 STUB
 chmod +x "$c/bin/tofu"
 printf 'locals {\n  a = 9\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Reformat the thing\n\nBecause it needed it.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Reformat the thing\n\nBecause it needed it.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "tofu fmt's own stdout does not leak into the outcome word"
@@ -151,14 +153,14 @@ assert_eq "success" "$out" "outcome"
 
 c="$(new_checkout subject_only)"
 printf 'locals {\n  a = 3\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Just a subject\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Just a subject\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a message with a subject and no body still succeeds"
 assert_eq "success" "$out" "outcome"
 
 it "an empty body falls back to the subject rather than an empty description"
-assert_eq "Just a subject" "$(cat "$c/repo/.ci-handoff/commit-body.md")" "commit-body.md"
+assert_eq "Just a subject" "$(cat "$c/repo/.falconet/commit-body.md")" "commit-body.md"
 
 # --- edits with no message --------------------------------------------------
 
@@ -173,10 +175,10 @@ it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the missing message"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" "commit-msg.txt" "failure reason"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "commit-msg.txt" "failure reason"
 
 it "and no commit-subject.txt is written on failure"
-assert_file_missing "$c/repo/.ci-handoff/commit-subject.txt"
+assert_file_missing "$c/repo/.falconet/commit-subject.txt"
 
 # --- the agent did nothing at all -------------------------------------------
 
@@ -192,7 +194,7 @@ c="$(new_checkout escalation)"
 mkdir -p "$c/repo/.github/workflows"
 printf 'allowedTools: everything\n' >"$c/repo/.github/workflows/infra-issues.yml"
 printf 'locals {\n  a = 5\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a change outside the allowlist is a failure, however good the message"
@@ -202,7 +204,7 @@ it "and nothing is committed, including the legitimate .tf edit"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the offending path"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   ".github/workflows/infra-issues.yml" "failure reason"
 
 # --- the allowlist is .tf and nothing else ----------------------------------
@@ -217,7 +219,7 @@ assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
 c="$(new_checkout only_tf)"
 printf '# Notes\n' >"$c/repo/AGENTS.md"
 printf 'locals {\n  a = 7\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add the thing and write it down\n\nBoth halves.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Add the thing and write it down\n\nBoth halves.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a non-.tf path is refused, whatever else the run got right"
@@ -227,7 +229,7 @@ it "and nothing is committed, including the legitimate .tf edit"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the offending path"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "AGENTS.md" "failure reason"
 
 # --- committed AND asked ----------------------------------------------------
@@ -237,8 +239,8 @@ assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
 
 c="$(new_checkout both)"
 printf 'locals {\n  a = 6\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'A real change\n\nWith a real body.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
-printf -- '- But which TTL?\n' >"$c/repo/.ci-handoff/needs-info.md"
+printf 'A real change\n\nWith a real body.\n' >"$c/repo/.falconet/commit-msg.txt"
+printf -- '- But which TTL?\n' >"$c/repo/.falconet/needs-info.md"
 out="$(run_in "$c")"
 
 it "a question routes the run even when there is also a commit"
@@ -256,7 +258,7 @@ assert_eq 2 "$(commit_count "$c")" "commits"
 c="$(new_checkout denylist)"
 printf 'data "external" "danger" {\n  program = ["sh", "-c", "whoami"]\n}\n' \
   >"$c/repo/records-example-tech.tf"
-printf 'Add a data source\n\nTotally safe, I promise.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Add a data source\n\nTotally safe, I promise.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a data \"external\" block routes to failure"
@@ -266,7 +268,7 @@ it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the file"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "records-example-tech.tf" "failure reason"
 
 # --- the denylist covers reading, not only executing ------------------------
@@ -280,7 +282,7 @@ c="$(new_checkout denylist_read)"
 printf 'output "leak" {\n  value = file("/etc/hosts")\n}\n' \
   >"$c/repo/records-example-tech.tf"
 printf 'Add an output\n\nJust surfacing a detail.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a file() call routes to failure"
@@ -290,7 +292,7 @@ it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the file"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "records-example-tech.tf" "failure reason"
 
 # --- denial beats needs-info (Ruling B) -------------------------------------
@@ -302,8 +304,8 @@ assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
 c="$(new_checkout denial_beats_needs_info)"
 mkdir -p "$c/repo/.github/workflows"
 printf 'allowedTools: everything\n' >"$c/repo/.github/workflows/infra-issues.yml"
-printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
-printf -- '- Which zone did you mean?\n' >"$c/repo/.ci-handoff/needs-info.md"
+printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.falconet/commit-msg.txt"
+printf -- '- Which zone did you mean?\n' >"$c/repo/.falconet/needs-info.md"
 out="$(run_in "$c")"
 
 it "a denied path beats a question: failure, not needs-info"
@@ -322,7 +324,7 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 
 c="$(new_checkout leak_in_questions)"
 { printf -- '- Which zone did you mean? For traceability the token is '
-  fake_token; printf '\n'; } >"$c/repo/.ci-handoff/needs-info.md"
+  fake_token; printf '\n'; } >"$c/repo/.falconet/needs-info.md"
 out="$(run_in "$c")"
 
 it "a token-shaped string in needs-info.md is a failure, not a question"
@@ -332,17 +334,17 @@ it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the file that would have been posted"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "needs-info.md" "failure reason"
 
 it "and the reason never repeats the matched value"
-assert_not_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_not_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "$(fake_token)" "failure reason"
 
 c="$(new_checkout leak_in_message)"
 printf 'locals {\n  a = 7\n}\n' >"$c/repo/records-example-tech.tf"
 { printf 'Add the thing\n\nFor traceability, the header was '
-  fake_token; printf '\n'; } >"$c/repo/.ci-handoff/commit-msg.txt"
+  fake_token; printf '\n'; } >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a token-shaped string in the commit message is a failure"
@@ -352,7 +354,7 @@ it "and nothing is committed, so nothing can be pushed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and no pull-request body is filed"
-assert_file_missing "$c/repo/.ci-handoff/commit-body.md"
+assert_file_missing "$c/repo/.falconet/commit-body.md"
 
 # The .tf arm: the message is clean, so only the staged diff can catch this.
 # `tofu plan` prints .tf content into plan.txt, which becomes the PR body.
@@ -360,7 +362,7 @@ assert_file_missing "$c/repo/.ci-handoff/commit-body.md"
 c="$(new_checkout leak_in_tf)"
 { printf 'locals {\n  a = "'; fake_token; printf '"\n}\n'; } \
   >"$c/repo/records-example-tech.tf"
-printf 'Add a local\n\nNothing to see here.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'Add a local\n\nNothing to see here.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a token-shaped string in the staged diff is a failure"
@@ -370,7 +372,7 @@ it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
 
 it "and the reason names the staged change"
-assert_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "staged change" "failure reason"
 
 # --- the scanner's own stdout must not leak into the outcome word -----------
@@ -394,7 +396,7 @@ exit 0
 STUB
 chmod +x "$c/bin/gitleaks"
 printf 'locals {\n  a = 12\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'A clean change\n\nWith a chatty scanner.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+printf 'A clean change\n\nWith a chatty scanner.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a chatty scanner's stdout does not leak into the outcome word"
@@ -417,14 +419,14 @@ STUB
 chmod +x "$c/bin/gitleaks"
 printf 'locals {\n  a = 15\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'A change the scanner objects to\n\nWith a chatty scanner.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
 it "a chatty scanner's finding is still a one-word failure"
 assert_eq "failure" "$out" "outcome"
 
 it "and its output does not reach the comment the requester reads"
-assert_not_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
+assert_not_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "RuleID" "failure reason"
 
 # --- a scan that could not run is not a pass --------------------------------
@@ -432,7 +434,7 @@ assert_not_contains "$(cat "$c/repo/.ci-handoff/failure-reason.txt")" \
 c="$(new_checkout scanner_missing)"
 printf 'locals {\n  a = 13\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'A change nobody could scan\n\nBecause there is no scanner.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in_with "$c" "$c/bin/no-such-gitleaks")"; rc=$?
 
 it "a missing scanner exits 1 rather than reporting an outcome"
@@ -455,7 +457,7 @@ STUB
 chmod +x "$c/bin/gitleaks"
 printf 'locals {\n  a = 14\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'A change the scanner died on\n\nSo this is a mechanical failure.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"; rc=$?
 
 it "a scanner that dies mid-scan exits 1, never 'no leaks found'"
@@ -474,14 +476,14 @@ assert_eq "" "$out" "stdout"
 c="$(new_checkout exit_success)"
 printf 'locals {\n  a = 10\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Exit zero on success\n\nBecause an outcome was printed.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 run_in "$c" >/dev/null; rc=$?
 
 it "a success outcome exits 0"
 assert_eq 0 "$rc" "exit code"
 
 c="$(new_checkout exit_needs_info)"
-printf -- '- Which zone did you mean?\n' >"$c/repo/.ci-handoff/needs-info.md"
+printf -- '- Which zone did you mean?\n' >"$c/repo/.falconet/needs-info.md"
 run_in "$c" >/dev/null; rc=$?
 
 it "a needs-info outcome exits 0"
@@ -493,12 +495,55 @@ run_in "$c" >/dev/null; rc=$?
 it "a failure outcome exits 0"
 assert_eq 0 "$rc" "exit code"
 
+# --- the handoff directory, when nobody names one ---------------------------
+#
+# Every case above passes --out-dir, because the workflow always did. The
+# default is what a workstation run gets, and it is the one thing about this
+# verb that changed in the move: .ci-handoff/ was hardcoded, .falconet/ comes
+# from config with handoff_dir overriding it.
+
+c="$(new_checkout default_handoff)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$( cd "$c/repo" \
+        && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
+           GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+           ./libexec/falconet/commit.sh 2>/dev/null )"
+
+it "with no --out-dir the handoff directory defaults to .falconet"
+assert_eq "success" "$out" "outcome"
+assert_eq "Add the thing" "$(cat "$c/repo/.falconet/commit-subject.txt" 2>/dev/null)"
+
+c="$(new_checkout configured_handoff)"
+printf '{"handoff_dir":".ci-handoff"}\n' >"$c/repo/.github/falconet.json"
+# Moving handoff_dir means gitignoring the new location too. Without this the
+# handoff files themselves show up as untracked non-.tf paths and the
+# allowlist refuses them — correctly, which is what makes it a foot-gun worth
+# a test rather than a bug worth a workaround.
+printf '.falconet/\n.ci-handoff/\n' >"$c/repo/.gitignore"
+# Committed, because a consumer's config is a repository file — and because
+# leaving it untracked makes this a test of the path allowlist instead, which
+# would refuse it as a non-.tf path and be entirely right to.
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+mkdir -p "$c/repo/.ci-handoff"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
+out="$( cd "$c/repo" \
+        && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
+           GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+           ./libexec/falconet/commit.sh 2>/dev/null )"
+
+it "and handoff_dir in config moves it, which is how a consumer migrates"
+assert_eq "success" "$out" "outcome"
+assert_eq "Add the thing" "$(cat "$c/repo/.ci-handoff/commit-subject.txt" 2>/dev/null)"
+
 it "an unknown argument exits 2"
-( cd "$REPO_ROOT" && ./scripts/ci-commit-change.sh --bogus >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && ./libexec/falconet/commit.sh --bogus >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help exits 2, not 0 -- help is not one of the three outcomes"
-( cd "$REPO_ROOT" && ./scripts/ci-commit-change.sh --help >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && ./libexec/falconet/commit.sh --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 # A pre-commit hook is a clean way to force a genuine git failure that is
@@ -506,7 +551,7 @@ assert_eq 2 "$?" "exit code"
 c="$(new_checkout git_failure)"
 printf 'locals {\n  a = 11\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'A commit a hook will refuse\n\nSo this is a genuine git failure.\n' \
-  >"$c/repo/.ci-handoff/commit-msg.txt"
+  >"$c/repo/.falconet/commit-msg.txt"
 cat >"$c/repo/.git/hooks/pre-commit" <<'HOOK'
 #!/usr/bin/env bash
 echo "pre-commit refuses" >&2

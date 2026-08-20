@@ -59,18 +59,27 @@ assert_contains "$ERR" "assemble"
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
 
-it "but prompt is still dispatched, not refused as unknown"
-run prompt implement
-assert_eq "1" "$RC" "exit code: not-implemented, not usage"
-
 # --- mid-port: a verb with no file behind it --------------------------------
 #
-# Every verb hits this branch until its task lands, so its message is read
-# more often during the port than any other line in this file. A bare 127
-# from exec would be true and useless.
+# Asserted against an EMPTY install rather than against whichever verb happens
+# to be unbuilt today: bin/falconet finds libexec/ relative to itself, so a
+# copy of it beside an empty libexec/falconet/ is the mid-port state, frozen.
+# The obvious version of this test named a real verb and went green the moment
+# that verb landed, which is a test that stops asking its question exactly
+# when the answer starts changing.
 
-it "a known but unbuilt verb exits 1, not 2 and not 127"
-run commit
+EMPTY="$WORK/empty-install"
+mkdir -p "$EMPTY/bin" "$EMPTY/libexec/falconet"
+cp "$FALCONET" "$EMPTY/bin/falconet"
+
+bare() { # args... -> sets OUT ERR RC
+  OUT="$("$EMPTY/bin/falconet" "$@" 2>"$WORK/err")"; RC=$?
+  ERR="$(cat "$WORK/err")"
+  return 0
+}
+
+it "a known verb with no file behind it exits 1, not 2 and not 127"
+bare commit
 assert_eq "1" "$RC" "exit code"
 
 it "and names the verb"
@@ -78,6 +87,28 @@ assert_contains "$ERR" "verb 'commit' is not implemented yet"
 
 it "and names the path it looked for"
 assert_contains "$ERR" "libexec/falconet/commit.sh"
+
+it "prompt is unlisted but still dispatched, not refused as unknown"
+bare prompt implement
+assert_eq "1" "$RC" "exit code: not-implemented, not usage"
+
+it "and a file that exists but is not executable is also 1, with a different reason"
+: >"$EMPTY/libexec/falconet/park.sh"
+bare park --issue 1
+assert_eq "1" "$RC" "exit code"
+assert_contains "$ERR" "is not executable"
+
+# --- a verb that exists really is exec'd ------------------------------------
+#
+# The other half of the contract: dispatch hands over, and what comes back is
+# the verb's answer rather than the dispatcher's. A verb's own usage is 2, the
+# same number an unknown verb gets, so the distinguishing evidence is that the
+# text is the VERB's.
+
+it "a built verb is exec'd, and answers for itself"
+run commit --bogus-flag-no-verb-would-accept
+assert_eq "2" "$RC" "exit code"
+assert_contains "$ERR" "unknown argument"
 
 # --- the handoff directory is ignored ---------------------------------------
 #
