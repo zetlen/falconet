@@ -21,7 +21,7 @@ export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 
 # A checkout that looks like the pipeline's: the script under test lives in
-# scripts/ inside it, because that is how it finds the repository root.
+# libexec/falconet/ inside it, because that is how it finds the repository root.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
   mkdir -p "$base"
@@ -29,8 +29,9 @@ new_checkout() { # name -> echoes the checkout path
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
-  mkdir -p "$base/repo/scripts"
-  cp "$REPO_ROOT/scripts/ci-push-branch.sh" "$base/repo/scripts/"
+  mkdir -p "$base/repo/libexec/falconet" "$base/repo/lib"
+  cp "$REPO_ROOT/libexec/falconet/push.sh" "$base/repo/libexec/falconet/"
+  cp "$REPO_ROOT/lib/config.sh" "$REPO_ROOT/lib/handoff.sh" "$base/repo/lib/"
   echo base >"$base/repo/base.txt"
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
@@ -48,7 +49,7 @@ commit_in() { # checkout message
 
 push_in() { # checkout [extra args...] -> runs the script, output on stdout
   local c="$1"; shift
-  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" ./scripts/ci-push-branch.sh "$@" 2>&1 )
+  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh "$@" 2>&1 )
 }
 
 remote_tip() { # checkout -> subject of the remote branch tip, or empty
@@ -164,7 +165,7 @@ git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1
 it "the origin URL is rebuilt without any credential in it"
 ( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" ./scripts/ci-push-branch.sh \
+    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
       --branch issue-1-thing --base-sha "$base_sha" >/dev/null 2>&1 )
 assert_eq "https://127.0.0.1:1/o/r.git" \
   "$(git -C "$c/repo" remote get-url origin)" "origin URL"
@@ -179,7 +180,7 @@ assert_not_contains "$config" "fresh-token" ".git/config"
 it "an unreachable remote fails the step rather than passing quietly"
 out="$( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" ./scripts/ci-push-branch.sh \
+    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 assert_contains "$out" "::error::could not push" "output"
 
@@ -205,7 +206,7 @@ commit_in "$c" "work to push"
 git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1:1/o/r.git"
 out="$( cd "$c/repo" && GH_TOKEN=fake-token-value \
     GITHUB_SERVER_URL="$c" GITHUB_REPOSITORY=remote \
-    GITHUB_ENV="$c/github_env" ./scripts/ci-push-branch.sh \
+    GITHUB_ENV="$c/github_env" ./libexec/falconet/push.sh \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 
 it "the branch lands with the helper flags in place"
@@ -239,7 +240,7 @@ assert_not_contains "$out" "fake-token-value" "output"
 
 it "the helper hands git a password out of the environment, not out of argv"
 helper="$(grep -o "credential\.helper=!f()[^']*" \
-  "$REPO_ROOT/scripts/ci-push-branch.sh" | head -1)"
+  "$REPO_ROOT/libexec/falconet/push.sh" | head -1)"
 body="${helper#credential.helper=!}"
 out="$(GH_TOKEN=fake-token-value sh -c "$body \"\$@\"" helper get 2>&1)"
 assert_contains "$out" "password=fake-token-value" "helper output"
@@ -247,14 +248,28 @@ assert_contains "$out" "password=fake-token-value" "helper output"
 it "and identifies itself as x-access-token"
 assert_contains "$out" "username=x-access-token" "helper output"
 
+# This one and the helper-extraction above are the suite's only two cases that
+# read their subject's SOURCE rather than spawning it (AGENTS.md, invariant 9).
+# The property is that a token never reaches argv, where /proc/<pid>/cmdline
+# would show it to anything else on the runner — and "the helper is written
+# single-quoted" is not observable from outside the process. They are the
+# deliberate exception, and a port rewrites them rather than dropping them.
 it "and the script writes that helper single-quoted, so nothing expands early"
-assert_contains "$(cat "$REPO_ROOT/scripts/ci-push-branch.sh")" \
+assert_contains "$(cat "$REPO_ROOT/libexec/falconet/push.sh")" \
   "-c 'credential.helper=!" "the script source"
 
 # --- usage ------------------------------------------------------------------
 
+it "-h/--help is a usage error, not a successful push"
+( cd "$REPO_ROOT" && ./libexec/falconet/push.sh --help >/dev/null 2>&1 )
+assert_eq 2 "$?" "exit code"
+
+it "and an unknown argument is too"
+( cd "$REPO_ROOT" && ./libexec/falconet/push.sh --bogus >/dev/null 2>&1 )
+assert_eq 2 "$?" "exit code"
+
 it "a missing --branch is a usage error"
-( cd "$REPO_ROOT" && ./scripts/ci-push-branch.sh >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && ./libexec/falconet/push.sh >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 summary

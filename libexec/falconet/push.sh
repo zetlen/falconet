@@ -120,7 +120,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+# Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
+REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+
+. "$REPO_ROOT/lib/config.sh"
+. "$REPO_ROOT/lib/handoff.sh"
+
 BRANCH=""
 BASE_SHA=""
 
@@ -130,7 +135,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch)   BRANCH="${2:?--branch needs a name}"; shift 2 ;;
     --base-sha) BASE_SHA="${2:?--base-sha needs a commit sha}"; shift 2 ;;
-    -h|--help)  usage; exit 0 ;;
+    -h|--help)  usage >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -183,7 +188,8 @@ if push_branch; then
   # written here and only here, it is a statement that the branch is on the
   # remote right now, not that the workflow intended to put it there. Every
   # `--branch` argument in infra-issues.yml is this variable.
-  [[ -z "${GITHUB_ENV:-}" ]] || echo "PUSHED_BRANCH=$BRANCH" >>"$GITHUB_ENV"
+  config_init ""
+  github_env_append "PUSHED_BRANCH=$BRANCH"
   exit 0
 fi
 
