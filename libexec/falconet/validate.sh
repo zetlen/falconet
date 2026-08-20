@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 #
-# ci-validate.sh — the deterministic gate between the implementing agent and
-# the reviewing agent in .github/workflows/infra-issues.yml.
+# validate.sh — the deterministic gate between the implementing agent and
+# whatever looks at the change next.
 #
 # Everything an agent used to prove by hand — did I commit? does it parse?
 # what does the plan say? — happens here, once, in one shell, and lands in
 # files. Agents run no tofu in CI.
 #
 # Modes:
-#   ci-validate.sh --base <sha> [--out-dir DIR]
+#   validate.sh --base <sha> [--out-dir DIR] [--config FILE]
 #       Validate HEAD against the commit the run started from:
 #         1. assert at least one commit exists on top of <sha>
-#         2. assert the commit does not touch .ci-handoff/ — CI's own scratch
+#         2. assert the commit does not touch the handoff dir — CI's own scratch
 #            has no business inside a change (see below)
 #         3. snapshot the commits to DIR/diff.patch and the changed paths to
 #            DIR/changed-files.txt — the review agent is granted no Bash, so
 #            its evidence has to be on disk before it starts
-#         4. tofu validate, once per stack (dns/, workspace/, site/ — #16
+#         4. tofu validate, once per configured stack (dns/, workspace/, site/ by
+#            default — #16
 #            split the single root module into three)
 #         5. tofu -chdir=dns plan -no-color -refresh=false -lock=false
-#            > DIR/plan.txt — dns/ only; see the comment on step 5 below for
+#            > DIR/plan.txt — stacks.plan only; see the comment on step 5 for
 #            why the other two stacks are not planned here.
 #
 # Nothing checks a record registry between 4 and 5 any more. That step
@@ -63,13 +64,21 @@
 # is the truthful one. (workspace/ and site/ still get `tofu validate` in
 # step 4 below, so a broken stack is still caught — just not planned.)
 #
-# Outputs, written into DIR (default: .ci-handoff/ at the root of this
+# Outputs, written into DIR (default: handoff_dir at the root of this
 # repository, which is where the CI pipeline hands files between its stages
 # and is listed in .gitignore):
 #   diff.patch              base..HEAD as `git log -p`, oldest commit first
 #   changed-files.txt       one changed path per line
-#   plan.txt                full plan output — written only on success
+#   plan.txt                full plan output — written only when a plan ran
+#                           and succeeded; deleted if one is half-written
 #   validation-failure.txt  human-readable summary — written only on failure
+#
+# The two snapshots are written by every run that gets past the two guards
+# below, INCLUDING failing ones — a reviewer needs the evidence most when
+# something went wrong. They are not written by a run that stops in a guard,
+# because a guard stopping means the evidence would be a lie. Do not read the
+# first sentence as "always"; the guards are the exception and they are the
+# whole point.
 #
 # Exit codes: 0 = every check passed, 1 = a check failed and
 #             validation-failure.txt says which, 2 = usage error.
@@ -81,14 +90,17 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-# Inside the checkout, not $RUNNER_TEMP: CI's agents are certain to be able to
-# write to their own working directory and nothing else is certain. Keyed to
-# the script's own location so a manual run lands in the same place a CI run
-# does. .gitignore keeps it out of commits; the check below keeps it out of
-# the ones that try anyway.
-HANDOFF_DIR=".ci-handoff"
-OUT_DIR="$REPO_ROOT/$HANDOFF_DIR"
+# Two levels: libexec/falconet/ sits where scripts/ used to sit one deep.
+REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
+
+. "$REPO_ROOT/lib/config.sh"
+. "$REPO_ROOT/lib/handoff.sh"
+
+# The tests stub the planner, as they stub the formatter and the scanner.
+TOFU="${TOFU:-tofu}"
+
+OUT_DIR=""
+CONFIG=""
 BASE=""
 
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; }
@@ -97,13 +109,37 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --base)    BASE="${2:?--base needs a commit sha}"; shift 2 ;;
     --out-dir) OUT_DIR="${2:?--out-dir needs a directory}"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
+    --config)  CONFIG="${2:?--config needs a file}"; shift 2 ;;
+    # 2, not 0. This verb's exit code IS the verdict, so a --help that exits 0
+    # is a run reporting that validation passed.
+    -h|--help) usage >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 [[ -n "$BASE" ]] || { usage >&2; exit 2; }
 
-mkdir -p "$OUT_DIR" || exit 2
+config_init "$CONFIG"
+handoff_init "$OUT_DIR"
+OUT_DIR="$HANDOFF"
+# The name, for the message and the prefix check below. handoff_init resolved
+# the directory; this is what to call it.
+HANDOFF_DIR="$(basename "$OUT_DIR")"
+
+# Resolve --base to a full commit sha before anything compares against it.
+#
+# This was a string comparison against the raw argument, and every guard below
+# inherited the assumption that the caller passed a 40-character sha. It
+# usually did, because prepare writes one. But `--base main`, or a short sha,
+# or `HEAD`, made the "no commit exists" check below silently false — and then
+# `git log "$BASE"..HEAD` produced an empty diff.patch, `git diff` an empty
+# changed-files.txt, and the run could reach `exit 0` having snapshotted
+# nothing at all. The reviewing agent is granted no Bash; it would have read
+# an empty diff and seen no change. Resolve, or refuse.
+if ! BASE="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${BASE}^{commit}")"; then
+  echo "validate: --base does not name a commit in this repository" >&2
+  exit 2
+fi
+
 FAILURES="$OUT_DIR/validation-failure.txt"
 # Clear artifacts from any earlier pass: a stale plan.txt or diff.patch read
 # as this attempt's evidence is exactly the class of bug this pipeline exists
@@ -115,7 +151,7 @@ rm -f "$FAILURES" "$OUT_DIR/plan.txt" "$OUT_DIR/diff.patch" \
 # --- 1. a commit must exist -------------------------------------------------
 #
 # Unreachable as the pipeline now stands, and kept anyway. The outcome is
-# decided before this script is called: scripts/ci-commit-change.sh makes the
+# decided before this script is called: the commit verb makes the
 # commit, and the workflow only reaches validation on `success`, which means
 # there is one. This guard is what catches that stopping being true.
 #
@@ -144,8 +180,8 @@ fi
 echo "commit: $(git -C "$REPO_ROOT" rev-parse --short HEAD) on top of ${BASE:0:7}"
 
 # --- 2. the commit must not carry CI's own handoff files --------------------
-# .ci-handoff/ is gitignored, and the only thing that stages anything now is
-# scripts/ci-commit-change.sh, which passes an explicit vetted pathspec and
+# The handoff dir is gitignored, and the only thing that stages anything now
+# is the commit verb, which passes an explicit vetted pathspec and
 # never `-f`. The implementing agent holds no Bash at all, so it cannot
 # force-add anything; this arm is unreachable too, for the same kind of reason
 # as arm 1. It stays because of what it costs versus what it prevents: one
@@ -161,7 +197,26 @@ echo "commit: $(git -C "$REPO_ROOT" rev-parse --short HEAD) on top of ${BASE:0:7
 # The `"?` in the pattern catches git's quoted form, which it uses for paths
 # containing control characters or quotes.
 git -C "$REPO_ROOT" diff --name-only "$BASE" HEAD >"$OUT_DIR/changed-files.txt"
-if smuggled="$(grep -E "^\"?${HANDOFF_DIR}(/|\"|\$)" "$OUT_DIR/changed-files.txt")"; then
+# Matched as a literal prefix, not as a regex. This was an ERE with
+# $HANDOFF_DIR interpolated raw, which was harmless while the name was a
+# constant and is not now that it comes from config: a value carrying `(` or
+# `[` produces a broken pattern, grep exits 2, and the `if` reads that as "no
+# match" -- a guard that fails OPEN. The `"?` still catches git's quoted form,
+# which it uses for paths containing control characters or quotes.
+#
+# The loop is not wrapped in a command substitution and does not use `case`:
+# macOS ships bash 3.2, which mis-parses an unbalanced `)` in a case pattern
+# inside $( ). [[ ]] with a quoted left side and an unquoted trailing glob
+# says the same thing and parses everywhere.
+smuggled=""
+while IFS= read -r _p; do
+  _u="${_p%\"}"; _u="${_u#\"}"
+  if [[ "$_u" == "$HANDOFF_DIR" || "$_u" == "$HANDOFF_DIR"/* ]]; then
+    smuggled="${smuggled}${_p}"$'\n'
+  fi
+done <"$OUT_DIR/changed-files.txt"
+smuggled="${smuggled%$'\n'}"
+if [[ -n "$smuggled" ]]; then
   {
     echo "## The commit contains CI's own handoff files"
     echo
@@ -205,75 +260,133 @@ trap 'rm -f "$scratch"' EXIT
 
 # --- 4. tofu validate, once per stack ---------------------------------------
 #
-# dns/ gets a REAL init (with the backend) here, not -backend=false: it is
-# the one stack step 5 plans, and a real init serves both `validate` and
-# `plan` without initializing twice. workspace/ and site/ are validated only
-# — never planned by this script, see step 5 — so a `-backend=false` init is
-# all they need: enough for `tofu validate` to see provider schemas, without
-# touching state or credentials they don't need for that.
+# A planned stack gets a REAL init (with the backend), not -backend=false: it
+# is a stack step 5 plans, and a real init serves both `validate` and `plan`
+# without initializing twice. A validate-only stack is never planned by this
+# script, see step 5, so a `-backend=false` init is all it needs: enough for
+# `tofu validate` to see provider schemas, without touching state or
+# credentials it does not need for that.
 #
-# dns_validate_ok tracks dns/ alone, because only dns/'s own validate result
-# decides whether step 5 attempts a plan; a broken workspace/ or site/ must
-# not silently cancel the one plan a reviewer acts on.
-dns_validate_ok=0
-for s in dns workspace site; do
-  if [[ "$s" == "dns" ]]; then
-    init_cmd=(tofu -chdir="$REPO_ROOT/$s" init -input=false)
+# The stacks come from config now. stacks.plan get a real init because they
+# are the ones step 5 plans and one init serves both verbs; stacks.validate_only
+# get -backend=false, which is enough for `validate` to see provider schemas
+# without touching state or credentials they do not need for that.
+#
+# plan_stack_failed tracks the PLANNED stacks alone, because only their own
+# validate result decides whether step 5 attempts a plan; a broken
+# validate-only stack must not silently cancel the one plan a reviewer acts on.
+#
+# It was called dns_validate_ok and it was inverted with respect to its name:
+# 0 meant OK and 1 meant failed, and it read correctly only because its one
+# use said `-ne 0`. Renamed rather than left as a trap for whoever writes
+# `-eq 1` by intuition and plans a stack whose validate just failed.
+PLAN_STACKS=()
+while IFS= read -r _s; do [ -n "$_s" ] && PLAN_STACKS+=("$_s"); done \
+  < <(config_get_array '.stacks.plan')
+CHECK_STACKS=()
+while IFS= read -r _s; do [ -n "$_s" ] && CHECK_STACKS+=("$_s"); done \
+  < <(config_get_array '.stacks.validate_only')
+
+plan_stack_failed=0
+for s in ${PLAN_STACKS[@]+"${PLAN_STACKS[@]}"} ${CHECK_STACKS[@]+"${CHECK_STACKS[@]}"}; do
+  planned=0
+  for _p in ${PLAN_STACKS[@]+"${PLAN_STACKS[@]}"}; do
+    [[ "$_p" == "$s" ]] && planned=1
+  done
+  if [[ "$planned" -eq 1 ]]; then
+    init_cmd=("$TOFU" -chdir="$REPO_ROOT/$s" init -input=false)
   else
-    init_cmd=(tofu -chdir="$REPO_ROOT/$s" init -backend=false -input=false)
+    init_cmd=("$TOFU" -chdir="$REPO_ROOT/$s" init -backend=false -input=false)
   fi
   if "${init_cmd[@]}" >"$scratch" 2>&1 \
-       && tofu -chdir="$REPO_ROOT/$s" validate -no-color >>"$scratch" 2>&1; then
+       && "$TOFU" -chdir="$REPO_ROOT/$s" validate -no-color >>"$scratch" 2>&1; then
     echo "tofu validate ($s/): OK"
   else
     status=1
-    [[ "$s" == "dns" ]] && dns_validate_ok=1
+    [[ "$planned" -eq 1 ]] && plan_stack_failed=1
+    # The heading says "validate" even when it was `init` that died, because
+    # the two are one gate from the requester's side and splitting the wording
+    # would mean explaining the difference to someone who did not ask.
     { echo "## tofu validate failed ($s/)"; echo; cat "$scratch"; echo; } >>"$FAILURES"
   fi
 done
 
-# --- 5. plan (dns/ only — see the header comment on why) --------------------
-if [[ "$dns_validate_ok" -ne 0 ]]; then
+# --- 5. plan (the planned stacks only — see the header on why) --------------
+#
+# The command is plan.command from config, with {stack} replaced by the
+# stack's directory. It is split on whitespace, so an argument containing a
+# space cannot be expressed — the default has none, and a consumer who needs
+# one should say so and get a better mechanism rather than a quoting puzzle.
+# If the first word is `tofu` it is replaced by $TOFU, which is how the tests
+# reach it.
+#
+# All planned stacks land in one plan.txt, because the handoff protocol names
+# one file and assemble attaches one file. With more than one they are
+# separated by a `## <stack>` heading; with the default single stack the file
+# is exactly what it always was.
+if [[ "$plan_stack_failed" -ne 0 ]]; then
   {
     echo "## tofu plan was not attempted"
     echo
-    echo "\`tofu validate\` failed on dns/ above, so a plan would only repeat it."
+    echo "\`tofu validate\` failed above, so a plan would only repeat it."
     echo
   } >>"$FAILURES"
 else
-  # Never pipe tofu plan into another process: a SIGPIPE from a short reader
-  # kills tofu before it releases its state lock. Redirect, then read the file.
-  if tofu -chdir="$REPO_ROOT/dns" plan -no-color -input=false \
-       -refresh=false -lock=false >"$OUT_DIR/plan.txt" 2>"$scratch"; then
-    echo "tofu plan (dns/): OK ($(wc -l <"$OUT_DIR/plan.txt") lines)"
-    # Echo the whole plan into the run log. When a PR body has to truncate
-    # the plan to fit GitHub's 65536-character limit, this is the untruncated
-    # copy the truncation note points a reviewer at.
-    echo "----- begin tofu plan (dns/) -----"
-    cat "$OUT_DIR/plan.txt"
-    echo "----- end tofu plan (dns/) -----"
-  else
-    status=1
-    {
-      echo "## tofu plan failed (dns/)"
-      echo
-      echo "A failing guard (dns/guards*.tf) shows up here as a precondition error."
-      echo "The guard is authoritative: quote it, never weaken it."
-      echo
-      cat "$scratch"
-      echo
-      echo "### plan output before the failure"
-      echo
-      cat "$OUT_DIR/plan.txt"
-      echo
-    } >>"$FAILURES"
-    # A half-written plan must never reach the PR-body assembler.
-    rm -f "$OUT_DIR/plan.txt"
-  fi
+  PLAN_COMMAND="$(config_get '.plan.command')"
+  multi=0
+  [[ "${#PLAN_STACKS[@]}" -gt 1 ]] && multi=1
+  : >"$OUT_DIR/plan.txt"
+  for s in ${PLAN_STACKS[@]+"${PLAN_STACKS[@]}"}; do
+    cmd_str="${PLAN_COMMAND//\{stack\}/$REPO_ROOT/$s}"
+    # shellcheck disable=SC2206
+    cmd=($cmd_str)
+    [[ "${cmd[0]}" == "tofu" ]] && cmd[0]="$TOFU"
+    # Never pipe a plan into another process: a SIGPIPE from a short reader
+    # kills tofu before it releases its state lock. Redirect, then read the
+    # file.
+    stack_plan="$scratch.plan"
+    if "${cmd[@]}" >"$stack_plan" 2>"$scratch"; then
+      [[ "$multi" -eq 1 ]] && { echo "## $s"; echo; } >>"$OUT_DIR/plan.txt"
+      cat "$stack_plan" >>"$OUT_DIR/plan.txt"
+      echo "tofu plan ($s/): OK ($(wc -l <"$stack_plan") lines)"
+      # Echo the whole plan into the run log. When a PR body has to truncate
+      # the plan to fit GitHub's 65536-character limit, this is the
+      # untruncated copy the truncation note points a reviewer at.
+      echo "----- begin tofu plan ($s/) -----"
+      cat "$stack_plan"
+      echo "----- end tofu plan ($s/) -----"
+    else
+      status=1
+      {
+        echo "## tofu plan failed ($s/)"
+        echo
+        cat "$scratch"
+        echo
+        echo "### plan output before the failure"
+        echo
+        cat "$stack_plan"
+        echo
+      } >>"$FAILURES"
+      # A failing guard shows up above as a precondition error, and the guard
+      # is authoritative. That sentence used to be in the report; it is here
+      # instead, because the report is posted verbatim to the REQUESTER, who
+      # asked for a DNS record and is not the person being told not to weaken
+      # a guard. The file's own header promises it gives no instructions,
+      # because there is nobody there to instruct — and this was the one path
+      # that broke that promise.
+      echo "a failing guard shows up as a precondition error; the guard is" >&2
+      echo "authoritative — quote it, never weaken it" >&2
+      # A half-written plan must never reach the PR-body assembler.
+      rm -f "$OUT_DIR/plan.txt" "$stack_plan"
+      break
+    fi
+    rm -f "$stack_plan"
+  done
 fi
 
 if [[ "$status" -eq 0 ]]; then
   echo "validation OK"
+  github_env_append "VALIDATED=true"
 else
   echo "validation FAILED — see $FAILURES" >&2
   cat "$FAILURES" >&2

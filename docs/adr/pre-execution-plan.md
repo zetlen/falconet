@@ -308,6 +308,33 @@ in the port where real test-writing is owed, not carried over.
 - [ ] `diff.patch` stays `git log -p`, not `git diff` — reviewers get each
       commit message beside the change it claims to make.
 
+- [ ] **Bugs found by writing the test, all fixed in this task.** Being the
+      first reader of an untested 281-line file turns up more than coverage:
+      `--base` was string-compared rather than resolved, so `--base main` made
+      the no-commit guard silently false and the run could reach `exit 0`
+      having snapshotted an empty diff for a reviewing agent that holds no
+      Bash; `$HANDOFF_DIR` was interpolated raw into an ERE, so a
+      config-supplied name carrying a regex metacharacter made grep exit 2 and
+      the `if` read that as "no match" — a guard failing OPEN on exactly the
+      commit it exists to refuse; `--help` exited 0, which for this verb means
+      "validation passed"; `mkdir -p || exit 2` reported a filesystem failure
+      as a usage error; and `dns_validate_ok` was inverted with respect to its
+      name (0 = OK), a trap for whoever writes `-eq 1` by intuition and plans
+      a stack whose validate just failed.
+- [ ] **The report contained an instruction, against its own header.** The
+      plan-failure path wrote "The guard is authoritative: quote it, never
+      weaken it" into `validation-failure.txt`, which is posted verbatim to
+      the requester — while the file's header promises it gives no
+      instructions, because there is nobody there to instruct. Moved to
+      stderr, where a person debugging a run reads it.
+- [ ] **The documented snapshot contract was aspirational.** "Written on every
+      run" is not true and should not become true: the two guards stop before
+      the snapshot precisely because a snapshot taken past them would be a
+      lie. The header now says what holds — every run that gets past the
+      guards, including every failing one.
+- [ ] `VALIDATED=true` on the success path, which ADR-0003 lists among the CI
+      exports and the original never wrote.
+
 **Verify:** green, with `validate.test.sh` present and non-trivial.
 **Commit:** `refactor: ci-validate.sh -> libexec/falconet/validate.sh, with tests`
 
