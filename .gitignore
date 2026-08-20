@@ -1,0 +1,20 @@
+# Stage handoff. The pipeline stages leave files here for the next one — the
+# request, both plans, the commits patch, the validation report, the assembled
+# PR body. It is scratch, never part of a change: nothing in it may ever be
+# committed. This entry is the first line of that defence (a `git add -A`
+# cannot pick up an ignored path); ci-validate.sh is the second, and fails any
+# commit that touches .ci-handoff/ anyway, because `git add -f` exists.
+.ci-handoff/
+
+# Test scratch
+/tmp/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+
+# Local agent permission rules — MUST stay untracked.
+.claude/settings.local.json
+
+# Bun (the rewrite lands here)
+node_modules/
