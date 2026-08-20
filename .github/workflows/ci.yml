@@ -1,0 +1,29 @@
+# falconet's own tests, on every pull request and every push to main.
+#
+# The suite stubs gh, gitleaks and tofu, pushes only into bare repositories
+# under a temp directory, and never touches the network, GitHub, OpenTofu or
+# any credential — which is why it can run here with no secrets and no
+# permissions at all.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the shell parses before running any of it
+        run: |
+          set -euo pipefail
+          for f in bin/falconet lib/*.sh libexec/falconet/*.sh tests/*.sh; do
+            bash -n "$f"
+          done
+      - name: Run the suite
+        run: bash tests/run.sh

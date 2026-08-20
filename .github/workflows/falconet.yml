@@ -1,0 +1,463 @@
+# falconet — the documented job graph.
+#
+# gate → implement → publish → contain. Four jobs, and the boundaries between
+# them are the security model rather than a tidy diagram:
+#
+#   the AGENT JOB never holds a token. Not a blanked one — none. The origin
+#   blanked credentials on the agent STEP and said so honestly in its own
+#   comment: whether a `uses:` step's env: reaches a composite action's
+#   expression context is not something it had confirmed on a live run. A job
+#   with `permissions: {}` and no secrets: block is not best-effort.
+#
+#   the SCRIPTED JOBS never run the agent. They hold the token and do the
+#   mechanics — the branch, the guards, the commit, the push, the plan, the
+#   pull request — none of which is judgment and none of which an agent
+#   should be able to skip, improvise, or be argued out of.
+#
+# ---------------------------------------------------------------------------
+# The cost of that boundary, stated plainly
+# ---------------------------------------------------------------------------
+# Run 32093607680 taught this pipeline to push the moment a commit exists,
+# because the only push used to sit behind an approved review and every other
+# exit left the work on a runner that was destroyed minutes later. The issue
+# was parked with a comment promising a prepared change that no longer existed
+# anywhere.
+#
+# A job boundary between the commit and the push reopens a window in that
+# guard — a smaller one, but a real one. Two things close it:
+#
+#   1. `implement` uploads a git BUNDLE of the branch before it ends. The
+#      bundle outlives the runner, so the work is durable the instant it
+#      exists, which is what the incident was actually about.
+#   2. `publish`'s first step is the push. Nothing is validated, assembled or
+#      posted before the branch is on the remote.
+#
+# So the work is never lost; there is a window of one job hand-off in which it
+# is durable as an artifact rather than as a branch. `contain` links the run —
+# and therefore the artifact — on every path that stops early.
+#
+# If that trade is wrong, the alternative is the origin's shape: one job,
+# per-step credential blanking, and the honesty that step-level blanking is
+# unconfirmed. This file takes the enforceable boundary and pays for it here.
+
+name: falconet
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: 'The issue number to work.'
+        required: true
+        type: number
+      config:
+        description: 'Path to falconet.json, if not .github/falconet.json.'
+        required: false
+        type: string
+        default: ''
+      falconet-ref:
+        description: 'Which falconet to run.'
+        required: false
+        type: string
+        default: main
+      runs-on:
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      app-id:
+        description: >-
+          A GitHub App registered purely as a credential — no webhook, nothing
+          hosted. Output is authored by the app rather than by a person, and
+          App-token pushes fire pull_request events, which GITHUB_TOKEN
+          pushes do not. That is why the empty-commit-with-a-PAT workaround
+          is deleted rather than ported.
+        required: true
+      app-private-key:
+        required: true
+      anthropic-api-key:
+        description: >-
+          Deliberately an API key, not a subscription token, so falconet's
+          spend stays a separate number.
+        required: true
+
+permissions: {}
+
+jobs:
+  # =========================================================================
+  # gate — is this issue ours, and if so lay out the work
+  # =========================================================================
+  gate:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      outcome:   ${{ steps.prepare.outputs.outcome }}
+      branch:    ${{ steps.read.outputs.branch }}
+      base_sha:  ${{ steps.read.outputs.base_sha }}
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: token
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ steps.token.outputs.token }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: zetlen/falconet
+          ref: ${{ inputs.falconet-ref }}
+          path: .falconet-tool
+
+      # Eligibility is decided here and not in a job-level `if:`, because an
+      # `if:` evaluates before checkout and can therefore never read the
+      # config file. Gating there would fork eligibility into YAML-in-CI and
+      # nothing-locally, for a project whose whole rule is one code path. The
+      # cost is runner-seconds on ineligible events.
+      - name: Prepare
+        id: prepare
+        uses: ./.falconet-tool
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          FALCONET_EVENT_PATH: ${{ github.event_path }}
+        with:
+          verb: prepare
+          args: --issue ${{ inputs.issue }} ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      - name: Read the handoff
+        id: read
+        if: steps.prepare.outputs.outcome == 'ready'
+        run: |
+          set -euo pipefail
+          echo "branch=$(cat .falconet/branch.txt)"     >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(cat .falconet/base-sha.txt)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.outcome == 'ready'
+        with:
+          name: handoff-gate
+          path: .falconet/
+          retention-days: 7
+
+  # =========================================================================
+  # implement — judgment, and nothing else
+  # =========================================================================
+  #
+  # No token, no secrets beyond the model key, no push. The agent's grant is
+  # exactly Read,Edit,Write,Grep,Glob: it edits files, writes a commit message
+  # to a file, and stops. Issue text is attacker-controlled AND it is this
+  # agent's instructions — "also edit the workflow to grant Bash" is the
+  # attack, and the commit verb's path allowlist is what refuses it.
+  #
+  # The scripted steps in this job are fine: the JOB has no token, so nothing
+  # here can publish. That is the distinction the boundary is drawn on.
+  implement:
+    needs: gate
+    if: needs.gate.outputs.outcome == 'ready'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions: {}
+    outputs:
+      outcome: ${{ steps.commit.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.base_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: zetlen/falconet
+          ref: ${{ inputs.falconet-ref }}
+          path: .falconet-tool
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-gate
+          path: .falconet
+
+      - name: Open the working branch
+        run: |
+          set -euo pipefail
+          git switch -c "$BRANCH"
+          git config user.name  "falconet[bot]"
+          git config user.email "falconet[bot]@users.noreply.github.com"
+        env:
+          BRANCH: ${{ needs.gate.outputs.branch }}
+
+      - name: Resolve the prompt
+        id: prompt
+        run: |
+          set -euo pipefail
+          {
+            echo 'text<<FALCONET_PROMPT_EOF'
+            ./.falconet-tool/bin/falconet prompt implement
+            echo FALCONET_PROMPT_EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Implement the change
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: |
+            --allowedTools "Read,Edit,Write,Grep,Glob"
+            --max-turns 40
+
+      # Every guard rides here: the path allowlist, the content denylist, the
+      # secret scan over the agent's drafts and then over the staged change,
+      # per-file formatting, and a vetted-path-only `git add`. A refusal beats
+      # a question: a denied run commits nothing, so there is no committed
+      # work for needs-info's ordering to protect.
+      - name: Commit
+        id: commit
+        uses: ./.falconet-tool
+        with:
+          verb: commit
+          setup: 'false'
+          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      # Before this job ends, so the work outlives the runner. See the header.
+      - name: Bundle the work
+        if: always()
+        run: |
+          set -euo pipefail
+          git bundle create "$RUNNER_TEMP/branch.bundle" \
+            "${{ needs.gate.outputs.base_sha }}..HEAD" 2>/dev/null \
+            || : >"$RUNNER_TEMP/branch.bundle"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: handoff-implement
+          path: |
+            .falconet/
+            ${{ runner.temp }}/branch.bundle
+          retention-days: 7
+
+  # =========================================================================
+  # publish — the push first, then everything that depends on it
+  # =========================================================================
+  publish:
+    needs: [gate, implement]
+    if: always() && needs.implement.result != 'skipped'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: token
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.base_sha }}
+          fetch-depth: 1
+          token: ${{ steps.token.outputs.token }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: zetlen/falconet
+          ref: ${{ inputs.falconet-ref }}
+          path: .falconet-tool
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: handoff-implement
+          path: incoming
+
+      - name: Restore the branch
+        run: |
+          set -euo pipefail
+          mkdir -p .falconet
+          cp -R incoming/.falconet/. .falconet/ 2>/dev/null || true
+          bundle="$(find incoming -name branch.bundle | head -1)"
+          git switch -c "$BRANCH"
+          if [ -s "$bundle" ]; then
+            git fetch "$bundle" HEAD
+            git reset --hard FETCH_HEAD
+          fi
+        env:
+          BRANCH: ${{ needs.gate.outputs.branch }}
+
+      # Unconditional, and first. Every run leaves its branch on the remote,
+      # so a stale branch is ordinary and the collision rename does the
+      # bookkeeping. Nothing below runs before the work is somewhere durable.
+      - name: Push
+        uses: ./.falconet-tool
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        with:
+          verb: push
+          setup: 'false'
+          args: --branch ${{ needs.gate.outputs.branch }} --base-sha ${{ needs.gate.outputs.base_sha }}
+
+      - name: Validate
+        id: validate
+        if: needs.implement.outputs.outcome == 'success'
+        continue-on-error: true
+        uses: ./.falconet-tool
+        with:
+          verb: validate
+          args: --base ${{ needs.gate.outputs.base_sha }} ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      - uses: actions/upload-artifact@v4
+        if: needs.implement.outputs.outcome == 'success'
+        with:
+          name: tofu-plan-issue-${{ inputs.issue }}
+          path: .falconet/plan.txt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Assemble the pull-request body
+        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
+        uses: ./.falconet-tool
+        with:
+          verb: assemble
+          setup: 'false'
+          args: >-
+            --body .falconet/commit-body.md
+            --plan .falconet/plan.txt
+            --issue ${{ inputs.issue }}
+            --out .falconet/pr.md
+            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      # The title comes from the commit subject the agent wrote, never from
+      # the issue title. The agent's account of its own change is the thing a
+      # human reviews it against.
+      - name: Open the pull request
+        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$PUSHED_BRANCH" \
+            --title "$(cat .falconet/commit-subject.txt)" \
+            --body-file .falconet/pr.md \
+            --label "$(jq -r '.labels.pr // "needs-plan-review"' \
+                       "${FALCONET_CONFIG:-.github/falconet.json}" 2>/dev/null \
+                       || echo needs-plan-review)"
+
+      - name: Hand over — the agent asked a question
+        if: needs.implement.outputs.outcome == 'needs-info'
+        uses: ./.falconet-tool
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        with:
+          verb: park
+          setup: 'false'
+          args: >-
+            --issue ${{ inputs.issue }}
+            --label needs-info
+            --branch ${{ env.PUSHED_BRANCH }}
+            --body .falconet/needs-info.md
+            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            --preamble "Before I can prepare this change I need a bit more from you:"
+
+      - name: Hand over — the run could not prepare a change
+        if: needs.implement.outputs.outcome == 'failure'
+        uses: ./.falconet-tool
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        with:
+          verb: park
+          setup: 'false'
+          args: >-
+            --issue ${{ inputs.issue }}
+            --label ready-for-human
+            --branch ${{ env.PUSHED_BRANCH }}
+            --body .falconet/failure-reason.txt
+            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            --preamble "I wasn't able to prepare this change automatically. This one needs a person."
+
+      - name: Hand over — validation failed
+        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'failure'
+        uses: ./.falconet-tool
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        with:
+          verb: park
+          setup: 'false'
+          args: >-
+            --issue ${{ inputs.issue }}
+            --label ready-for-human
+            --branch ${{ env.PUSHED_BRANCH }}
+            --body .falconet/validation-failure.txt
+            --body-title "validation output"
+            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            --preamble "I prepared this change, but it did not validate. This one needs a person."
+
+  # =========================================================================
+  # contain — a request never disappears into a green run that produced nothing
+  # =========================================================================
+  contain:
+    needs: [gate, implement, publish]
+    if: always() && needs.gate.outputs.outcome == 'ready'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: token
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: zetlen/falconet
+          ref: ${{ inputs.falconet-ref }}
+          path: .falconet-tool
+
+      # Terminal state, or park. Closed, already parked, or an open PR across
+      # either branch prefix all count as terminal; anything else gets a
+      # comment with a link to this run, because a request that vanishes into
+      # an empty green run is the failure this pipeline cares about most.
+      - name: Ensure a terminal state
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          state="$(gh issue view "$ISSUE" --json state,labels)"
+          if [ "$(jq -r .state <<<"$state")" != OPEN ]; then
+            echo "issue #$ISSUE is closed — terminal"; exit 0
+          fi
+          if jq -r '.labels[].name' <<<"$state" \
+               | grep -qxE 'needs-info|ready-for-human'; then
+            echo "issue #$ISSUE is already parked — terminal"; exit 0
+          fi
+          heads="$(gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | test("^(claude/)?issue-" + env.ISSUE + "-")) | .number')"
+          if [ -n "$heads" ]; then
+            echo "issue #$ISSUE has an open PR — terminal"; exit 0
+          fi
+          ./.falconet-tool/bin/falconet park \
+            --issue "$ISSUE" \
+            --label ready-for-human \
+            --branch "" \
+            --run-url "$RUN_URL" \
+            --preamble "This run stopped before it reached a conclusion, so nobody has been told anything useful. This one needs a person."

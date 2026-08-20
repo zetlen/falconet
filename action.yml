@@ -1,0 +1,119 @@
+name: falconet
+description: >-
+  Turn a plain-language infrastructure request into a pull request carrying a
+  real plan, and stop there. This action is setup plus pass-through: it pins
+  the binaries the verbs need and then runs one verb.
+author: zetlen
+
+inputs:
+  verb:
+    description: 'One of prepare, commit, push, validate, park, assemble (or the unlisted prompt).'
+    required: true
+  args:
+    description: >-
+      Arguments for the verb, split on whitespace. NEVER pass issue text
+      here — see the note in the run step. Files and environment variables
+      are how attacker-controlled text travels.
+    required: false
+    default: ''
+  working-directory:
+    description: 'The repository the verb operates on. Defaults to the checkout.'
+    required: false
+    default: '.'
+  setup:
+    description: >-
+      Install the pinned binaries. Leave true on the first call in a job and
+      set false afterwards; the installs are idempotent but not free.
+    required: false
+    default: 'true'
+  gitleaks-version:
+    description: 'Pinned gitleaks release.'
+    required: false
+    default: '8.30.1'
+  gitleaks-sha256:
+    description: >-
+      SHA-256 of the linux_x64 asset. The version pins WHAT is fetched; this
+      pins what arrives, because a tag is a mutable pointer and a release
+      asset can be replaced. Bump the two together — if they disagree the
+      step fails, and no scan is ever skipped silently.
+    required: false
+    default: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+
+outputs:
+  outcome:
+    description: 'The one word the verb printed on stdout, for the verbs that print one.'
+    value: ${{ steps.run.outputs.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up OpenTofu
+      if: inputs.setup == 'true'
+      uses: opentofu/setup-opentofu@v1
+      with:
+        tofu_wrapper: false
+
+    # The BINARY, not gitleaks/gitleaks-action: the action's licence
+    # distinguishes individual users from organisations and asks the second
+    # kind for a key, and falconet would rather ship something a person can
+    # also run by hand.
+    #
+    # `gitleaks version` last: proof that what came out of the tarball
+    # actually runs, on this runner, before anything depends on it. The scan
+    # fails closed on a missing binary, so a broken install parks the issue
+    # rather than publishing unscanned text — but failing here is better than
+    # failing there.
+    - name: Install gitleaks (pinned)
+      if: inputs.setup == 'true'
+      shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.gitleaks-version }}
+        GITLEAKS_SHA256: ${{ inputs.gitleaks-sha256 }}
+      run: |
+        set -euo pipefail
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks version
+          exit 0
+        fi
+        asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" "$url"
+        echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$asset" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP" gitleaks
+        mkdir -p "$HOME/.local/bin"
+        install -m 0755 "$RUNNER_TEMP/gitleaks" "$HOME/.local/bin/gitleaks"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/gitleaks" version
+
+    - name: Check jq
+      if: inputs.setup == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || {
+          echo "falconet needs jq and this runner has none" >&2; exit 1; }
+        jq --version
+
+    # The verb and its arguments reach the shell through the ENVIRONMENT, not
+    # through a template expression. That is not style: an issue title, body
+    # or comment interpolated into a `run:` block is a shell injection with
+    # the requester holding the keyboard, and the whole reason the six verbs
+    # take files rather than strings is so that text never has to travel this
+    # way. $FALCONET_ARGS is deliberately unquoted so a caller can pass
+    # several arguments — which is exactly why a caller must never put issue
+    # text in it.
+    - name: Run
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        FALCONET_VERB: ${{ inputs.verb }}
+        FALCONET_ARGS: ${{ inputs.args }}
+      run: |
+        set -uo pipefail
+        # shellcheck disable=SC2086
+        outcome="$("$GITHUB_ACTION_PATH/bin/falconet" "$FALCONET_VERB" $FALCONET_ARGS)"
+        rc=$?
+        printf '%s\n' "$outcome"
+        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        exit "$rc"
