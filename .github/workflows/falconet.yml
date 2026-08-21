@@ -217,12 +217,17 @@ jobs:
       # per-file formatting, and a vetted-path-only `git add`. A refusal beats
       # a question: a denied run commits nothing, so there is no committed
       # work for needs-info's ordering to protect.
+      #
+      # setup runs here, and must: this is the FIRST falconet step in this
+      # job, and a job is a fresh runner. `setup: false` would leave commit
+      # without `tofu fmt` and without gitleaks — and the secret scan fails
+      # closed, so a missing scanner is a failed run rather than a skipped
+      # check. Correct behaviour, but the wrong reason to fail.
       - name: Commit
         id: commit
         uses: ./.falconet-tool
         with:
           verb: commit
-          setup: 'false'
           args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
 
       # Before this job ends, so the work outlives the runner. See the header.

@@ -26,14 +26,16 @@ separate number instead of disappearing into the operator's subscription.
 
 ## Where things are
 
-**This repository** is local-only. It has never been pushed and no GitHub
-repository exists for it. It is intended to be public at `zetlen/falconet`,
-but **creating and pushing it is the operator's call.** Ask before running
-`gh repo create` or any push.
+**This repository** is public at `zetlen/falconet`, and `main` is what
+consumers pin — both `uses: zetlen/falconet/.github/workflows/falconet.yml@main`
+and the `falconet-ref` input default to it. A tag is worth cutting once a run
+has actually succeeded; until then a moving `main` is the point, because
+development is integration.
 
-Before that happens: one value was already redacted during extraction (a
-Cloudflare account ID). Re-scan if anything further is brought over from
-`wayfinders-infra`, which is private.
+Public means every push is a publication. One value was already redacted
+during extraction (a Cloudflare account ID); `wayfinders-infra` is private, so
+anything further brought over from it must be read before it is committed
+here, not after.
 
 **The consuming repository** is `wayfinders-infra` (private,
 `zetlen/wayfinders-infra`) — falconet's only integration environment, and

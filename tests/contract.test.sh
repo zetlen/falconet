@@ -134,6 +134,34 @@ tar_line="$(grep -n 'tar -xzf' "$ACTION" | cut -d: -f1)"
   && assert_eq "before" "before" "sha at $sha_line, tar at $tar_line" \
   || assert_eq "sha before tar" "sha=$sha_line tar=$tar_line" "order"
 
+# `setup: false` says "an earlier step in THIS job already installed them",
+# and a job is a fresh runner: the claim is about the job, never about the
+# workflow. It was false once — the agent job's commit step carried it with
+# nothing before it, so commit would have run with no `tofu fmt` and no
+# gitleaks, and the secret scan fails closed. The run would have failed for
+# the right reason and the wrong cause, on every issue, forever.
+#
+# The rule is dependency-shaped rather than positional: push, park and
+# assemble need none of the pinned binaries and are free to skip the install.
+it "no verb that needs the pinned binaries runs before an install in its job"
+unmet="$(awk '
+  function flush(   verb, installs) {
+    if (buf ~ /uses: \.\/\.falconet-tool/) {
+      verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
+      installs = (buf !~ /setup: .false./)
+      if (verb ~ /^(prepare|commit|validate)$/ && !installed[job] && !installs)
+        print job "/" verb
+      if (installs) installed[job] = 1
+    }
+    buf = ""
+  }
+  /^  [a-z][a-z-]*:$/ { flush(); job = $1; sub(/:$/, "", job) }
+  /^      - / { flush() }
+  { buf = buf " " $0 }
+  END { flush() }
+' "$WF")"
+assert_eq "" "$unmet" "steps needing an install that never got one"
+
 # --- attacker-controlled text never reaches a shell ------------------------
 
 it "the action passes the verb through the environment, not a template"

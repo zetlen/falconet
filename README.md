@@ -6,7 +6,7 @@ a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
 **Status: the CLI works; nothing has run as an Action yet.** All six verbs
-are implemented and tested — `bash tests/run.sh`, 12 files, 435 assertions.
+are implemented and tested — `bash tests/run.sh`, 12 files, 436 assertions.
 The composite action and the reusable workflow are written and their
 structural invariants are tested, but they have never executed on a real
 runner. See [Where this stands](#where-this-stands).
@@ -108,7 +108,7 @@ off-the-shelf option.
 | Piece | State |
 | --- | --- |
 | `bin/`, `lib/`, `libexec/falconet/` — the CLI | six verbs, working |
-| `tests/` — 12 files, 435 assertions | passing (`bash tests/run.sh`) |
+| `tests/` — 12 files, 436 assertions | passing (`bash tests/run.sh`) |
 | `action.yml` + `.github/workflows/falconet.yml` | written, invariants tested, never run |
 | `prompts/` | extracted from the provenance |
 | `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
