@@ -5,12 +5,14 @@ picked on purpose. This one turns a plain-language infrastructure request into
 a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
-**Status: the CLI works; nothing has run as an Action yet.** All six verbs
-are implemented and tested — `bash tests/run.sh`, 12 files, 459 assertions.
-The composite action and the reusable workflow are written and their wiring
-invariants are tested, but they have never executed on a real runner. The
-next thing that has to happen is [a canary issue](#9-run-a-canary-issue) in a
-consuming repository. See [Where this stands](#where-this-stands).
+**Status: the CLI works; no job has run on a runner yet.** All six verbs are
+implemented and tested — `bash tests/run.sh`, 12 files, 464 assertions. The
+composite action and the reusable workflow are written and their wiring
+invariants are tested. The first consumer installed it on 2026-08-21 and its
+first canary was a `startup_failure` before any job started: step 8 of this
+README told it to grant `contents: read`, which the `publish` job exceeds.
+That is fixed here and pinned by a test, and the canary is pending again. See
+[Where this stands](#where-this-stands).
 
 ## What it does
 
@@ -295,11 +297,18 @@ concurrency:
   group: falconet-${{ github.event.issue.number }}
   cancel-in-progress: false
 
-# A called workflow can only narrow the caller's token, never widen it. A
-# repository whose default workflow permissions are read-only fails at job
-# start without these, and the failure names a permission rather than a cause.
+# A called workflow can only narrow the caller's token, never widen it, so
+# each of these must be at least what the widest job inside declares —
+# `publish` declares `contents: write` to push. That check happens when the
+# file is LOADED: grant less and the run is a `startup_failure` with no jobs,
+# no logs and nothing on the issue.
+#
+# It is narrower than it reads. `implement`, the job that runs the agent,
+# declares `permissions: {}` and holds no token at all; `gate` and `contain`
+# narrow themselves back to `contents: read`. Only `publish` receives this,
+# and it pushes with the App token in any case.
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -391,6 +400,7 @@ development is integration here. Put the SHA you ran in both places:
 
 | What you see | Why | Do |
 | --- | --- | --- |
+| The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares. GitHub checks that when the workflow file is loaded, so nothing runs and nobody is told — including the requester. Until 2026-08-21 this README prescribed `contents: read`, which `publish` exceeds. | Step 8's `permissions:` block, verbatim. |
 | **gate** is red and the issue has no comment | `prepare` hard-failed before the acknowledgment — the one failure the requester never hears about, because `contain` is conditioned on the gate having said `ready`. | Open the run; the last lines of **Prepare** name the cause. The usual ones are the next three rows. |
 | `config .stacks.plan names "x", which is not a directory` (or `.stacks.validate_only`) | A name in step 7 is not a directory. | Step 7's check. |
 | `prepare: tofu init failed in dns/ — the stack cannot be planned`, then OpenTofu's own text: *no valid credential sources*, *error configuring S3 Backend* | `FALCONET_PLAN_ENV` is missing, or missing the key the backend needs. | Step 5. |
@@ -489,21 +499,22 @@ off-the-shelf option.
 | Piece | State |
 | --- | --- |
 | `bin/`, `lib/`, `libexec/falconet/` — the CLI | six verbs, working |
-| `tests/` — 12 files, 459 assertions | passing (`bash tests/run.sh`) |
+| `tests/` — 12 files, 464 assertions | passing (`bash tests/run.sh`) |
 | `action.yml` + `.github/workflows/falconet.yml` | written, wiring invariants tested, never run |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
 | `prompts/` | extracted from the provenance; the standing-facts block is the origin's |
 | `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
 | `docs/provenance/` — the retired orchestrator | reference only |
-| A live run | **not yet** — the next thing that has to happen |
+| A live run | **not yet.** One attempt, 2026-08-21: rejected at load for the permissions bug above, so no job has ever started. The install instructions are now a contract the suite checks. |
 | Bun rewrite | deferred on purpose ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)) |
 
 The port from stage-shaped scripts to a coherent CLI is done; [the plan it
 followed](docs/adr/pre-execution-plan.md) records what changed and what was
-found on the way. Preparing a consumer has since found three wiring bugs that
+found on the way. Preparing a consumer has since found four wiring bugs that
 no unit test of a single verb could see — binaries not installed in the job
-that needed them, stacks not initialised before the baseline plan, and the
-tool's own checkout dirtying the tree it was about to inspect — each now
+that needed them, stacks not initialised before the baseline plan, the tool's
+own checkout dirtying the tree it was about to inspect, and an install
+document that told people to grant less than the workflow declares — each now
 pinned by [`tests/contract.test.sh`](tests/contract.test.sh). What has not
 happened is a real run: development *is* integration here.
 

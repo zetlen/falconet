@@ -240,4 +240,45 @@ assert_contains "$wf" "actions/create-github-app-token" "workflow"
 it "and the empty-commit workaround is not ported"
 assert_not_contains "$wf" "allow-empty" "workflow"
 
+# --- the README's caller grants what the jobs declare -----------------------
+#
+# The first consumer's first canary was a `startup_failure`: two runs, no
+# jobs, no logs, and an issue with nothing on it. `publish` declares
+# `contents: write` and step 8 of this README granted `contents: read`; a
+# called workflow that requests more than its caller holds is rejected when
+# the file is LOADED, which is before any job exists to report it and before
+# the requester is acknowledged.
+#
+# So the install instructions are a contract too. Every permission the widest
+# job declares must be the permission step 8 tells people to grant, and the
+# two drift the moment a job's needs change — silently, into somebody else's
+# repository, where it costs them a failure that says nothing.
+
+caller="$(awk '/^### 8\./ { s = 1 } s && /^### 9\./ { exit } s' "$REPO_ROOT/README.md")"
+caller_perms="$(awk '/^permissions:/ { p = 1; next } p && /^[^[:space:]]/ { p = 0 } p' <<<"$caller")"
+
+it "the README's step 8 actually contains a caller with a permissions block"
+# Everything below reads that block. Empty, and every case passes vacuously.
+assert_contains "$caller" "uses: zetlen/falconet/.github/workflows/falconet.yml@" "README step 8"
+
+it "and the block is not empty, which would pass every case below on nothing"
+assert_eq "true" "$([[ -n "$caller_perms" ]] && echo true || echo false)" "step 8's permissions block"
+
+# `write` anywhere in the file at job-permission indentation is the widest a
+# job asks for; otherwise `read`.
+widest_declared() { # permission
+  if grep -qE "^      $1: write$" "$WF"; then echo write; else echo read; fi
+}
+
+for perm in contents issues pull-requests; do
+  want="$(widest_declared "$perm")"
+  got="$(grep -E "^  $perm:" <<<"$caller_perms" | awk '{ print $2 }')"
+
+  it "step 8 grants $perm: $want, which is what the widest job declares"
+  # assert_eq both ways round: granting LESS is the startup failure above,
+  # granting MORE hands a consumer's repository an authority nothing here
+  # needs, which is exactly the kind of over-grant nobody audits afterwards.
+  assert_eq "$want" "$got" "step 8's $perm grant"
+done
+
 summary
