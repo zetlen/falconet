@@ -161,6 +161,42 @@ unmet="$(awk '
 ' "$WF")"
 assert_eq "" "$unmet" "steps needing an install that never got one"
 
+# Two verbs read `git status`: prepare refuses a dirty tree, and commit
+# refuses every changed path outside the allowlist, untracked included. The
+# tool's own checkout sits INSIDE the consumer's tree -- a composite action
+# can only run from under the workspace -- and the handoff directory is
+# written there too. Neither is the agent's, and neither is anything a
+# consumer's .gitignore can be relied on to know about. Without an exclude,
+# every run died in prepare on `?? .falconet-tool/`, before the
+# acknowledgment -- the one failure the requester never hears about.
+#
+# Dependency-shaped, like the install check: the verbs that read git status
+# must be preceded in their own job by the step that excludes both paths.
+it "the tool checkout and the handoff are excluded before any verb reads git status"
+unexcluded="$(awk '
+  function flush(   verb) {
+    if (buf ~ /name: Keep the tool and the handoff out of the working tree/)
+      excluded[job] = 1
+    if (buf ~ /uses: \.\/\.falconet-tool/) {
+      verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
+      if (verb ~ /^(prepare|commit)$/ && !excluded[job]) print job "/" verb
+    }
+    buf = ""
+  }
+  /^  [a-z][a-z-]*:$/ { flush(); job = $1; sub(/:$/, "", job) }
+  /^      - / { flush() }
+  { buf = buf " " $0 }
+  END { flush() }
+' "$WF")"
+assert_eq "" "$unexcluded" "verbs reading git status with the tool still in the tree"
+
+it "and the exclude names both the tool path and the handoff directory"
+assert_contains "$wf" ".falconet-tool/ .falconet/" "workflow"
+
+it "and writes it per clone, never into a file the commit verb could see"
+assert_contains "$wf" ".git/info/exclude" "workflow"
+assert_not_contains "$wf" ">> .gitignore" "workflow"
+
 # --- the planning credentials ----------------------------------------------
 #
 # One secret, loaded in the two jobs that run tofu and in neither of the

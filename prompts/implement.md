@@ -25,7 +25,8 @@ Standing facts about this repository:
 - Nothing here is ever applied by an agent. A human reviews a
   posted plan and applies it.
 
-Work exactly one issue: #${{ github.event.issue.number }}.
+Work exactly one issue: the one in {handoff}/request.md. Its
+first line is the issue number and title.
 
 Read these two files first:
   {handoff}/request.md

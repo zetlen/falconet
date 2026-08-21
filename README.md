@@ -6,10 +6,11 @@ a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
 **Status: the CLI works; nothing has run as an Action yet.** All six verbs
-are implemented and tested — `bash tests/run.sh`, 12 files, 456 assertions.
-The composite action and the reusable workflow are written and their
-structural invariants are tested, but they have never executed on a real
-runner. See [Where this stands](#where-this-stands).
+are implemented and tested — `bash tests/run.sh`, 12 files, 459 assertions.
+The composite action and the reusable workflow are written and their wiring
+invariants are tested, but they have never executed on a real runner. The
+next thing that has to happen is [a canary issue](#9-run-a-canary-issue) in a
+consuming repository. See [Where this stands](#where-this-stands).
 
 ## What it does
 
@@ -30,89 +31,168 @@ produced nothing.
 
 What it will **not** do is apply anything. The gate at the end is a person.
 
-## The verbs
+## Install it in your repository
 
-Six of them, one per stage. They never call each other; they pass files
-through a handoff directory, so the same sequence runs in CI and on a
-workstation. Uniform exit codes: **0** an outcome was determined, **1**
-refused or a check failed, **2** usage. The verbs that decide something
-print exactly one word on stdout.
+The whole path, so you can see the end from the start:
 
-| Verb | What it does | Words |
-| --- | --- | --- |
-| `prepare --issue N` | eligibility gate, claim, branch, baseline plan | `ready` `in-flight` `ineligible` |
-| `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
-| `push --branch B` | the branch onto the remote, the moment a commit exists | — |
-| `validate --base S` | validate and plan each stack, collecting failures | — |
-| `park --issue N --label L` | a terminal state, said where the requester reads it | — |
-| `assemble --plan F --out F` | a PR body carrying the whole plan | — |
+1. [Check the repository qualifies](#1-check-the-repository-qualifies)
+2. [Ignore the handoff directory](#2-ignore-the-handoff-directory)
+3. [Create the GitHub App and store its two secrets](#3-create-the-github-app-and-store-its-two-secrets)
+4. [Store the Anthropic API key](#4-store-the-anthropic-api-key)
+5. [Store the planning environment](#5-store-the-planning-environment)
+6. [Create the four labels](#6-create-the-four-labels)
+7. [Write `.github/falconet.json`](#7-write-githubfalconetjson)
+8. [Add the caller workflow](#8-add-the-caller-workflow)
+9. [Run a canary issue](#9-run-a-canary-issue)
 
-Configuration is one optional JSON file at `.github/falconet.json`
-([schema](docs/adr/0003-the-cli-surface.md#the-config-file)); every key has a
-default and the defaults reproduce the pipeline this was extracted from.
+Each step ends with how to check it worked. Nothing is vendored: the caller
+workflow checks this repository out at the ref you name and runs it from
+there, so upgrading is changing a ref. Every `gh` command below runs from
+inside the repository you are installing into.
 
-## Usage
+### 1. Check the repository qualifies
 
-Installing falconet into a repository is one workflow file, one config file,
-four secrets and four labels. Nothing is vendored: the workflow checks this
-repository out at the ref you pin and runs it from there, so upgrading is
-changing a ref.
+- **OpenTofu, with each stack in its own subdirectory** — its own root
+  module, its own backend, its own providers. falconet runs `tofu -chdir=<stack>`
+  and never touches the repository root.
+- **Issues enabled.** `gh api repos/{owner}/{repo} --jq .has_issues` → `true`.
+- **Actions may run workflows from outside the repository.**
+  `gh api repos/{owner}/{repo}/actions/permissions --jq .allowed_actions`
+  must be `all`, or `selected` with `zetlen/falconet`, `actions/*`,
+  `opentofu/setup-opentofu` and `anthropics/claude-code-action` in the list.
+  A repository restricted to local actions stops before any of this runs.
+- **Linux x64 runners.** The action installs a pinned
+  `gitleaks_<version>_linux_x64` release and checks its digest, so macOS or
+  ARM fails the checksum. `jq` must be present; `ubuntu-latest` has it.
+- **A clean tree on a fresh checkout.** Two verbs read `git status`. If a
+  hook or generator leaves untracked files behind on checkout, gitignore them.
 
-It assumes stacks in subdirectories, state in a remote backend, and providers
-that want credentials. [Before the first real request](#before-the-first-real-request)
-collects what is worth knowing before pointing it at a live queue.
+If `gh api repos/{owner}/{repo}/actions/permissions/workflow` says
+`default_workflow_permissions` is `read` — the default for new repositories —
+that is fine: step 8's caller workflow grants what it needs explicitly.
 
-### What the repository has to already be
+### 2. Ignore the handoff directory
 
-An OpenTofu repository with issues enabled and its stacks in subdirectories,
-on a **Linux x64 runner** — the action installs a pinned
-`gitleaks_<version>_linux_x64` release and checks its digest, so macOS or ARM
-fails the checksum. `jq` must be on the runner; `ubuntu-latest` has it.
+The verbs pass files to each other through `.falconet/`, which must never be
+part of a change. Add it to `.gitignore` and commit:
 
-Its Actions policy also has to permit workflows and actions from outside the
-repository — falconet itself, plus `actions/checkout`,
-`actions/create-github-app-token`, `actions/upload-artifact`,
-`actions/download-artifact`, `opentofu/setup-opentofu` and
-`anthropics/claude-code-action`. A repository or organisation restricted to
-local actions blocks the call before any of this runs.
-
-### 1. Four secrets
-
-Two of them are things only a person can create, and
-[operating](docs/operating.md) says why each is the kind of credential it is.
-
-| Repository secret | What it is |
-| --- | --- |
-| `FALCONET_APP_ID` | A GitHub App registered purely as a credential — no webhook, nothing hosted. |
-| `FALCONET_APP_PRIVATE_KEY` | That App's private key, whole PEM including the header and footer lines. |
-| `ANTHROPIC_API_KEY` | An API key, not a subscription token, so falconet's spend stays a separate number. Set a budget alert on it. |
-| `FALCONET_PLAN_ENV` | Everything your stacks need in their environment to `init` and `plan`, as one JSON object. Optional, but a stack with a remote backend does not come up without it. |
-
-The App has to be **installed on the consuming repository**, with repository
-permissions **Contents: read and write**, **Issues: read and write**, and
-**Pull requests: read and write**. An App rather than a PAT or `GITHUB_TOKEN`
-because pull requests opened with `GITHUB_TOKEN` do not trigger workflows —
-CI would never run on the PRs falconet opens — and App-token pushes do.
-
-`FALCONET_PLAN_ENV` is a JSON object of environment variables — state backend
-keys, provider tokens, `TF_VAR_*` — and falconet masks every value and hands
-them to the two jobs that run tofu, and to no other. Whatever you would put in
-front of `tofu plan` on your own machine goes in here:
-
-```json
-{
-  "AWS_ACCESS_KEY_ID": "...",
-  "AWS_SECRET_ACCESS_KEY": "...",
-  "CLOUDFLARE_API_TOKEN": "..."
-}
+```sh
+printf '.falconet/\n' >> .gitignore
+git add .gitignore && git commit -m "Ignore falconet's handoff directory"
 ```
 
-One secret rather than an input per cloud, because a backend is an S3 key here
-and a service account there, and an interface naming them all would be
-guessing at your infrastructure. If your stacks plan with no credentials at
-all, leave it out.
+**Check:** `git check-ignore -v .falconet/` names the line.
 
-### 2. Four labels, created before the first run
+In CI the workflow excludes this path per clone whether or not you did this.
+The entry is for running the verbs by hand — where `commit` would otherwise
+refuse its own scratch files as paths outside the allowlist — and for the
+human who runs `git add -A`.
+
+### 3. Create the GitHub App and store its two secrets
+
+A GitHub App registered purely as a credential: no webhook, nothing hosted.
+On **github.com → Settings → Developer settings → GitHub Apps → New GitHub
+App** (under the organisation's settings if the repository belongs to one):
+
+| Field | Set it to |
+| --- | --- |
+| GitHub App name | Anything unique across GitHub. Comments and pull requests are authored as `<this name>[bot]`. |
+| Homepage URL | The repository's URL; it is required and unused. |
+| Webhook → Active | **Untick.** |
+| Repository permissions | **Contents: Read and write**, **Issues: Read and write**, **Pull requests: Read and write**. Nothing else. |
+| Where can this GitHub App be installed? | Only on this account. |
+
+After **Create GitHub App**, on the App's page:
+
+1. Note the **App ID** near the top.
+2. Under **Private keys**, **Generate a private key**. A `.pem` downloads.
+3. In the left sidebar, **Install App** → your account → **Only select
+   repositories** → this repository → **Install**.
+
+Then, from inside the repository:
+
+```sh
+gh secret set FALCONET_APP_ID --body '<the App ID>'
+gh secret set FALCONET_APP_PRIVATE_KEY < ~/Downloads/<app-name>.<date>.private-key.pem
+rm ~/Downloads/<app-name>.<date>.private-key.pem
+```
+
+The whole PEM, header and footer lines included.
+
+**Check:** `gh secret list` shows both, and the repository's **Settings →
+GitHub Apps** lists the App as installed. A run that fails at
+`actions/create-github-app-token` with *Could not find installation* has
+the App registered but not installed here.
+
+An App rather than a PAT or `GITHUB_TOKEN` because pull requests opened with
+`GITHUB_TOKEN` do not trigger workflows — your CI would never run on the PRs
+falconet opens — and App-token pushes do. [operating.md](docs/operating.md)
+says why each credential is the kind it is.
+
+### 4. Store the Anthropic API key
+
+```sh
+gh secret set ANTHROPIC_API_KEY
+```
+
+An **API key** from the Anthropic console, not a Claude Code subscription
+token: if you already run `anthropics/claude-code-action` with
+`claude_code_oauth_token`, that secret is a different thing and will not work
+here. A dedicated key keeps falconet's spend a separate number — set a budget
+alert on it. The agent pass is capped at 40 turns and 30 minutes.
+
+**Check:** `gh secret list` shows `ANTHROPIC_API_KEY`.
+
+### 5. Store the planning environment
+
+`FALCONET_PLAN_ENV` is one JSON object of environment variables — whatever you
+export before `tofu init && tofu plan` in the stacks you will name in
+`stacks.plan`. Backend keys, provider tokens, `TF_VAR_*`. falconet masks every
+value and hands them to the two jobs that run tofu, and to no other.
+
+```sh
+# From a shell where the values are already exported:
+jq -n '{
+  AWS_ACCESS_KEY_ID:     env.AWS_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY: env.AWS_SECRET_ACCESS_KEY,
+  CLOUDFLARE_API_TOKEN:  env.CLOUDFLARE_API_TOKEN
+}' | gh secret set FALCONET_PLAN_ENV
+```
+
+Or write the object to a file **outside** the repository, `jq -e 'type ==
+"object"' < that-file`, then `gh secret set FALCONET_PLAN_ENV < that-file`
+and delete it.
+
+What belongs in it:
+
+- **Only what the `stacks.plan` stacks need.** `validate_only` stacks are
+  initialised with `-backend=false` and never configure a provider, so they
+  need nothing.
+- **Read-only credentials.** The default plan command runs with
+  `-refresh=false -lock=false`, so a state credential that can read but not
+  write or lock is enough, and falconet never applies. The repository this
+  was extracted from planned with exactly such a pair.
+- **Placeholders, where the provider allows.** A provider that makes no API
+  calls during a refresh-less plan only has to be *configured*. The origin
+  planned its DNS stack with placeholder registrar credentials — real values
+  exist only in the job that applies, which is not this tool.
+- **Contents, not paths.** A variable that names a file on your machine has
+  nothing to point at on a runner. Use the provider's inline-contents
+  variable if it has one; otherwise leave that stack in `validate_only`.
+
+Multi-line values such as a PEM are fine; masking is per line. If every stack
+you plan needs no credentials at all, skip this step.
+
+**Check:** `gh secret list` shows `FALCONET_PLAN_ENV`. A stored secret cannot
+be read back, so the `jq -e` above is the check that it parses.
+
+### 6. Create the four labels
+
+```sh
+for l in infra-request needs-info ready-for-human needs-plan-review; do
+  gh label create "$l" 2>/dev/null || echo "$l already exists"
+done
+```
 
 | Label | Applied by | Config key |
 | --- | --- | --- |
@@ -121,11 +201,81 @@ all, leave it out.
 | `ready-for-human` | falconet, parking a run a person has to take over | `labels.human` |
 | `needs-plan-review` | falconet, on the pull request it opens | `labels.pr` |
 
-Create all four up front. `gh issue edit --add-label` fails on a label that
-does not exist, which turns a hand-over into a failed step at precisely the
-moment falconet is trying to tell somebody something.
+All four before the first run: `gh issue edit --add-label` fails on a label
+that does not exist, which turns a hand-over into a failed step at precisely
+the moment falconet is trying to tell somebody something.
 
-### 3. The caller workflow
+An issue form with `labels: ["infra-request"]` in its front matter means
+requesters never have to label anything. A checkbox whose text is `Not
+eligible for AI agents` (`issue.opt_out_text`) lets them keep a request away
+from the agent.
+
+**Check:** `gh label list --json name --jq '.[].name' | grep -cxE 'infra-request|needs-info|ready-for-human|needs-plan-review'` → `4`.
+
+### 7. Write `.github/falconet.json`
+
+Optional in principle — every key has a default — but the defaults name the
+stacks this was extracted from, so in practice every repository sets
+`stacks`. The file is merged **over** the defaults: naming one key changes
+one thing. Arrays replace wholesale rather than append, because an allowlist
+that grows by accident is not an allowlist. A malformed file is a hard
+failure with jq's parse error, never a silent fall back to defaults.
+
+```json
+{
+  "stacks": {
+    "plan": ["dns"],
+    "validate_only": ["workspace", "site"]
+  }
+}
+```
+
+The rule for sorting stacks: **`plan` is every stack a human will apply from
+the pull request; `validate_only` is every other directory with `.tf` in
+it.** A planned stack is initialised, planned, and its plan becomes the
+evidence in the PR. A validate-only stack is initialised with
+`-backend=false` and validated — a broken stack is still caught, and a
+reviewer is never shown a diff their approval cannot act on.
+
+Every key, with its default:
+
+| Key | Default | What it is |
+| --- | --- | --- |
+| `stacks.plan` | `["dns"]` | Stacks to init, plan, and put in the PR. Directories. |
+| `stacks.validate_only` | `["workspace", "site"]` | Stacks to validate without a backend. Directories. |
+| `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. |
+| `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Constructs refused anywhere in a changed `.tf`, in this order. |
+| `plan.command` | `tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false` | Run per planned stack. falconet runs `tofu init` first only when this starts with `tofu`; any other command owns its own initialisation. |
+| `issue.queue_label` | `infra-request` | The label that makes an issue eligible. |
+| `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
+| `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
+| `issue.branch_prefix` | `issue-` | Branches are `<prefix><number>-<slug>`. |
+| `issue.in_flight_prefixes` | `["issue-", "claude/issue-"]` | An open PR from a branch with any of these prefixes and this number means "already in flight". |
+| `labels.needs_info` / `labels.human` / `labels.pr` | `needs-info` / `ready-for-human` / `needs-plan-review` | Step 6's labels, if you named them differently. |
+| `prompts.implement` | `prompts/implement.md` | Path, relative to your repository root, of the agent's prompt. |
+| `prompts.park_needs_info` | `prompts/park-needs-info.md` | Likewise, for the question posted back to a requester. |
+| `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
+
+**The one default that does not transfer is the prompt.** The shipped
+[`prompts/implement.md`](prompts/implement.md) carries a "standing facts"
+block describing the repository this came from — its registrar sandbox, its
+scratch tenant. Copy the file into your repository, replace that block with
+what is true of yours, and point `prompts.implement` at the copy. `{handoff}`
+and `{workspace}` in it are substituted at run time.
+
+**Check:**
+
+```sh
+jq -e . .github/falconet.json > /dev/null && echo parses
+jq -r '.stacks[][]' .github/falconet.json | while read -r s; do
+  test -d "$s" && echo "ok       $s" || echo "MISSING  $s"
+done
+```
+
+A configured name that is not a directory fails the gate with a message
+naming the key, the file it came from, and what belongs there.
+
+### 8. Add the caller workflow
 
 One file, `.github/workflows/infra-requests.yml`, and this is the whole of it:
 
@@ -165,21 +315,6 @@ jobs:
       plan-env: ${{ secrets.FALCONET_PLAN_ENV }}
 ```
 
-Triggering on every issue event and deciding eligibility inside is
-deliberate. A job-level `if:` evaluates before checkout and can therefore
-never read `.github/falconet.json`, so gating there would fork eligibility
-into YAML-in-CI and nothing-locally. `prepare` decides instead, reading the
-same config a workstation reads, and an ineligible event costs runner-seconds
-and stops. It is eligible when the issue is **open**, carries the
-**queue label**, carries none of the blocking labels, has no ticked opt-out
-checkbox, and has no open pull request already on a branch for that issue.
-A comment from a bot, or on a pull request, is never a way in.
-
-The ref in `uses:` must be a literal — GitHub does not expand expressions
-there. The `falconet-ref` input is a different thing: it chooses which
-falconet the inner checkout steps fetch, and it defaults to `main`. Keep the
-two in step or you will debug a version you are not running.
-
 | Input | Required | Default | What it is |
 | --- | --- | --- | --- |
 | `issue` | yes | — | The issue number to work. |
@@ -187,109 +322,141 @@ two in step or you will debug a version you are not running.
 | `falconet-ref` | no | `main` | Which falconet the jobs check out. |
 | `runs-on` | no | `ubuntu-latest` | Must stay Linux x64. |
 
-### 4. The config file, when the defaults do not fit
+Three things about this file that are not obvious:
 
-Optional, at `.github/falconet.json`, merged **over** the defaults — so a file
-naming one key changes one thing. Arrays are replaced wholesale rather than
-appended to, because an allowlist that grows by accident is not an allowlist.
-A malformed file is a hard failure with jq's parse error, never a silent fall
-back to defaults.
+- **It triggers on every issue event and decides eligibility inside.** A
+  job-level `if:` evaluates before checkout and can never read
+  `.github/falconet.json`, so gating there would fork eligibility into
+  YAML-in-CI and nothing-locally. `prepare` decides instead, reading the same
+  config a workstation reads, and an ineligible event costs runner-seconds
+  and stops. Eligible means: the issue is **open**, carries the **queue
+  label**, carries none of the blocking labels, has no ticked opt-out box,
+  and has no open pull request already on a branch for that number. A
+  comment from a bot, or on a pull request, is never a way in. A comment
+  from a person on an issue parked `needs-info` is the way back in.
+- **The ref in `uses:` must be a literal** — GitHub does not expand
+  expressions there. `falconet-ref` is a different thing: it chooses which
+  falconet the inner checkout steps fetch. Keep the two in step or you will
+  debug a version you are not running.
+- **It coexists with a stock `claude.yml`.** If you already run
+  `anthropics/claude-code-action` on issue events, that one starts on an
+  `@claude` mention and this one on the queue label. Don't write `@claude` in
+  an infra request unless you want both.
 
-`stacks` is the one key almost every repository sets, because the defaults
-name the stacks this was extracted from. Shown here with the other two worth
-knowing about:
+**Check:** after pushing, `gh workflow list` shows `infra requests`.
 
-```json
-{
-  "stacks": {
-    "plan": ["dns"],
-    "validate_only": ["workspace", "site"]
-  },
-  "paths": { "allow": ["*.tf"] },
-  "issue": { "queue_label": "infra-request" }
-}
+### 9. Run a canary issue
+
+Pick the smallest change your planned stack can carry — one DNS record, one
+tag — and file it the way a requester would, via the form or:
+
+```sh
+gh issue create --label infra-request \
+  --title "Canary: add a TXT record for falconet" \
+  --body "Please add a TXT record named falconet-canary on example.com with the value \"hello\"."
 ```
 
-`stacks.plan` are initialised, planned, and their plans become the evidence in
-the pull request. `stacks.validate_only` are initialised with `-backend=false`
-and validated, never planned, so they need no credentials. A name that is not
-a directory fails with a message naming the key, the file it came from, and
-what belongs there. falconet runs `tofu init` for the stacks it plans; if
-`plan.command` is something other than tofu, that command owns
-initialisation. `paths.allow` is the allowlist the implementing agent's change is
-checked against — shell globs, in which `*` crosses `/`, so `*.tf` matches
-`dns/records.tf`. Anything outside it is refused and the run commits nothing.
-Every key, including the content denylist and the plan command, is in
-[the schema](docs/adr/0003-the-cli-surface.md#the-config-file).
+Then watch. `gh run watch` follows it, or the Actions tab:
 
-### 5. What a first run looks like
+| When | What you should see |
+| --- | --- |
+| within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the claim and branch exist, the baseline plan ran. |
+| next | **implement**: one agent pass, then every guard, then the commit. The agent's only output that outlives the run is its commit message. |
+| next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then validate, plan, and the pull request. |
+| within ~15 minutes | One of exactly three endings on the issue, below. |
+| always | **contain** runs whatever happened above, and if the issue is still open with neither a parked label nor an open PR, it parks it `ready-for-human` with a link to the run. |
 
-File an issue in ordinary words, label it `infra-request`, and watch four
-jobs: **gate** (eligibility, claim, branch, baseline plan), **implement** (one
-agent pass, then every guard, then the commit), **publish** (push first, then
-validate, then the pull request), **contain** (a terminal state, whatever
-happened above). The requester gets an acknowledgment within a minute of the
-gate, and one of exactly three endings: a pull request labelled for review, a
-question, or a hand-off to a person.
+The three endings:
 
-### Before the first real request
+| Ending | What it looks like | What to do |
+| --- | --- | --- |
+| **A pull request**, labelled `needs-plan-review` | Title is the agent's commit subject. Body is its explanation, then the **entire** plan. | Read the plan. It should show the canary's resources and nothing else — anything else was already in the baseline plan, which is drift, not the agent. Then **close the PR without merging** unless you mean to apply it; in a repository that deploys on merge, the merge *is* the apply. Delete the branch, close the issue. |
+| **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. That comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. |
+| **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, or validation failing, and the text names which. |
 
-**Static credentials only — OIDC is not wired.** `plan-env` is values in a
-secret. No job declares `id-token: write`, and a caller can only narrow a
-called workflow's permissions rather than add one, so a repository that
-authenticates its backend by federated identity cannot do that here yet. If
-you have no static key to give it, `"stacks": {"plan": []}` runs
-validate-only and puts an empty plan block in the pull request — enough to
-exercise the wiring, and not a place to stay, since the plan is what a
-reviewer approves.
+The ending that is *not* on that list — a red run and an issue with only the
+acknowledgment, or nothing at all — is a failed gate, and it is silent. See
+[Troubleshooting](#troubleshooting).
 
-**The credentials are in the environment of the jobs that plan.** That is
-what makes them work, and it means anything those jobs print can in principle
-carry one. Every value is masked line by line, `tofu` is run with
-`-input=false`, and the secret scan stands between the agent's drafts and the
-issue — but the validation-failure text that gets posted when a plan fails is
-OpenTofu's own output. Give falconet a credential scoped to what it plans,
-not your admin key.
+Once a canary has reached a pull request, **pin the ref**. `main` moves, and
+development is integration here. Put the SHA you ran in both places:
 
-**A failed gate is silent to the requester.** If `prepare` hard-fails — a
-dirty tree, a baseline plan that will not run — the run goes red, and
-`contain` does not fire, because it is conditioned on the gate having said
-`ready`. The acknowledgment comment is posted before the baseline plan, so
-the requester has been thanked and then hears nothing. Watch the first run.
+```yaml
+    uses: zetlen/falconet/.github/workflows/falconet.yml@<sha>
+    with:
+      falconet-ref: <sha>
+```
 
-**`@main` moves.** Development is integration here and `main` is what
-consumers pin, so a change lands in your repository the next time an issue is
-filed. Cut and pin a tag once a run has succeeded and you want it to stay
-that way.
+### Troubleshooting
 
-**Never put issue text in `args`.** If you call `action.yml` directly, its
-`args` input is split on whitespace and reaches a shell. Issue titles, bodies
-and comments are attacker-controlled, and the reason all six verbs take files
-rather than strings is so that text never travels that way.
+| What you see | Why | Do |
+| --- | --- | --- |
+| **gate** is red and the issue has no comment | `prepare` hard-failed before the acknowledgment — the one failure the requester never hears about, because `contain` is conditioned on the gate having said `ready`. | Open the run; the last lines of **Prepare** name the cause. The usual ones are the next three rows. |
+| `config .stacks.plan names "x", which is not a directory` (or `.stacks.validate_only`) | A name in step 7 is not a directory. | Step 7's check. |
+| `prepare: tofu init failed in dns/ — the stack cannot be planned`, then OpenTofu's own text: *no valid credential sources*, *error configuring S3 Backend* | `FALCONET_PLAN_ENV` is missing, or missing the key the backend needs. | Step 5. |
+| `working tree is dirty before the agent ran`, listing paths | Something in your repository creates untracked files on checkout. | Gitignore them. (An older falconet died here on `.falconet-tool/` itself; pin a ref at or after this README.) |
+| `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | Step 3. |
+| `Resource not accessible by integration` | The caller's `permissions:` block is missing, or the App lacks one of its three permissions. | Steps 3 and 8. |
+| `sha256sum: WARNING: 1 computed checksum did NOT match` | The runner is not Linux x64. | `runs-on: ubuntu-latest`. |
+| Parked `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
+| Parked `ready-for-human`: *did not validate*, followed by OpenTofu output | Validation or the plan failed on the agent's change. The fenced output is tofu's own. | Read it. A credential error is step 5; anything else is the change. |
+| `could not add label` / `label not found` in a park step | One of step 6's labels is missing. | Step 6. |
+| Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 8. |
+| The PR's explanation talks about a sandbox or a tenant you do not have | The shipped prompt's standing facts are the origin's. | Step 7, `prompts.implement`. |
 
-### Or by hand
+### Known limits
 
-The same verbs, against the repository you are standing in — no workflow, no
-credentials beyond a `gh` login:
+- **Static credentials only.** `plan-env` is values in a secret. No job
+  declares `id-token: write`, and a caller can only narrow a called
+  workflow's permissions, so a backend that authenticates by federated
+  identity cannot be planned here yet. Without a static key, `"stacks":
+  {"plan": []}` runs validate-only and puts an empty plan block in the PR —
+  enough to exercise the wiring, not a place to stay.
+- **The credentials are in the environment of the jobs that plan.** Every
+  value is masked line by line, `tofu` runs with `-input=false`, and the
+  secret scan stands between the agent's drafts and the issue — but the
+  validation-failure text posted when a plan fails is OpenTofu's own output.
+  Give falconet a credential scoped to what it plans, not your admin key.
+- **A failed gate is silent to the requester.** See the first troubleshooting
+  row. Watch the first run.
+- **`@main` moves.** Pin a SHA once a run has succeeded.
+- **Never put issue text in `args`.** If you call `action.yml` directly, its
+  `args` input is split on whitespace and reaches a shell. Issue titles,
+  bodies and comments are attacker-controlled, and the reason all six verbs
+  take files rather than strings is so that text never travels that way.
+
+## How it is built
+
+Six verbs, one per stage. They never call each other; they pass files
+through the handoff directory, so the same sequence runs in CI and on a
+workstation. Uniform exit codes: **0** an outcome was determined, **1**
+refused or a check failed, **2** usage. The verbs that decide something
+print exactly one word on stdout.
+
+| Verb | What it does | Words |
+| --- | --- | --- |
+| `prepare --issue N` | eligibility gate, claim, branch, baseline plan | `ready` `in-flight` `ineligible` |
+| `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
+| `push --branch B` | the branch onto the remote, the moment a commit exists | — |
+| `validate --base S` | validate and plan each stack, collecting failures | — |
+| `park --issue N --label L` | a terminal state, said where the requester reads it | — |
+| `assemble --plan F --out F` | a PR body carrying the whole plan | — |
+
+The reusable workflow runs them as four jobs — **gate**, **implement**,
+**publish**, **contain** — and the boundaries between the jobs are the
+security model: the agent's job has `permissions: {}` and no secret but the
+model key; the scripted jobs hold the token and do the mechanics.
+[`.github/workflows/falconet.yml`](.github/workflows/falconet.yml) documents
+the trade it makes and why.
+
+The same verbs run by hand, against the repository you are standing in — no
+workflow, no credentials beyond a `gh` login:
 
 ```sh
 falconet validate --base "$(git rev-parse main)"
 ```
 
-## Why it exists
-
-It was built inside an OpenTofu repository ([the provenance is
-here](docs/provenance/)) and worked well enough that the surrounding repo
-became mostly pipeline: ~4,700 lines of workflow and shell against ~1,000
-lines of actual infrastructure. Two attempts to escape that — adopting an
-off-the-shelf agentic workflow, or trimming in place — both concluded the same
-way: the workflow is a good tool wearing a repository as a costume.
-
-So it becomes a tool. [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md)
-is the founding record, including the measurements that killed the
-off-the-shelf option.
-
-## Design commitments
+### Design commitments
 
 - **Deterministic mechanics, agent judgment.** The agent decides *what* the
   change is. Shell does the branching, committing, pushing, planning and PR
@@ -304,15 +471,28 @@ off-the-shelf option.
 - **Opinionated on purpose.** GitHub and Claude Code are assumed. OpenTofu is
   the shape. Being agnostic across forges is an explicit non-goal.
 
+## Why it exists
+
+It was built inside an OpenTofu repository ([the provenance is
+here](docs/provenance/)) and worked well enough that the surrounding repo
+became mostly pipeline: ~4,700 lines of workflow and shell against ~1,000
+lines of actual infrastructure. Two attempts to escape that — adopting an
+off-the-shelf agentic workflow, or trimming in place — both concluded the same
+way: the workflow is a good tool wearing a repository as a costume.
+
+So it becomes a tool. [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md)
+is the founding record, including the measurements that killed the
+off-the-shelf option.
+
 ## Where this stands
 
 | Piece | State |
 | --- | --- |
 | `bin/`, `lib/`, `libexec/falconet/` — the CLI | six verbs, working |
-| `tests/` — 12 files, 456 assertions | passing (`bash tests/run.sh`) |
-| `action.yml` + `.github/workflows/falconet.yml` | written, invariants tested, never run |
+| `tests/` — 12 files, 459 assertions | passing (`bash tests/run.sh`) |
+| `action.yml` + `.github/workflows/falconet.yml` | written, wiring invariants tested, never run |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
-| `prompts/` | extracted from the provenance |
+| `prompts/` | extracted from the provenance; the standing-facts block is the origin's |
 | `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language |
 | `docs/provenance/` — the retired orchestrator | reference only |
 | A live run | **not yet** — the next thing that has to happen |
@@ -320,9 +500,12 @@ off-the-shelf option.
 
 The port from stage-shaped scripts to a coherent CLI is done; [the plan it
 followed](docs/adr/pre-execution-plan.md) records what changed and what was
-found on the way. What has not happened is a real run: development *is*
-integration here, so the next step is a consuming repository and a canary
-issue of known shape.
+found on the way. Preparing a consumer has since found three wiring bugs that
+no unit test of a single verb could see — binaries not installed in the job
+that needed them, stacks not initialised before the baseline plan, and the
+tool's own checkout dirtying the tree it was about to inspect — each now
+pinned by [`tests/contract.test.sh`](tests/contract.test.sh). What has not
+happened is a real run: development *is* integration here.
 
 Two further documents: [operating](docs/operating.md) covers the credentials
 only the operator can create and where the pieces live; [AGENTS.md](AGENTS.md)

@@ -124,6 +124,21 @@ jobs:
           ref: ${{ inputs.falconet-ref }}
           path: .falconet-tool
 
+      # The tool is checked out INSIDE the repository it works on -- a
+      # composite action can only run from under the workspace -- and the
+      # handoff directory is written there too. Both are untracked paths in
+      # the consumer's tree, and two verbs read `git status`: prepare refuses
+      # a dirty tree, commit refuses any changed path outside the allowlist.
+      # Without this step every run died right here, on `?? .falconet-tool/`,
+      # before the acknowledgment, so the requester heard nothing at all.
+      #
+      # Per clone and never committed. A consumer still gitignores the
+      # handoff directory for runs by hand; a run in CI must not depend on it.
+      - name: Keep the tool and the handoff out of the working tree
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
+
       # Eligibility is decided here and not in a job-level `if:`, because an
       # `if:` evaluates before checkout and can therefore never read the
       # config file. Gating there would fork eligibility into YAML-in-CI and
@@ -225,6 +240,14 @@ jobs:
           path: .falconet-tool
           persist-credentials: false
 
+      # As in gate: commit reads `git status --untracked-files=all`, and the
+      # tool and the handoff it is about to download are the two untracked
+      # paths that are not the agent's.
+      - name: Keep the tool and the handoff out of the working tree
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
+
       - uses: actions/download-artifact@v4
         with:
           name: handoff-gate
@@ -322,6 +345,13 @@ jobs:
           repository: zetlen/falconet
           ref: ${{ inputs.falconet-ref }}
           path: .falconet-tool
+
+      # As in gate. No verb here reads `git status` today; kept uniform so
+      # that the next one that does is not the next incident.
+      - name: Keep the tool and the handoff out of the working tree
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' .falconet-tool/ .falconet/ incoming/ >> .git/info/exclude
 
       - uses: actions/download-artifact@v4
         with:

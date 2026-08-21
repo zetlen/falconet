@@ -105,3 +105,14 @@ one answer served both — and a verb that keeps that assumption operates on
 falconet instead of on the consumer's repository, silently, reporting an
 outcome about the wrong tree. `lib/repo.sh` is the whole of the fix. Never
 derive the working tree from `$BASH_SOURCE`.
+
+## The tool lives inside the tree it works on
+
+In CI the workflow checks falconet out at `.falconet-tool/` *inside* the
+consumer's checkout — a composite action can only run from under the
+workspace — and the handoff directory is written there too. Both are
+untracked, and two verbs read `git status`: `prepare` refuses a dirty tree,
+`commit` refuses any changed path outside the allowlist. Every job that runs
+either of them excludes both paths in `.git/info/exclude` first, and
+`contract.test.sh` fails if a step reorders that. A verb that starts reading
+the working tree joins that invariant; the invariant does not bend to it.
