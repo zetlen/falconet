@@ -397,8 +397,27 @@ PLAN_COMMAND="$(config_get '.plan.command')"
 : >"$HANDOFF/plan-baseline.txt"
 multi=0
 [[ "$(config_get_array '.stacks.plan' | wc -l)" -gt 1 ]] && multi=1
+
+# A runner is a fresh checkout with no .terraform/ in it, and `tofu plan`
+# there is "missing required providers", so the stack is initialised first --
+# the same init validate runs, for the same reason.
+#
+# Only when tofu is what runs the plan. A consumer who replaced plan.command
+# with a script of their own initialises in it, which is usually why they
+# replaced it.
+init_first=0
+[[ "${PLAN_COMMAND%% *}" == "tofu" ]] && init_first=1
+
 while IFS= read -r s; do
   [[ -n "$s" ]] || continue
+  [[ -d "$REPO_ROOT/$s" ]] || die "prepare: $(config_stack_missing plan "$s")"
+  if [[ "$init_first" -eq 1 ]]; then
+    if ! "$TOFU" -chdir="$REPO_ROOT/$s" init -input=false >"$TMP/init.txt" 2>&1; then
+      say "prepare: tofu init failed in $s/ — the stack cannot be planned:"
+      cat "$TMP/init.txt" >&2
+      exit 1
+    fi
+  fi
   cmd_str="${PLAN_COMMAND//\{stack\}/$REPO_ROOT/$s}"
   # shellcheck disable=SC2206
   cmd=($cmd_str)

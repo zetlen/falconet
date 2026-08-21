@@ -121,6 +121,22 @@ config_get() { # jq-path
   printf '%s' "$FALCONET_CONFIG_DOC" | jq -r "$1"
 }
 
+# The message for a configured stack that is not a directory.
+#
+# The defaults above name three stacks, so a repository with different ones
+# meets this before it meets anything else. OpenTofu's own message for a
+# directory it cannot enter names neither the config file nor the key that
+# put the value there; this one says the key, the file that was read, and
+# what belongs in it.
+#
+# Returned rather than printed: prepare dies with it and validate puts it in
+# the report a requester reads, which are different streams.
+config_stack_missing() { # stacks-key stack
+  printf 'config .stacks.%s names "%s", which is not a directory in %s. Set .stacks.%s in %s to the directories your OpenTofu stacks live in.' \
+    "$1" "$2" "${REPO_ROOT:-this repository}" "$1" \
+    "${FALCONET_CONFIG_FILE:-.github/falconet.json}"
+}
+
 # An array, one element per line, IN ORDER. Order is load-bearing for
 # paths.deny_content: `templatefile(` is tested before `file(`, and reversing
 # them reports a templatefile() call as file() — the right refusal naming the

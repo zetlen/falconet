@@ -296,6 +296,22 @@ for s in ${PLAN_STACKS[@]+"${PLAN_STACKS[@]}"} ${CHECK_STACKS[@]+"${CHECK_STACKS
   for _p in ${PLAN_STACKS[@]+"${PLAN_STACKS[@]}"}; do
     [[ "$_p" == "$s" ]] && planned=1
   done
+  # A configured stack that is not there is a configuration error rather than
+  # a validation failure. Reported rather than fatal, so the other stacks are
+  # still checked and the report says which key named a directory that is not
+  # in the repository.
+  if [[ ! -d "$REPO_ROOT/$s" ]]; then
+    status=1
+    key=validate_only
+    [[ "$planned" -eq 1 ]] && { plan_stack_failed=1; key=plan; }
+    { echo "## the configured stack $s/ is not in this repository"
+      echo
+      config_stack_missing "$key" "$s"; echo
+      echo
+    } >>"$FAILURES"
+    continue
+  fi
+
   if [[ "$planned" -eq 1 ]]; then
     init_cmd=("$TOFU" -chdir="$REPO_ROOT/$s" init -input=false)
   else

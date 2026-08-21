@@ -79,6 +79,15 @@ on:
           Deliberately an API key, not a subscription token, so falconet's
           spend stays a separate number.
         required: true
+      plan-env:
+        description: >-
+          A JSON object of environment variables the stacks need in order to
+          init and plan — state backend keys, provider tokens, TF_VAR_*. For
+          example: {"AWS_ACCESS_KEY_ID": "...", "AWS_SECRET_ACCESS_KEY": "...",
+          "CLOUDFLARE_API_TOKEN": "..."}. One secret rather than a named input
+          per cloud, because a backend is an S3 key here and a service account
+          there. Omit it if the stacks plan without credentials.
+        required: false
 
 permissions: {}
 
@@ -120,6 +129,43 @@ jobs:
       # config file. Gating there would fork eligibility into YAML-in-CI and
       # nothing-locally, for a project whose whole rule is one code path. The
       # cost is runner-seconds on ineligible events.
+      # One secret, masked and turned into ordinary environment variables, so
+      # that tofu sees what it would see on a workstation and no verb has to
+      # know the name of a cloud.
+      #
+      # Loaded in the two jobs that run tofu and NOWHERE ELSE. The agent job
+      # has permissions: {} and no token; a cloud credential in its
+      # environment would undo that, because the boundary is that judgment
+      # runs where publishing cannot. It sits as late in the job as it can,
+      # so the steps that do not need it do not have it.
+      - name: Credentials for the stacks that plan
+        env:
+          FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FALCONET_PLAN_ENV:-}" ]; then
+            echo "no plan-env secret: the stacks must init and plan without one"
+            exit 0
+          fi
+          printf '%s' "$FALCONET_PLAN_ENV" | jq -e 'type == "object"' >/dev/null 2>&1 \
+            || { echo "plan-env must be a JSON object of NAME: value" >&2; exit 1; }
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+              || { echo "plan-env: '$name' is not an environment variable name" >&2; exit 1; }
+            value="$(printf '%s' "$FALCONET_PLAN_ENV" | jq -r --arg k "$name" '.[$k]')"
+            case "$value" in
+              *FALCONET_PLAN_ENV_EOF*)
+                echo "plan-env: the value of $name contains the delimiter" >&2; exit 1 ;;
+            esac
+            # add-mask is per line, and a PEM is many lines.
+            while IFS= read -r line; do
+              [ -n "$line" ] && echo "::add-mask::$line"
+            done <<<"$value"
+            printf '%s<<FALCONET_PLAN_ENV_EOF\n%s\nFALCONET_PLAN_ENV_EOF\n' \
+              "$name" "$value" >>"$GITHUB_ENV"
+            echo "plan-env: set $name"
+          done < <(printf '%s' "$FALCONET_PLAN_ENV" | jq -r 'keys_unsorted[]')
+
       - name: Prepare
         id: prepare
         uses: ./.falconet-tool
@@ -217,12 +263,10 @@ jobs:
       # per-file formatting, and a vetted-path-only `git add`. A refusal beats
       # a question: a denied run commits nothing, so there is no committed
       # work for needs-info's ordering to protect.
-      #
-      # setup runs here, and must: this is the FIRST falconet step in this
-      # job, and a job is a fresh runner. `setup: false` would leave commit
-      # without `tofu fmt` and without gitleaks — and the secret scan fails
-      # closed, so a missing scanner is a failed run rather than a skipped
-      # check. Correct behaviour, but the wrong reason to fail.
+      # `setup: false` claims an earlier step in THIS job installed the
+      # binaries, and a job is a fresh runner. commit needs `tofu fmt` and
+      # gitleaks, and the secret scan fails closed on a missing scanner, so
+      # this is the step that installs them.
       - name: Commit
         id: commit
         uses: ./.falconet-tool
@@ -309,6 +353,37 @@ jobs:
           verb: push
           setup: 'false'
           args: --branch ${{ needs.gate.outputs.branch }} --base-sha ${{ needs.gate.outputs.base_sha }}
+
+      # As in gate, and after the push for the same reason it is late there:
+      # the branch is already on the remote before this job holds a cloud
+      # credential at all.
+      - name: Credentials for the stacks that plan
+        env:
+          FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FALCONET_PLAN_ENV:-}" ]; then
+            echo "no plan-env secret: the stacks must init and plan without one"
+            exit 0
+          fi
+          printf '%s' "$FALCONET_PLAN_ENV" | jq -e 'type == "object"' >/dev/null 2>&1 \
+            || { echo "plan-env must be a JSON object of NAME: value" >&2; exit 1; }
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+              || { echo "plan-env: '$name' is not an environment variable name" >&2; exit 1; }
+            value="$(printf '%s' "$FALCONET_PLAN_ENV" | jq -r --arg k "$name" '.[$k]')"
+            case "$value" in
+              *FALCONET_PLAN_ENV_EOF*)
+                echo "plan-env: the value of $name contains the delimiter" >&2; exit 1 ;;
+            esac
+            # add-mask is per line, and a PEM is many lines.
+            while IFS= read -r line; do
+              [ -n "$line" ] && echo "::add-mask::$line"
+            done <<<"$value"
+            printf '%s<<FALCONET_PLAN_ENV_EOF\n%s\nFALCONET_PLAN_ENV_EOF\n' \
+              "$name" "$value" >>"$GITHUB_ENV"
+            echo "plan-env: set $name"
+          done < <(printf '%s' "$FALCONET_PLAN_ENV" | jq -r 'keys_unsorted[]')
 
       - name: Validate
         id: validate

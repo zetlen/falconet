@@ -4,9 +4,9 @@ What the operator does, what only the operator can do, and where the pieces
 live. This is not a contributor guide — see [Support](../README.md#support)
 for why there isn't one.
 
-## Two things an agent cannot do for you
+## Three things an agent cannot do for you
 
-Both are credentials. Ask for them when they're needed; do not attempt to
+All three are credentials. Ask for them when they're needed; do not attempt to
 create GitHub resources, register apps, or mint keys on the operator's behalf.
 
 **A GitHub App, registered purely as a credential.** No webhook, nothing
@@ -23,6 +23,14 @@ PAT — **that idea is deleted, not ported.**
 key rather than a subscription OAuth token, so falconet's spend stays a
 separate number instead of disappearing into the operator's subscription.
 `max-turns` and a 30-minute timeout are the run guardrails.
+
+**The environment the stacks plan in, as `plan-env`.** A JSON object of the
+variables `tofu init` and `tofu plan` need — backend keys, provider tokens,
+`TF_VAR_*` — stored as one repository secret in the consuming repository. The
+workflow masks each value and loads it into the two jobs that run tofu, and
+into neither of the other two: the agent's job holds no credential of any
+kind. Scope it to what falconet plans; it never applies, so it needs nothing
+that could.
 
 ## Where things are
 

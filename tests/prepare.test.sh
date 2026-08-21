@@ -39,10 +39,25 @@ STUB
   chmod +x "$1"
 }
 
+# init and plan answer separately: this stage runs both, and a stub that
+# failed them together would let "the baseline plan failed" pass on a run
+# where the plan never happened.
 make_tofu() { # path
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$TOFU_CALLS"\n' >"$1"
-  printf 'printf "No changes. Your infrastructure matches the configuration.\\n"\n' >>"$1"
-  printf 'exit "${TOFU_RC:-0}"\n' >>"$1"
+  cat >"$1" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TOFU_CALLS"
+for a in "$@"; do
+  [[ "$a" == "init" ]] || continue
+  if [[ "${TOFU_INIT_RC:-0}" -ne 0 ]]; then
+    echo "Error: Failed to get existing workspaces: InvalidAccessKeyId" >&2
+    exit "$TOFU_INIT_RC"
+  fi
+  echo "OpenTofu has been successfully initialized!"
+  exit 0
+done
+printf 'No changes. Your infrastructure matches the configuration.\n'
+exit "${TOFU_RC:-0}"
+STUB
   chmod +x "$1"
 }
 
@@ -84,13 +99,15 @@ p() { # checkout [args...] -> sets OUT ERR RC
        GH_VIEW_RC="${VIEW_RC:-0}" GH_EDIT_RC="${EDIT_RC:-0}" \
        GH_REMOVE_RC="${REMOVE_RC:-0}" GH_COMMENT_RC="${COMMENT_RC:-0}" \
        TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
+       TOFU_INIT_RC="${T_INIT_RC:-0}" \
        GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
        "$REPO_ROOT/libexec/falconet/prepare.sh" --issue 42 "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
   return 0
 }
-reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; T_RC=""; GH_ENV=""; RUN_ID=""; }
+reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; T_RC=""; T_INIT_RC=""
+          GH_ENV=""; RUN_ID=""; }
 reset
 
 ghlog() { cat "$1/gh.log" 2>/dev/null; }
@@ -459,6 +476,59 @@ it "a baseline plan that fails is fatal, because no agent time will fix main"
 assert_eq 1 "$RC" "exit code"
 it "and prints no outcome word"
 assert_eq "" "$OUT" "stdout"
+
+# --- the stacks it plans, it initialises first -------------------------------
+#
+# A runner is a fresh checkout with no .terraform/ in it, and `tofu plan`
+# there is "missing required providers".
+
+c="$(new_checkout initfirst)"; issue_json "$c/issue.json" "infra-request" "x"
+p "$c"
+it "the stack is initialised before it is planned"
+assert_contains "$(head -1 "$c/tofu-calls.txt")" "init -input=false" "first tofu call"
+
+it "and the plan still happens after it"
+assert_contains "$(cat "$c/tofu-calls.txt")" "plan -no-color" "tofu calls"
+
+c="$(new_checkout initfails)"; issue_json "$c/issue.json" "infra-request" "x"
+T_INIT_RC=1 p "$c"; reset
+it "an init that fails is fatal and says so as itself"
+assert_eq 1 "$RC" "exit code"
+it "and names the stack rather than leaving tofu's error unattributed"
+assert_contains "$ERR" "tofu init failed in dns/" "stderr"
+it "and passes tofu's own reason through, because that is the actionable half"
+assert_contains "$ERR" "InvalidAccessKeyId" "stderr"
+
+# Initialisation belongs to whoever drives the plan: a plan command that is
+# not tofu brings the stack up its own way.
+c="$(new_checkout initcustom)"; issue_json "$c/issue.json" "infra-request" "x"
+printf '{"plan":{"command":"./plan.sh {stack}"}}\n' >"$c/repo/.github/falconet.json"
+printf '#!/usr/bin/env bash\necho "custom plan for $1"\n' >"$c/repo/plan.sh"
+chmod +x "$c/repo/plan.sh"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm cfg
+git -C "$c/repo" push -q origin main
+p "$c"
+it "a plan command that is not tofu initialises itself"
+assert_eq "ready" "$OUT" "outcome"
+it "and falconet runs no tofu at all"
+assert_eq "" "$(cat "$c/tofu-calls.txt" 2>/dev/null)" "tofu calls"
+it "and the baseline is whatever that command printed"
+assert_contains "$(hand "$c" plan-baseline.txt)" "custom plan for" "plan-baseline.txt"
+
+# The defaults name three stacks, so a repository with different ones meets
+# this first.
+c="$(new_checkout nostack)"; issue_json "$c/issue.json" "infra-request" "x"
+printf '{"stacks":{"plan":["nowhere"],"validate_only":[]}}\n' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm cfg
+git -C "$c/repo" push -q origin main
+p "$c"
+it "a stack that is not a directory is fatal"
+assert_eq 1 "$RC" "exit code"
+it "and the message names the config key rather than leaving tofu to explain"
+assert_contains "$ERR" 'config .stacks.plan names "nowhere"' "stderr"
+it "and names the file to edit"
+assert_contains "$ERR" ".github/falconet.json" "stderr"
 
 c="$(new_checkout viewfails)"; issue_json "$c/issue.json" "infra-request" "x"
 VIEW_RC=1 p "$c"; reset

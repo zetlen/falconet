@@ -135,14 +135,13 @@ tar_line="$(grep -n 'tar -xzf' "$ACTION" | cut -d: -f1)"
   || assert_eq "sha before tar" "sha=$sha_line tar=$tar_line" "order"
 
 # `setup: false` says "an earlier step in THIS job already installed them",
-# and a job is a fresh runner: the claim is about the job, never about the
-# workflow. It was false once — the agent job's commit step carried it with
-# nothing before it, so commit would have run with no `tofu fmt` and no
-# gitleaks, and the secret scan fails closed. The run would have failed for
-# the right reason and the wrong cause, on every issue, forever.
+# and a job is a fresh runner, so the claim is about the job and never about
+# the workflow. A step that needs the binaries and is the first falconet step
+# in its job has nothing behind that claim, and the secret scan fails closed,
+# so the run dies on a missing scanner rather than on anything real.
 #
-# The rule is dependency-shaped rather than positional: push, park and
-# assemble need none of the pinned binaries and are free to skip the install.
+# Dependency-shaped rather than positional: push, park and assemble need none
+# of the pinned binaries and are free to skip the install.
 it "no verb that needs the pinned binaries runs before an install in its job"
 unmet="$(awk '
   function flush(   verb, installs) {
@@ -161,6 +160,30 @@ unmet="$(awk '
   END { flush() }
 ' "$WF")"
 assert_eq "" "$unmet" "steps needing an install that never got one"
+
+# --- the planning credentials ----------------------------------------------
+#
+# One secret, loaded in the two jobs that run tofu and in neither of the
+# others. Where it is loaded is the invariant; what is in it is the
+# consumer's business.
+
+it "the jobs that run tofu load the planning credentials"
+assert_eq 2 "$(grep -c 'name: Credentials for the stacks that plan' "$WF")" \
+  "credential-loading steps"
+
+it "and the agent's job is not one of them, which is the whole boundary"
+assert_not_contains "$implement_job" "plan-env" "implement job"
+
+it "the secret is optional, because a repository may need none"
+plan_env_decl="$(awk '/^      plan-env:/{f=1} f && /required:/{print; exit}' "$WF")"
+assert_contains "$plan_env_decl" "required: false" "plan-env declaration"
+
+it "the value travels by environment, never by template expression"
+assert_eq 2 "$(grep -c 'FALCONET_PLAN_ENV: ${{ secrets.plan-env }}' "$WF")" \
+  "env-passed references"
+
+it "and every line of it is masked before it can reach a log"
+assert_contains "$wf" "::add-mask::" "workflow"
 
 # --- attacker-controlled text never reaches a shell ------------------------
 

@@ -345,6 +345,28 @@ assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/infra init -input=false" "t
 it "and the defaults stop being consulted"
 assert_not_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns" "tofu calls"
 
+# A stack named in config that is not in the repository is a configuration
+# error, and this report goes to the requester — who asked for a DNS record
+# and cannot act on tofu's failure to change directory.
+c="$(new_checkout nostack)"; b="$(base_of "$c")"
+printf '{"stacks":{"plan":["nowhere"],"validate_only":["site"]}}\n' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+with_change "$c"
+v "$c" "$b"
+
+it "a configured stack that is not a directory fails the run"
+assert_eq 1 "$RC" "exit code"
+
+it "and the report names the config key rather than tofu's error"
+assert_contains "$(report "$c")" 'config .stacks.plan names "nowhere"' "report"
+
+it "and tofu is never asked to enter it"
+assert_not_contains "$(calls "$c")" "nowhere" "tofu calls"
+
+it "and the stacks that do exist are checked anyway"
+assert_contains "$(calls "$c")" "/site validate" "tofu calls"
+
 c="$(new_checkout cfgplan)"; b="$(base_of "$c")"
 printf '{"plan":{"command":"tofu -chdir={stack} plan -no-color -compact-warnings"}}\n' \
   >"$c/repo/.github/falconet.json"
