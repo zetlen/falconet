@@ -49,6 +49,11 @@ push_in() { # checkout [extra args...] -> runs the script, output on stdout
   ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" "$@" 2>&1 )
 }
 
+push_stdout_in() { # checkout [extra args...] -> stdout ONLY, stderr discarded
+  local c="$1"; shift
+  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" "$@" 2>/dev/null )
+}
+
 remote_tip() { # checkout -> subject of the remote branch tip, or empty
   git -C "$1/remote.git" log -1 --format=%s issue-1-thing 2>/dev/null
 }
@@ -268,5 +273,28 @@ assert_eq 2 "$?" "exit code"
 it "a missing --branch is a usage error"
 ( cd "$REPO_ROOT" && ./libexec/falconet/push.sh >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
+
+# --- stdout belongs to the verbs that decide something ----------------------
+#
+# push decides nothing, so it prints nothing. The wrapper captures a verb's
+# stdout and writes it to $GITHUB_OUTPUT; when push printed "pushed <branch>
+# (<sha>)" the write was "Invalid format", and a `publish` job that had
+# already pushed the branch failed on the way out — no validate, no pull
+# request, and an issue parked for a human over a log line.
+
+c="$(new_checkout quiet)"
+base_sha="$(git -C "$c/repo" rev-parse HEAD)"
+: >"$c/github_env"
+
+it "nothing to push: stdout is empty"
+assert_eq "" "$(push_stdout_in "$c" --branch issue-1-thing --base-sha "$base_sha")" "stdout"
+
+commit_in "$c" "a change"
+
+it "pushed: stdout is still empty, and the sentence went to stderr"
+assert_eq "" "$(push_stdout_in "$c" --branch issue-1-thing --base-sha "$base_sha")" "stdout"
+
+it "and the branch really was pushed, so the silence is not a no-op"
+assert_eq "a change" "$(remote_tip "$c")" "remote tip"
 
 summary

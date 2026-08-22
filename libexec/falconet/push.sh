@@ -148,7 +148,7 @@ done
 if [[ -n "$BASE_SHA" ]]; then
   head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   if [[ "$head_sha" == "$BASE_SHA" ]]; then
-    echo "no commit on $BRANCH yet (HEAD is still ${BASE_SHA:0:7}) — nothing to push"
+    echo "no commit on $BRANCH yet (HEAD is still ${BASE_SHA:0:7}) — nothing to push" >&2
     exit 0
   fi
 fi
@@ -169,24 +169,29 @@ if [[ -n "${GH_TOKEN:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
   GIT_AUTH=(-c credential.helper=
             -c 'credential.helper=!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; };f')
 else
-  echo "GH_TOKEN or GITHUB_REPOSITORY unset — pushing with the remote as configured"
+  echo "GH_TOKEN or GITHUB_REPOSITORY unset — pushing with the remote as configured" >&2
 fi
 
 # The push, written twice, because macOS ships bash 3.2, where expanding an
 # EMPTY array under `set -u` is an "unbound variable" error rather than
 # nothing — and GIT_AUTH is legitimately empty on a local run, which is the
 # path most of tests/ci-push-branch.test.sh takes.
+# git's own chatter goes to stderr with everything else here. `push -u`
+# prints "branch 'x' set up to track 'origin/x'." on STDOUT, and this verb's
+# stdout is captured by the action wrapper and written to $GITHUB_OUTPUT:
+# anything on it that is not a decision is a step failing after its work is
+# done. push decides nothing, so it says nothing there.
 push_branch() {
   if [[ "${#GIT_AUTH[@]}" -gt 0 ]]; then
     git -C "$REPO_ROOT" "${GIT_AUTH[@]}" \
-      push --force-with-lease --set-upstream origin "$BRANCH"
+      push --force-with-lease --set-upstream origin "$BRANCH" >&2
   else
-    git -C "$REPO_ROOT" push --force-with-lease --set-upstream origin "$BRANCH"
+    git -C "$REPO_ROOT" push --force-with-lease --set-upstream origin "$BRANCH" >&2
   fi
 }
 
 if push_branch; then
-  echo "pushed $BRANCH ($(git -C "$REPO_ROOT" rev-parse --short HEAD))"
+  echo "pushed $BRANCH ($(git -C "$REPO_ROOT" rev-parse --short HEAD))" >&2
   # The hand-over comments read this, and they read it INSTEAD of $BRANCH:
   # written here and only here, it is a statement that the branch is on the
   # remote right now, not that the workflow intended to put it there. Every

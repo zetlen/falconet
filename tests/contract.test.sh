@@ -383,4 +383,26 @@ it "and every hand-off between jobs fails rather than upload nothing"
 assert_eq 3 "$(grep -v '^[[:space:]]*#' "$WF" | grep -c 'if-no-files-found: error')" \
   "uploads that fail on an empty result"
 
+# --- a verb's stdout cannot break the step that ran it ----------------------
+#
+# The wrapper captures stdout and writes it to $GITHUB_OUTPUT. `push` printed
+# "pushed <branch> (<sha>)", and `git push -u` prints "branch 'x' set up to
+# track..." on stdout of its own — so the write was `name=value` with a
+# newline in the value, which is "Invalid format". The `publish` job had
+# already pushed the branch and then failed on the way out: no validate, no
+# pull request, an issue parked for a human, over a log line.
+
+it "the wrapper writes its output with a delimiter, not name=value"
+assert_contains "$action" 'echo "outcome<<FALCONET_OUTCOME_EOF"' "action"
+
+it "and closes it, because an unterminated heredoc swallows the rest of the file"
+assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
+
+it "push writes nothing to stdout, since it decides nothing"
+# The contract the README's verb table states. Guarded here as well as in
+# push.test.sh because this is where the coupling lives: it is the wrapper
+# that makes a verb's stdout load-bearing.
+assert_eq "" "$(grep -nE '^[[:space:]]*echo ' "$REPO_ROOT/libexec/falconet/push.sh" | grep -v '>&2' || true)" \
+  "unredirected echoes in push.sh"
+
 summary

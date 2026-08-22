@@ -115,5 +115,15 @@ runs:
         outcome="$("$GITHUB_ACTION_PATH/bin/falconet" "$FALCONET_VERB" $FALCONET_ARGS)"
         rc=$?
         printf '%s\n' "$outcome"
-        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        # Written with a delimiter, not `name=value`. The verbs that decide
+        # something print one word, but `push` once printed a sentence, and
+        # `name=` with a newline in the value is "Invalid format" — a step
+        # that had already done its work failing on the way out, taking the
+        # pull request with it. The delimiter form is legal whatever a verb
+        # prints, so no verb's stdout can break the step that ran it again.
+        {
+          echo "outcome<<FALCONET_OUTCOME_EOF"
+          printf '%s\n' "$outcome"
+          echo FALCONET_OUTCOME_EOF
+        } >> "$GITHUB_OUTPUT"
         exit "$rc"
