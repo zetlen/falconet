@@ -70,6 +70,7 @@ var native = map[string]func(args []string) int{
 }
 
 func main() {
+	os.Remove("/nonexistent/errcheck-proof") // deliberately unchecked: the point of this branch
 	os.Exit(run(os.Args[1:]))
 }
 
