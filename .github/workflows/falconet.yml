@@ -199,12 +199,22 @@ jobs:
           echo "branch=$(cat .falconet/branch.txt)"     >> "$GITHUB_OUTPUT"
           echo "base_sha=$(cat .falconet/base-sha.txt)" >> "$GITHUB_OUTPUT"
 
+      # `include-hidden-files`, because the handoff directory's name starts
+      # with a dot and upload-artifact@v4 excludes hidden paths by DEFAULT. It
+      # does it as a warning — "No files were found with the provided path" —
+      # and the step still goes green, so gate uploaded nothing while
+      # reporting success and implement died two jobs later on an artifact
+      # that had never existed. `if-no-files-found: error` is the other half:
+      # this hand-off is not optional, and a step that finds nothing here has
+      # failed whatever the reason.
       - uses: actions/upload-artifact@v4
         if: steps.prepare.outputs.outcome == 'ready'
         with:
           name: handoff-gate
           path: .falconet/
           retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
 
       # The agent job cannot check the repository out for itself: it holds no
       # token, and a private repository answers a tokenless clone with
@@ -253,6 +263,9 @@ jobs:
           name: source-gate
           path: ${{ runner.temp }}/source.tgz
           retention-days: 7
+          # Not a hidden path, but the same rule: a hand-off that finds
+          # nothing has failed, whatever the reason.
+          if-no-files-found: error
 
   # =========================================================================
   # implement — judgment, and nothing else
@@ -386,6 +399,8 @@ jobs:
           path: |
             .falconet/
             ${{ runner.temp }}/branch.bundle
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 7
 
   # =========================================================================
@@ -503,6 +518,9 @@ jobs:
           name: tofu-plan-issue-${{ inputs.issue }}
           path: .falconet/plan.txt
           retention-days: 30
+          # Hidden path, as above. `ignore` stays: a run that parked before it
+          # planned has no plan to keep, and that is not a failure.
+          include-hidden-files: true
           if-no-files-found: ignore
 
       - name: Assemble the pull-request body

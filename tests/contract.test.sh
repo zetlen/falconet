@@ -344,4 +344,43 @@ it "and the one bundle there is names a range, whose base both ends hold"
 assert_contains "$(grep -A2 'git bundle create' <<<"$wf_code" | tr '\n' ' ')" \
   '..HEAD' "the bundle's ref argument"
 
+# --- the artifacts that carry the handoff actually carry it -----------------
+#
+# The handoff directory's name starts with a dot, and
+# `actions/upload-artifact@v4` excludes hidden paths by DEFAULT — as a
+# WARNING, with the step still green. So `gate` uploaded nothing, said
+# success, and `implement` failed two jobs later on an artifact that had
+# never existed. Every hand-off between jobs travels through one of these
+# uploads, which makes a silent empty one the most expensive kind of green.
+
+upload_flags="$(awk '
+  /^      - uses: actions\/upload-artifact/ { inb = 1; path = 0; hidden = 0; nofiles = "none"; next }
+  inb && /^      - / { print path, hidden, nofiles; inb = 0 }
+  inb {
+    if ($0 ~ /\.falconet/)                     path = 1
+    if ($0 ~ /include-hidden-files: true/)     hidden = 1
+    if ($0 ~ /if-no-files-found: error/)       nofiles = "error"
+    if ($0 ~ /if-no-files-found: ignore/)      nofiles = "ignore"
+  }
+  END { if (inb) print path, hidden, nofiles }
+' "$WF")"
+
+it "there are artifact uploads to check, so the parse above found something"
+assert_eq "true" "$([[ -n "$upload_flags" ]] && echo true || echo false)" "parsed upload steps"
+
+it "every artifact whose path is the handoff directory includes hidden files"
+unguarded=""
+while read -r path hidden _; do
+  [[ "$path" == 1 && "$hidden" != 1 ]] && unguarded="$unguarded one"
+done <<<"$upload_flags"
+assert_eq "" "$unguarded" "hidden-path uploads without include-hidden-files"
+
+it "and every hand-off between jobs fails rather than upload nothing"
+# The three that are plumbing: the handoff out of gate, the source out of
+# gate, and the handoff out of implement. Not the plan artifact — a run that
+# parked before it planned has no plan, and that is not a failure.
+# Comments stripped: the prose above the first upload names the setting.
+assert_eq 3 "$(grep -v '^[[:space:]]*#' "$WF" | grep -c 'if-no-files-found: error')" \
+  "uploads that fail on an empty result"
+
 summary
