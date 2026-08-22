@@ -65,8 +65,9 @@ var (
 // handed to its bash script by fallback until its port lands (ADR-0006 D3
 // step 2); the map grows one entry per port, and fallback is deleted in #19.
 var native = map[string]func(args []string) int{
-	"version": runVersion,
-	"config":  runConfig,
+	"version":  runVersion,
+	"config":   runConfig,
+	"assemble": runAssemble,
 }
 
 func main() {
