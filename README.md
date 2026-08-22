@@ -5,18 +5,17 @@ picked on purpose. This one turns a plain-language infrastructure request into
 a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
-**Status: the CLI works; the workflow has run four jobs and not yet finished
-one canary.** All six verbs are implemented and tested — `bash tests/run.sh`,
-12 files, 474 assertions. The first consumer installed it on 2026-08-21 and
-the canary has found two wiring bugs, in the order only a real runner could
-find them: a `startup_failure` before any job existed (step 8 prescribed
-`contents: read`, which `publish` exceeds), and then the agent job unable to
-clone a **private** consumer repository, because it holds no token by design.
-Both are fixed here and pinned; the second is [ADR-0005](docs/adr/0005-the-agent-job-is-handed-its-source.md).
-Everything either side of that agent pass — the App, the claim, the
-acknowledgment, a real baseline plan, and the containment that parked the
-issue for a human — worked on the first attempt. See
-[Where this stands](#where-this-stands).
+**Status: it works. One issue has become one reviewed pull request, on a real
+runner.** All six verbs are implemented and tested — `bash tests/run.sh`, 12
+files, 480 assertions. The first consumer installed it on 2026-08-21 and the
+canary reached a pull request the same evening, carrying the whole plan and
+labelled for review, after five failed attempts that found five wiring bugs
+nothing here could have found on its own: a caller granted less than a job
+declares, an agent job that could not clone a private repository,
+`upload-artifact` silently dropping a dot-directory, a log line on stdout
+breaking a step's output, and an artifact rooted at a least common ancestor.
+Each is fixed and each is a case. Three of the five were **fail-open** —
+green steps that had done nothing. See [Where this stands](#where-this-stands).
 
 ## What it does
 
@@ -503,24 +502,27 @@ off-the-shelf option.
 | Piece | State |
 | --- | --- |
 | `bin/`, `lib/`, `libexec/falconet/` — the CLI | six verbs, working |
-| `tests/` — 12 files, 474 assertions | passing (`bash tests/run.sh`) |
+| `tests/` — 12 files, 484 assertions | passing (`bash tests/run.sh`) |
 | `action.yml` + `.github/workflows/falconet.yml` | written, wiring invariants tested, never run |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
 | `prompts/` | extracted from the provenance; the standing-facts block is the origin's |
 | `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code |
 | `docs/provenance/` — the retired orchestrator | reference only |
-| A live run | **partly.** 2026-08-21: `gate`, `publish` and `contain` green on a real issue — App token, claim, acknowledgment, baseline plan, and a `ready-for-human` park when the run stopped. `implement` could not clone a private consumer repo with no token; fixed by [ADR-0005](docs/adr/0005-the-agent-job-is-handed-its-source.md), re-run pending. No pull request has been opened yet. |
+| A live run | **yes.** 2026-08-21, `zetlen/wayfinders-infra` issue #106 → PR #108: acknowledgment inside a minute, one agent pass, every guard, a real plan, and a pull request carrying it in full — authored by the App, labelled `needs-plan-review`, and the consumer's own CI ran on it, which is what the App credential was for. |
 | Bun rewrite | deferred on purpose ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)) |
 
 The port from stage-shaped scripts to a coherent CLI is done; [the plan it
 followed](docs/adr/pre-execution-plan.md) records what changed and what was
-found on the way. Preparing a consumer, and then running one, has since found five wiring bugs that
+found on the way. Preparing a consumer, and then running one, has since found eight wiring bugs that
 no unit test of a single verb could see — binaries not installed in the job
 that needed them, stacks not initialised before the baseline plan, the tool's
 own checkout dirtying the tree it was about to inspect, an install
-document that told people to grant less than the workflow declares, and an
-agent job that could not obtain the source it was meant to edit — each now
-pinned by [`tests/contract.test.sh`](tests/contract.test.sh). What has not
+document that told people to grant less than the workflow declares, an agent
+job that could not obtain the source it was meant to edit, an upload that
+silently dropped a dot-directory, a log line on stdout that broke the step
+that printed it, and an artifact rooted somewhere neither job looked — each
+now pinned by [`tests/contract.test.sh`](tests/contract.test.sh). Three of
+them were failures that reported success. What has not
 happened is a real run: development *is* integration here.
 
 Two further documents: [operating](docs/operating.md) covers the credentials
