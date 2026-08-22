@@ -397,21 +397,28 @@ jobs:
           args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
 
       # Before this job ends, so the work outlives the runner. See the header.
+      #
+      # Written INTO the handoff directory, not beside it. An upload naming
+      # two paths is rooted at their least common ancestor — here
+      # `/home/runner/work` — so the archive arrived as
+      # `wayfinders-infra/wayfinders-infra/.falconet/…`, publish's copy of
+      # `incoming/.falconet/` matched nothing, and the `|| true` on it turned
+      # that into silence. The pull request then failed to assemble for want
+      # of a file that had been uploaded all along. One path, one root.
       - name: Bundle the work
         if: always()
         run: |
           set -euo pipefail
-          git bundle create "$RUNNER_TEMP/branch.bundle" \
+          mkdir -p .falconet
+          git bundle create .falconet/branch.bundle \
             "${{ needs.gate.outputs.base_sha }}..HEAD" 2>/dev/null \
-            || : >"$RUNNER_TEMP/branch.bundle"
+            || : >.falconet/branch.bundle
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: handoff-implement
-          path: |
-            .falconet/
-            ${{ runner.temp }}/branch.bundle
+          path: .falconet/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
@@ -452,22 +459,25 @@ jobs:
       - name: Keep the tool and the handoff out of the working tree
         run: |
           mkdir -p .git/info
-          printf '%s\n' .falconet-tool/ .falconet/ incoming/ >> .git/info/exclude
+          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
 
       - uses: actions/download-artifact@v4
         with:
           name: handoff-implement
-          path: incoming
+          path: .falconet
 
       - name: Restore the branch
         run: |
           set -euo pipefail
-          mkdir -p .falconet
-          cp -R incoming/.falconet/. .falconet/ 2>/dev/null || true
-          bundle="$(find incoming -name branch.bundle | head -1)"
+          # Fail closed. Every file the rest of this job reads — the commit
+          # body, the plan, the request — came out of that artifact, and a
+          # copy that quietly matched nothing is how a pushed branch turned
+          # into a pull request that could not be assembled.
+          test -f .falconet/branch.bundle \
+            || { echo "the implement hand-off carried no bundle" >&2; exit 1; }
           git switch -c "$BRANCH"
-          if [ -s "$bundle" ]; then
-            git fetch "$bundle" HEAD
+          if [ -s .falconet/branch.bundle ]; then
+            git fetch .falconet/branch.bundle HEAD
             git reset --hard FETCH_HEAD
           fi
         env:

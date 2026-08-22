@@ -375,6 +375,17 @@ while read -r path hidden _; do
 done <<<"$upload_flags"
 assert_eq "" "$unguarded" "hidden-path uploads without include-hidden-files"
 
+it "no upload names more than one path, which would move the archive's root"
+# `path: |` with two entries roots the archive at their least common
+# ancestor: `.falconet/` plus a file in RUNNER_TEMP came back as
+# `<repo>/<repo>/.falconet/…`, and the consumer of that artifact looked where
+# it had put things rather than where the uploader had. One path, one root.
+assert_eq "" "$(awk '
+  /^      - uses: actions\/upload-artifact/ { inb = 1; next }
+  inb && /^      - / { inb = 0 }
+  inb && /^          path: \|/ { print "multi" }
+' "$WF")" "uploads with a multi-line path"
+
 it "and every hand-off between jobs fails rather than upload nothing"
 # The three that are plumbing: the handoff out of gate, the source out of
 # gate, and the handoff out of implement. Not the plan artifact — a run that
