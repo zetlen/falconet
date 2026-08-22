@@ -72,6 +72,8 @@ var native = map[string]func(args []string) int{
 	"version":  runVersion,
 	"config":   runConfig,
 	"assemble": runAssemble,
+	"commit":   runCommit,
+	"scan":     runScan,
 }
 
 func main() {

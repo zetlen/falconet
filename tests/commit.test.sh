@@ -291,6 +291,28 @@ it "and the reason names the file"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   "records-example-tech.tf" "failure reason"
 
+# --- a file named like a flag is still read ---------------------------------
+#
+# The tofu fmt step guards its path with `--` because an agent might create
+# `-check.tf`. The denylist has to read that file too: a guard that hands the
+# path to a tool which parses it as options has not looked at it, and the
+# construct inside goes through on the strength of a scan that never ran.
+
+c="$(new_checkout dash_named_file)"
+printf 'data "external" "danger" {\n  program = ["sh", "-c", "whoami"]\n}\n' \
+  >"$c/repo/-check.tf"
+printf 'Add a check\n\nIn a file named like a flag.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a denied construct in a file named like a flag is still refused"
+assert_eq "failure" "$out" "outcome"
+
+it "and the reason names that file"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "-check.tf" "failure reason"
+
+it "and nothing is committed"
+assert_eq 1 "$(commit_count "$c")" "commits"
+
 # --- denial beats needs-info (Ruling B) -------------------------------------
 #
 # The needs-info ordering exists to protect committed work, and a refused
@@ -530,6 +552,72 @@ it "naming the path, and the allowlist it was measured against"
 reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
 assert_contains "$reason" "records-example-tech.tf" "failure reason"
 assert_contains "$reason" "dns/*.tf" "failure reason"
+
+# --- the allowlist's globs: `*` crosses `/` ---------------------------------
+#
+# The README says so: "`*` crosses `/`, so `*.tf` matches `dns/records.tf`".
+# That is bash `case` pattern matching, and it is not what every glob library
+# does — Go's path.Match stops `*` at a slash. Every default-allowlist case
+# above touches a root-level .tf, so none of them would notice a port that
+# changed this. These two do: one where the star must cross a slash, and one
+# where the directory in the pattern must still be honoured, with a second
+# file under a deeper directory that the star has to reach across.
+
+c="$(new_checkout glob_crosses_slash)"
+mkdir -p "$c/repo/dns"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/dns/records.tf"
+printf 'Add a nested record\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "*.tf admits dns/records.tf: the star crosses the slash"
+assert_eq "success" "$out" "outcome"
+
+it "and the nested file is what was committed"
+assert_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" "dns/records.tf" "committed paths"
+
+c="$(new_checkout glob_keeps_directory)"
+printf '{"paths":{"allow":["dns/*.tf"]}}\n' >"$c/repo/.github/falconet.json"
+printf '.falconet/\n' >"$c/repo/.gitignore"
+git -C "$c/repo" add .github/falconet.json .gitignore
+git -C "$c/repo" commit -qm "configure falconet"
+mkdir -p "$c/repo/site" "$c/repo/dns/zones"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/site/a.tf"
+printf 'locals {\n  b = 2\n}\n' >"$c/repo/dns/zones/a.tf"
+printf 'Add two records\n\nOne of them where it may not go.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "dns/*.tf refuses site/a.tf: the directory in the pattern is honoured"
+assert_eq "failure" "$out" "outcome"
+
+it "naming site/a.tf and not dns/zones/a.tf, which the star reaches across its slash"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" "site/a.tf" "failure reason"
+assert_not_contains "$reason" "dns/zones/a.tf" "failure reason"
+
+# --- a staged rename is refused, not mis-parsed ------------------------------
+#
+# `git status -z` reports a rename as TWO NUL-terminated fields: the
+# status-prefixed new path, then the bare old path with no prefix at all.
+# Slicing the second the way every other entry is sliced would corrupt it.
+# The agent cannot stage one — it has no shell — so this arm fires only for a
+# person running the verb by hand, which is exactly when a misread path
+# would be hardest to notice.
+
+c="$(new_checkout staged_rename)"
+git -C "$c/repo" mv records-example-tech.tf records-renamed.tf
+printf 'Rename the record file\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a staged rename is refused rather than parsed"
+assert_eq "failure" "$out" "outcome"
+
+it "and the reason says so, naming the new path"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" "rename or copy" "failure reason"
+assert_contains "$reason" "records-renamed.tf" "failure reason"
+
+it "and nothing is committed"
+assert_eq 1 "$(commit_count "$c")" "commits"
 
 # --- the denylist, and the order it is tested in ----------------------------
 #

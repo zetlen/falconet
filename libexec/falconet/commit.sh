@@ -354,10 +354,13 @@ fi
 # denylist that tested `file(` first would report a templatefile() call as
 # file() — the right refusal naming the wrong construct, and nothing
 # downstream can recover the distinction.
+# The `--` is load-bearing: without it a file named like a flag — the
+# `-check.tf` the tofu fmt comment below imagines — is parsed by grep as
+# options, the pattern as a filename, and the file goes through unread.
 tf_denylist_hit() { # file -> echoes the matched construct; else exit 1
   local file="$1" i=0
   while [ "$i" -lt "${#DENY_PAT[@]}" ]; do
-    if grep -Eq "${DENY_PAT[$i]}" "$file"; then
+    if grep -Eq -- "${DENY_PAT[$i]}" "$file"; then
       deny_label "${DENY[$i]}"
       return 0
     fi
