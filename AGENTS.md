@@ -76,6 +76,16 @@ never touch the network, GitHub, OpenTofu, or any credential. They need bash,
 git, jq, awk and python3 stdlib. Adding a dependency to run the tests is a
 decision, not a convenience.
 
+The Go binary answers the same suite. Build it out of tree — `CGO_ENABLED=0
+go build -trimpath -o dist/falconet ./cmd/falconet` — then
+`FALCONET=$PWD/dist/falconet FALCONET_HOME=$PWD bash tests/run.sh`.
+`FALCONET_HOME` is what lets a verb the binary does not implement yet fall
+through to its bash script, silently; unset it to prove a verb is native.
+`go test ./...` covers what the suite cannot see from outside a process — the
+config merge (objects recurse, arrays and scalars replace), resolution order,
+the handoff directory, the repository root — and `go vet`, `staticcheck` and
+`errcheck` are part of green: an ignored error is a red build.
+
 ## Shell traps this repository has already hit
 
 - **Never pipe `tofu plan` into `head` or `tail`.** SIGPIPE kills tofu before

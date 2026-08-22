@@ -4,6 +4,11 @@
 # under a temp directory, and never touches the network, GitHub, OpenTofu or
 # any credential — which is why it can run here with no secrets and no
 # permissions at all.
+#
+# Mid-port (ADR-0006 D3), the suite runs ONCE, through the Go binary: the
+# verbs the binary implements answer natively, and every other verb falls
+# through to its bash script because FALCONET_HOME names this checkout. One
+# pass covers both implementations. Nothing runs twice.
 name: ci
 
 on:
@@ -16,14 +21,48 @@ permissions: {}
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - name: Check the shell parses before running any of it
         run: |
           set -euo pipefail
           for f in bin/falconet lib/*.sh libexec/falconet/*.sh tests/*.sh; do
             bash -n "$f"
           done
-      - name: Run the suite
-        run: bash tests/run.sh
+
+      # No setup-go action: every third-party action already floats on a tag
+      # (#2), and this would be one more. go.mod's `toolchain` line is the
+      # pin; exporting it as GOTOOLCHAIN makes the go command use exactly that
+      # version — downloading it when the runner's is older, and refusing to
+      # quietly substitute a newer one. One source of truth, read here.
+      - name: Pin the Go toolchain to go.mod's
+        run: |
+          set -euo pipefail
+          tc="$(sed -n 's/^toolchain //p' go.mod)"
+          test -n "$tc"
+          echo "GOTOOLCHAIN=$tc" >> "$GITHUB_ENV"
+      - name: Go version
+        run: go version
+
+      # vet, staticcheck and errcheck are the fail-closed discipline ADR-0006
+      # D1 chose instead of a type system: an ignored error is a red build.
+      # They are pinned dev tools, not module dependencies; go.mod has none.
+      - name: Vet, lint, and refuse ignored errors
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install github.com/kisielk/errcheck@v1.20.0
+          "$(go env GOPATH)/bin/staticcheck" ./...
+          "$(go env GOPATH)/bin/errcheck" ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -o dist/falconet ./cmd/falconet
+
+      - name: Run the suite through the binary
+        run: FALCONET="$PWD/dist/falconet" FALCONET_HOME="$PWD" bash tests/run.sh

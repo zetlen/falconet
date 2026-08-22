@@ -20,5 +20,5 @@
 # Local agent permission rules — MUST stay untracked.
 .claude/settings.local.json
 
-# Bun (the rewrite lands here)
-node_modules/
+# The Go binary, built out of tree: `go build -o dist/falconet ./cmd/falconet`
+/dist/
