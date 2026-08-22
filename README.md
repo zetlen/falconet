@@ -438,6 +438,107 @@ development is integration here. Put the SHA you ran in both places:
   bodies and comments are attacker-controlled, and the reason all six verbs
   take files rather than strings is so that text never travels that way.
 
+## Install the binary on a workstation
+
+Two ways, and one snag on macOS. Everything above installs falconet into a
+*repository*, where the caller workflow checks this tree out at a ref; this
+section is for a person who wants `falconet` on their own PATH.
+
+Mid-port ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)) the binary
+answers `version` and `config` itself and hands each verb to this repository's
+bash, which it finds through `FALCONET_HOME`. It is released first precisely
+because nothing in CI depends on it yet: the release path gets proven on
+something small, and the verbs follow.
+
+### From the release page
+
+| Your machine | Asset |
+| --- | --- |
+| Apple silicon Mac | `falconet_darwin_arm64` |
+| Intel Mac | `falconet_darwin_amd64` |
+| Linux x86-64 | `falconet_linux_amd64` |
+| Linux arm64 | `falconet_linux_arm64` |
+
+Pick the tag you want from [the releases
+page](https://github.com/zetlen/falconet/releases), then:
+
+```sh
+tag=v0.1.0
+asset=falconet_darwin_arm64            # from the table above
+base="https://github.com/zetlen/falconet/releases/download/$tag"
+
+curl -fsSL -O "$base/$asset"
+curl -fsSL -O "$base/checksums.txt"
+
+# checksums.txt is sha256sum's own format, so the tool checks it for you.
+shasum -a 256 --ignore-missing -c checksums.txt   # Linux: sha256sum --ignore-missing -c
+
+chmod +x "$asset"
+mkdir -p ~/.local/bin
+mv "$asset" ~/.local/bin/falconet                 # anywhere on your PATH
+```
+
+**Check:** `falconet version` prints the tag you downloaded, and the Go it was
+built with:
+
+```
+falconet v0.1.0 (go1.26.5 darwin/arm64)
+```
+
+Verify the checksum rather than trusting the download. A release tag is a
+mutable pointer and an asset can be replaced — the same reason `action.yml`
+pins gitleaks by digest as well as by version. falconet's own `linux_amd64`
+digest is committed in this tree at
+[`release/falconet_linux_amd64.sha256`](release/falconet_linux_amd64.sha256),
+written before the tag exists; the release workflow rebuilds those bytes on a
+runner and publishes nothing at all if they differ.
+
+### The macOS quarantine snag
+
+A file a **browser** downloads gets a `com.apple.quarantine` attribute, and
+Gatekeeper will not run an unsigned, un-notarised binary that carries one.
+Observed on macOS 26: it does not fail with a message — the process simply
+hangs. Clear the attribute **before** the first run:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/falconet
+```
+
+Two things worth knowing. `curl` does not set the attribute, so the recipe
+above never trips over this; only a browser download does. And clearing it
+after a denial did not reliably help in testing — Gatekeeper had already
+made up its mind about that file. Clear it first, or re-download with `curl`.
+
+This is documented rather than solved. Signing and notarising means an Apple
+Developer account and a signing identity in CI, which is the same level of
+commitment [docs/operating.md](docs/operating.md) declines everywhere else.
+
+### With Go
+
+```sh
+go install github.com/zetlen/falconet/cmd/falconet@v0.1.0
+```
+
+Nothing is quarantined this way: the file is compiled locally rather than
+arriving through a browser. `falconet version` still prints the tag — no
+version is stamped in on this path, so it reads the module version the `go`
+command resolved.
+
+One difference to expect: this builds with **your** Go, not the pinned one.
+`GOTOOLCHAIN=auto`, the default, is a floor and not a pin — it fetches the
+toolchain `go.mod` names only when yours is *older*, and quietly uses a newer
+local Go otherwise. So `falconet version` may report a Go newer than the
+release assets do. That is fine here, where nothing is being compared against
+a digest; it is exactly what the release workflow must not do, and does not.
+
+### No tap, no install script
+
+There is no Homebrew tap and no `curl … | sh`. A tap is a second repository
+to keep in step with every release, and an install script is a thing this
+project would have to ask people to pipe into a shell. Both are the level of
+commitment [docs/operating.md](docs/operating.md) has not made — the same
+answer as no code of conduct and no marketplace listing.
+
 ## How it is built
 
 Six verbs, one per stage. They never call each other; they pass files

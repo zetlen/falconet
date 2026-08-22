@@ -1,0 +1,92 @@
+# falconet's release, on a tag.
+#
+# The point of this workflow is one step, and everything else is arrangement
+# around it: before a release exists and before a single asset is uploaded, it
+# rebuilds falconet_linux_amd64 and compares the bytes with the SHA-256
+# committed in the tree at this tag. If they differ, nothing is published.
+#
+# That ordering is the whole guarantee. `action.yml` installs falconet the way
+# it installs gitleaks — a version, a URL, and a digest in the tree — and a
+# consumer who pins a SHA of this repository is trusting that digest to
+# describe the binary CI will download from a release that did not exist when
+# they pinned it. The digest can only be committed before the tag; the only
+# thing that makes it true afterwards is that the build reproduces, and the
+# only place that can be checked is here, before the upload.
+#
+# The build flags are NOT repeated here. They live in the Makefile, which is
+# also what `make release-prep` runs on the operator's laptop to write the
+# digest in the first place. Two copies of a flag list is two things that
+# agree until one of them is edited — and the failure mode is a digest that
+# stops matching for a reason nobody can see in either file.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only this job, and only contents: a release is a write to the
+    # repository's releases and nothing else here needs a token at all.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Copied from ci.yml, deliberately verbatim, and for a sharper reason
+      # here. GOTOOLCHAIN=auto — the default — is a FLOOR, not a pin: it
+      # downloads go.mod's toolchain when the local Go is older and silently
+      # uses a newer local Go otherwise. The ubuntu runner image ships a Go
+      # newer than go.mod's `toolchain` line, so under `auto` this job would
+      # compile with a different compiler than the laptop that prepared the
+      # digest, and the only symptom would be a release that refuses to
+      # publish for no visible reason. No setup-go action: go.mod's toolchain
+      # line is the pin, and #2's floating-tag problem does not get one
+      # action worse.
+      - name: Pin the Go toolchain to go.mod's
+        run: |
+          set -euo pipefail
+          tc="$(sed -n 's/^toolchain //p' go.mod)"
+          test -n "$tc"
+          echo "GOTOOLCHAIN=$tc" >> "$GITHUB_ENV"
+      - name: Go version
+        run: go version
+
+      # $GITHUB_REF_NAME, never ${{ github.ref_name }}. A tag name is chosen
+      # by whoever pushes the tag, and a template expression is pasted into
+      # the shell before bash ever sees it — `$(…)` and backticks in a tag
+      # would run. The environment variable is a value. It is then the
+      # Makefile's `require-version` that refuses anything which is not
+      # vX.Y.Z, before the tag reaches a compiler flag.
+      - name: Build the four release assets
+        run: make release-build VERSION="$GITHUB_REF_NAME"
+
+      # The guarantee, and it comes before anything is published. Two
+      # refusals: the version recorded beside the digest must be this tag — a
+      # digest prepared for v0.1.0 is not a claim about v0.1.1 — and the
+      # linux_amd64 bytes must be the bytes the tree says they are.
+      - name: Refuse to publish unless the bytes reproduce the digest in the tree
+        run: make release-verify VERSION="$GITHUB_REF_NAME"
+
+      # Bare asset names, no version in them: the tag is already in the
+      # release URL's path, which is what lets action.yml build a download URL
+      # out of a version and a target, exactly as it does for gitleaks.
+      # checksums.txt is sha256sum's own format, so anyone who downloads the
+      # set can run `sha256sum -c checksums.txt` and be told which one lied.
+      - name: Create the release and upload the assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/falconet_linux_amd64 \
+            dist/falconet_linux_arm64 \
+            dist/falconet_darwin_arm64 \
+            dist/falconet_darwin_amd64 \
+            dist/checksums.txt

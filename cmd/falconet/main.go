@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -37,8 +38,11 @@ import (
 	"github.com/zetlen/falconet/internal/handoff"
 )
 
-// version is stamped at build time: -ldflags "-X main.version=v0.1.0". A
-// binary built any other way says so.
+// version is stamped at build time: -ldflags "-X main.version=v0.1.0", which
+// is what the Makefile's release targets pass and what a release asset
+// carries. A binary built any other way says "dev" — except the one other way
+// ADR-0006 D6 blesses, `go install …@<tag>`, which passes no ldflags at all
+// and is handled in runVersion.
 var version = "dev"
 
 const usageText = `Usage: falconet <verb> [args]
@@ -158,7 +162,26 @@ func runVersion(args []string) int {
 		fmt.Fprintln(os.Stderr, "falconet: version takes no arguments")
 		return 2
 	}
-	fmt.Printf("falconet %s (%s %s/%s)\n", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	// `go install github.com/zetlen/falconet/cmd/falconet@v0.1.0` is the
+	// second install path ADR-0006 D6 names, and it accepts no ldflags: the
+	// module proxy hands the go command a source zip, so nothing can stamp
+	// `version` on the way through and every binary installed that way would
+	// have said "dev" — for the one audience, people on laptops, whose only
+	// way to know what they are running is this line. The go command records
+	// the module version it resolved, so ask for it.
+	//
+	// Only when the stamp is absent, so a release asset always reports the
+	// tag it was built for and never something a proxy computed. "(devel)" is
+	// what a local `go build` puts there, which is what "dev" already says.
+	v := version
+	if v == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			if m := info.Main.Version; m != "" && m != "(devel)" {
+				v = m
+			}
+		}
+	}
+	fmt.Printf("falconet %s (%s %s/%s)\n", v, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	return 0
 }
 

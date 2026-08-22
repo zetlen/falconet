@@ -412,4 +412,93 @@ assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
 # push's silence on stdout is asserted in push.test.sh, by running it. The grep
 # of push.sh's source that used to sit here went with ADR-0006 D3 step 0.
 
+# --- the release refuses to publish bytes it cannot reproduce ---------------
+#
+# ADR-0006 D6 asks a consumer's pinned SHA to vouch for a binary that did not
+# exist when they pinned it: the SHA-256 of the linux_amd64 asset is committed
+# in the tree BEFORE the tag, and the only thing that makes it true afterwards
+# is that the build reproduces. The compare is what turns that from a hope
+# into a check, and it is worth nothing unless it happens before anything is
+# published — a release with one asset already uploaded is a release someone
+# can download.
+#
+# So these cases hold the ordering, and they hold the flags, because every one
+# of the four was measured to change the bytes: without -buildvcs=false a
+# dirty pre-tag tree and a clean tree at the tag differ by construction;
+# without -trimpath the absolute path of the checkout is in the binary;
+# without CGO_ENABLED=0 the runner (building natively, with a C compiler
+# present) turns cgo on where a laptop cross-compiling the same target leaves
+# it off; without -buildid= the link stamps an id.
+
+REL="$REPO_ROOT/.github/workflows/release.yml"
+MK="$REPO_ROOT/Makefile"
+rel="$(cat "$REL")"
+mk="$(cat "$MK")"
+# Comments stripped where a case is about what the file DOES: the prose above
+# each step names the thing it is explaining not to do.
+rel_code="$(grep -v '^[[:space:]]*#' "$REL")"
+
+it "the release runs on a tag push and on nothing else"
+assert_contains "$rel" "tags: ['v*']" "release workflow"
+assert_not_contains "$rel_code" "workflow_dispatch" "release workflow"
+
+it "and pins the Go toolchain to go.mod's, because GOTOOLCHAIN=auto is a floor"
+assert_contains "$rel" "sed -n 's/^toolchain //p' go.mod" "release workflow"
+assert_contains "$rel" 'echo "GOTOOLCHAIN=$tc" >> "$GITHUB_ENV"' "release workflow"
+
+it "the build goes through the Makefile, so the flags have one definition"
+assert_contains "$rel" "make release-build" "release workflow"
+
+it "and the workflow holds no build flags of its own to drift from it"
+assert_not_contains "$rel_code" "go build" "release workflow"
+
+it "the Makefile's release build refuses VCS stamping"
+assert_contains "$mk" "-buildvcs=false" "Makefile"
+
+it "trims the path out of the binary"
+assert_contains "$mk" "-trimpath" "Makefile"
+
+it "turns cgo off explicitly, rather than inheriting the host's default"
+assert_contains "$mk" "CGO_ENABLED=0" "Makefile"
+
+it "and clears the build id"
+assert_contains "$mk" "-buildid=" "Makefile"
+
+it "the compare-and-refuse step comes before the release is created"
+verify_line="$(grep -n 'make release-verify' "$REL" | cut -d: -f1)"
+create_line="$(grep -n 'gh release create' "$REL" | cut -d: -f1)"
+[[ -n "$verify_line" && -n "$create_line" && "$verify_line" -lt "$create_line" ]] \
+  && assert_eq "before" "before" "verify at $verify_line, release create at $create_line" \
+  || assert_eq "verify before release create" "verify=$verify_line create=$create_line" "order"
+
+it "and before any asset is named for upload"
+asset_line="$(grep -n 'dist/falconet_linux_amd64' "$REL" | tail -1 | cut -d: -f1)"
+[[ -n "$verify_line" && -n "$asset_line" && "$verify_line" -lt "$asset_line" ]] \
+  && assert_eq "before" "before" "verify at $verify_line, first asset at $asset_line" \
+  || assert_eq "verify before upload" "verify=$verify_line asset=$asset_line" "order"
+
+it "the tag reaches the shell as an environment variable, never a template"
+# A tag name is chosen by whoever pushes the tag, and ${{ }} is pasted in
+# before bash sees it: `$(…)` in a tag would run. The Makefile then refuses
+# any tag that is not vX.Y.Z before it reaches a compiler flag.
+assert_contains "$rel" 'VERSION="$GITHUB_REF_NAME"' "release workflow"
+assert_not_contains "$rel_code" "github.ref_name" "release workflow"
+
+it "only the job that publishes is granted anything"
+assert_contains "$rel" "contents: write" "release workflow"
+assert_eq 1 "$(grep -v '^[[:space:]]*#' "$REL" | grep -c 'permissions: {}')" \
+  "permissions: {} declarations"
+
+it "the digest in the tree is sha256sum's own format, so sha256sum -c reads it"
+digest_file="$REPO_ROOT/release/falconet_linux_amd64.sha256"
+assert_eq "true" "$([[ -f "$digest_file" ]] && echo true || echo false)" "$digest_file exists"
+assert_eq "true" \
+  "$(grep -Eq '^[0-9a-f]{64}  falconet_linux_amd64$' "$digest_file" && echo true || echo false)" \
+  "digest line shape"
+
+it "and the version recorded beside it is a release tag, so a stale digest is caught"
+assert_eq "true" \
+  "$(grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' "$REPO_ROOT/release/VERSION" && echo true || echo false)" \
+  "release/VERSION"
+
 summary
