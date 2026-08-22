@@ -358,9 +358,22 @@ jobs:
             echo FALCONET_PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
+      # `github_token` is here to keep `permissions: {}` true. Given no token,
+      # the action mints one for itself by exchanging a GitHub OIDC token —
+      # which needs `id-token: write`, a permission this job refuses to hold:
+      # without it the run dies with "Could not fetch an OIDC token".
+      #
+      # So it is handed this job's own GITHUB_TOKEN, which in a job with no
+      # permissions carries NO SCOPES AT ALL. It cannot read this repository,
+      # let alone write to it. That is the distinction the boundary is drawn
+      # on: not whether a variable called a token exists in the environment,
+      # but whether anything in this job can publish. The App token — the one
+      # that can — is minted in gate, publish and contain, and is never
+      # passed here.
       - name: Implement the change
         uses: anthropics/claude-code-action@v1
         with:
+          github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.anthropic-api-key }}
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: |
