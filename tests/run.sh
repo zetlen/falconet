@@ -5,14 +5,20 @@
 #   tests/run.sh              all of them
 #   tests/run.sh handover     only the files whose name contains "handover"
 #
-# These cover the scripts in scripts/ and the wiring of
-# .github/workflows/infra-issues.yml. They need bash, git, jq, awk and
-# python3 (stdlib only); they stub `gh`, push only into bare repositories
-# under a temp directory, and never touch the network, GitHub, OpenTofu or
-# any credential — which is why .github/workflows/ci.yml can run the whole
-# suite on every pull request from a GitHub-hosted runner. Run it locally
-# too, before changing anything under scripts/: CI reports, and only the
-# `protecc main` ruleset decides whether a red report can be merged past.
+# These cover the falconet verbs and the wiring of action.yml and
+# .github/workflows/falconet.yml. Every test spawns its subject through
+# $FALCONET, which defaults to bin/falconet:
+#
+#   FALCONET=/path/to/another/falconet tests/run.sh
+#
+# runs the same suite against another implementation of the same contract.
+# They need bash, git, jq, awk and python3 (stdlib only); they stub `gh`,
+# push only into bare repositories under a temp directory, and never touch
+# the network, GitHub, OpenTofu or any credential — which is why
+# .github/workflows/ci.yml can run the whole suite on every pull request from
+# a GitHub-hosted runner. Run it locally too, before changing anything under
+# bin/, lib/ or libexec/: CI reports, and only the `protecc main` ruleset
+# decides whether a red report can be merged past.
 
 set -uo pipefail
 

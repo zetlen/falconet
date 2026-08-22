@@ -60,7 +60,7 @@ scan_in() { # checkout argument... -> runs the script, stdout only
   local c="$1"; shift
   ( cd "$c/repo" \
     && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-       "$REPO_ROOT/lib/scan.sh" "$@" 2>/dev/null )
+       "$FALCONET" scan "$@" 2>/dev/null )
 }
 
 # --- a clean channel ---------------------------------------------------------
@@ -194,7 +194,7 @@ assert_eq "msg.txt" "$out" "stdout"
 
 c="$(new_checkout no_binary)"
 printf 'anything at all\n' >"$c/repo/msg.txt"
-out="$( cd "$c/repo" && GITLEAKS="$c/bin/nope" "$REPO_ROOT/lib/scan.sh" -- msg.txt 2>/dev/null )"
+out="$( cd "$c/repo" && GITLEAKS="$c/bin/nope" "$FALCONET" scan -- msg.txt 2>/dev/null )"
 rc=$?
 
 it "a missing gitleaks exits 1, never 0"

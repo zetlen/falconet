@@ -19,6 +19,12 @@
 # It is public in the sense that it works, not in the sense that it is
 # vocabulary.
 #
+# `scan`, `config` and `review-verdict` are unlisted for the same reason. The
+# first two are internal plumbing — the secret scan, and what the config file
+# resolves to — and the third ships unwired (ADR-0003). Each is reachable here
+# so that the test suite spawns it through the same door as every verb, and
+# never by a path inside the tool (ADR-0006 D3 step 0).
+#
 # Exit codes, uniform across every verb:
 #   0  an outcome was determined (which outcome is on stdout, in one word)
 #   1  refused mechanically, or a check failed
@@ -27,7 +33,7 @@
 set -uo pipefail
 
 VERBS="prepare commit push park validate assemble"
-UNLISTED="prompt"
+UNLISTED="prompt scan config review-verdict"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBEXEC="$(dirname "$SCRIPT_DIR")/libexec/falconet"

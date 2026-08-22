@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 #
-# config.test.sh — lib/config.sh and lib/handoff.sh: the plumbing every verb
-# sources.
+# config.test.sh — config resolution and the handoff directory: the plumbing
+# every verb shares.
 #
-# Both are sourced libraries rather than verbs, so the subject spawned here is
-# tests/fixtures/config-probe, which sources them and prints. The assertions
-# stay about stdout and exit codes; the probe is the only piece a future port
-# rewrites.
+# Both live in sourced libraries rather than verbs, so the subject spawned
+# here is `falconet config` — unlisted, like `prompt` — which sources them and
+# prints. The assertions stay about stdout and exit codes.
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-PROBE="$REPO_ROOT/tests/fixtures/config-probe"
-export FALCONET_ROOT="$REPO_ROOT"
 
 # Every case runs in its own directory, because resolution 3 is relative to
 # the working directory and a stray .github/falconet.json would otherwise
@@ -32,7 +29,7 @@ line_of() { # needle haystack
 
 probe() { # dir op [arg] -> sets OUT RC
   local d="$1"; shift
-  OUT="$( cd "$d" && "$PROBE" "$@" 2>&1 )"; RC=$?
+  OUT="$( cd "$d" && "$FALCONET" config "$@" 2>&1 )"; RC=$?
   return 0
 }
 
@@ -79,12 +76,12 @@ probe "$d" file
 assert_eq ".github/falconet.json" "$OUT"
 
 it "\$FALCONET_CONFIG beats .github/falconet.json"
-OUT="$( cd "$d" && FALCONET_CONFIG="$d/env.json" "$PROBE" get .issue.queue_label 2>&1 )"
+OUT="$( cd "$d" && FALCONET_CONFIG="$d/env.json" "$FALCONET" config get .issue.queue_label 2>&1 )"
 assert_eq "from-env" "$OUT"
 
 it "an explicit --config beats \$FALCONET_CONFIG"
-OUT="$( cd "$d" && FALCONET_CONFIG="$d/env.json" PROBE_CONFIG="$d/flag.json" \
-        "$PROBE" get .issue.queue_label 2>&1 )"
+OUT="$( cd "$d" && FALCONET_CONFIG="$d/env.json" \
+        "$FALCONET" config --config "$d/flag.json" get .issue.queue_label 2>&1 )"
 assert_eq "from-flag" "$OUT"
 
 # --- a config that cannot be read is never a silent default -----------------
@@ -104,7 +101,7 @@ assert_contains "$OUT" ".github/falconet.json is not valid JSON"
 
 d="$(proj missing)"
 it "--config naming a file that does not exist is exit 1"
-OUT="$( cd "$d" && PROBE_CONFIG="$d/nope.json" "$PROBE" get .handoff_dir 2>&1 )"; RC=$?
+OUT="$( cd "$d" && "$FALCONET" config --config "$d/nope.json" get .handoff_dir 2>&1 )"; RC=$?
 assert_eq "1" "$RC" "exit code"
 assert_contains "$OUT" "--config names no file"
 
@@ -196,16 +193,16 @@ assert_eq "$d/.ci-handoff" "$OUT"
 d="$(proj ghenv)"
 
 it "with GITHUB_ENV set and writable, the export lands"
-( cd "$d" && GITHUB_ENV="$d/gh_env" "$PROBE" env "BRANCH=issue-1-x" ) >/dev/null 2>&1
+( cd "$d" && GITHUB_ENV="$d/gh_env" "$FALCONET" config env "BRANCH=issue-1-x" ) >/dev/null 2>&1
 assert_contains "$(cat "$d/gh_env" 2>/dev/null)" "BRANCH=issue-1-x"
 
 it "with GITHUB_ENV unset, it is a silent no-op and not a failure"
-OUT="$( cd "$d" && env -u GITHUB_ENV "$PROBE" env "BRANCH=x" 2>&1 )"; RC=$?
+OUT="$( cd "$d" && env -u GITHUB_ENV "$FALCONET" config env "BRANCH=x" 2>&1 )"; RC=$?
 assert_eq "0" "$RC" "exit code"
 assert_eq "" "$OUT" "output"
 
 it "with GITHUB_ENV pointing somewhere unwritable, still a no-op and still 0"
-OUT="$( cd "$d" && GITHUB_ENV=/proc/nope/gh_env "$PROBE" env "BRANCH=x" 2>&1 )"; RC=$?
+OUT="$( cd "$d" && GITHUB_ENV=/proc/nope/gh_env "$FALCONET" config env "BRANCH=x" 2>&1 )"; RC=$?
 assert_eq "0" "$RC" "exit code"
 
 summary

@@ -62,11 +62,14 @@ no "I'll fix it in the next task."
 
 **No test may reach inside its subject.** Every assertion crosses a process
 boundary: spawn the thing, then check stdout, exit code, and files on disk.
-Nothing sources the verb under test; nothing asserts on bash internals. This
-is what lets the Go port answer to the same suite, and a test that couples to
-bash spends that option ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md);
+Nothing sources the verb under test; nothing asserts on bash internals; every
+test spawns its subject through `$FALCONET` (default `bin/falconet`), so
+`FALCONET=/other/binary bash tests/run.sh` runs the whole suite against
+another implementation. This is what lets the Go port answer to the same
+suite, and a test that couples to bash spends that option
+([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md);
 [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md) step 0 is where the suite
-stops naming `.sh` paths).
+stopped naming `.sh` paths).
 
 Tests stub `gh`, push only into bare repositories under a temp directory, and
 never touch the network, GitHub, OpenTofu, or any credential. They need bash,

@@ -13,7 +13,6 @@
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-SCRIPT="$REPO_ROOT/libexec/falconet/assemble.sh"
 
 # A plan of exactly N fixed-width lines, each independently identifiable and
 # byte-comparable, so truncation can be checked for whole-line boundaries
@@ -33,7 +32,7 @@ synthetic_plan() { # n -> path
 
 run_body() { # args... -> stdout of the script; sets RC
   local out
-  out="$("$SCRIPT" "$@" 2>"$WORK/stderr.txt")"
+  out="$("$FALCONET" assemble "$@" 2>"$WORK/stderr.txt")"
   RC=$?
   printf '%s' "$out"
 }
@@ -211,15 +210,15 @@ it "and stderr explains why"
 assert_contains "$(cat "$WORK/stderr.txt")" "over the" "stderr"
 
 it "an unknown argument exits 2"
-"$SCRIPT" --bogus >/dev/null 2>&1
+"$FALCONET" assemble --bogus >/dev/null 2>&1
 assert_eq 2 "$?" "exit code"
 
 it "a missing required argument exits 2"
-"$SCRIPT" --body "$c/body.md" --plan "$c/plan.txt" --out "$c/out2.md" >/dev/null 2>&1
+"$FALCONET" assemble --body "$c/body.md" --plan "$c/plan.txt" --out "$c/out2.md" >/dev/null 2>&1
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help is a usage error, not a written body"
-"$SCRIPT" --help >/dev/null 2>&1
+"$FALCONET" assemble --help >/dev/null 2>&1
 assert_eq 2 "$?" "exit code"
 
 summary

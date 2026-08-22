@@ -18,7 +18,6 @@
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-PARK="$REPO_ROOT/libexec/falconet/park.sh"
 
 # --- the gh stub ------------------------------------------------------------
 
@@ -47,7 +46,7 @@ park() { # out-name -- args...
   export GH_STUB_COMMENT="$WORK/$name.comment"
   : >"$GH_STUB_LOG"
   : >"$GH_STUB_COMMENT"
-  "$PARK" "$@" >/dev/null 2>&1
+  "$FALCONET" park "$@" >/dev/null 2>&1
 }
 
 export GITHUB_SERVER_URL=https://github.com
@@ -123,7 +122,7 @@ it "with no GITHUB_REPOSITORY the branch is named but not linked"
 ( unset GITHUB_REPOSITORY GITHUB_SERVER_URL
   export GH_STUB_LOG="$WORK/local.log" GH_STUB_COMMENT="$WORK/local.comment"
   : >"$GH_STUB_LOG"; : >"$GH_STUB_COMMENT"
-  "$PARK" --issue 36 --label ready-for-human --branch issue-36-thing \
+  "$FALCONET" park --issue 36 --label ready-for-human --branch issue-36-thing \
     --preamble "Parked." >/dev/null 2>&1 )
 comment="$(cat "$WORK/local.comment")"
 assert_contains "$comment" 'branch `issue-36-thing`' "comment"
@@ -157,7 +156,7 @@ git -C "$checkout/repo" commit -qm "Add Ozamataz Buckshank to the employees list
 # The step right after it pushes, and records the branch it pushed.
 : >"$checkout/github_env"
 ( cd "$checkout/repo" && GITHUB_ENV="$checkout/github_env" \
-    "$REPO_ROOT/libexec/falconet/push.sh" --branch issue-36-onboard --base-sha "$BASE_SHA" ) >/dev/null 2>&1
+    "$FALCONET" push --branch issue-36-onboard --base-sha "$BASE_SHA" ) >/dev/null 2>&1
 
 # The review verdict comes back unusable, exactly as it did on #36, and the
 # hand-over step reads PUSHED_BRANCH out of the environment the push wrote.
@@ -199,13 +198,13 @@ printf '{"labels":{"needs_info":"awaiting-reply","human":"escalated"}}\n' \
 
 it "a label the config names is accepted"
 ( cd "$cfgdir" && PATH="$WORK/bin:$PATH" GH_STUB_LOG="$WORK/cfg-gh.log" \
-    "$PARK" --issue 7 --label escalated --preamble "This needs a person." \
+    "$FALCONET" park --issue 7 --label escalated --preamble "This needs a person." \
     >/dev/null 2>&1 )
 assert_eq 0 "$?" "exit code"
 
 it "and the default label is refused once the config has replaced it"
 out=$( cd "$cfgdir" && PATH="$WORK/bin:$PATH" GH_STUB_LOG="$WORK/cfg-gh.log" \
-    "$PARK" --issue 7 --label ready-for-human --preamble x 2>&1 )
+    "$FALCONET" park --issue 7 --label ready-for-human --preamble x 2>&1 )
 rc=$?
 assert_eq 2 "$rc" "exit code"
 
@@ -214,11 +213,11 @@ assert_contains "$out" "awaiting-reply" "usage message"
 
 it "an invented label is a usage error, not a silent third terminal state"
 ( cd "$WORK" && PATH="$WORK/bin:$PATH" \
-    "$PARK" --issue 7 --label parked-somewhere --preamble x >/dev/null 2>&1 )
+    "$FALCONET" park --issue 7 --label parked-somewhere --preamble x >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help is a usage error"
-( cd "$WORK" && "$PARK" --help >/dev/null 2>&1 )
+( cd "$WORK" && "$FALCONET" park --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 summary

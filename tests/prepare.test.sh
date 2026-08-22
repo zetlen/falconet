@@ -101,7 +101,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
        TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
        TOFU_INIT_RC="${T_INIT_RC:-0}" \
        GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
-       "$REPO_ROOT/libexec/falconet/prepare.sh" --issue 42 "$@" 2>"$c/err" )"
+       "$FALCONET" prepare --issue 42 "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
   return 0
@@ -561,19 +561,19 @@ assert_contains "$(hand "$c" branch.txt)" "req-42-" "branch.txt"
 # --- usage ------------------------------------------------------------------
 
 it "a missing --issue is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/prepare.sh >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" prepare >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "an --issue that is not a number is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/prepare.sh --issue abc >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" prepare --issue abc >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "an unknown argument is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/prepare.sh --bogus >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" prepare --bogus >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/prepare.sh --help >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" prepare --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 summary

@@ -13,7 +13,6 @@
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-VERDICT="$REPO_ROOT/libexec/falconet/review-verdict.sh"
 FIXTURES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
 
 # Each case gets its own out-dir, so a file left behind by one is never
@@ -21,7 +20,7 @@ FIXTURES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
 run_verdict() { # message-source out-dir-name  -> prints the verdict word
   local out="$WORK/$2"
   mkdir -p "$out"
-  "$VERDICT" --execution-file "$1" --out-dir "$out" 2>"$out/stderr.txt"
+  "$FALCONET" review-verdict --execution-file "$1" --out-dir "$out" 2>"$out/stderr.txt"
 }
 
 # --- the incident -----------------------------------------------------------
@@ -169,19 +168,28 @@ assert_eq missing "$(run_verdict "$WORK/empty.json" empty)" "verdict"
 it "a stale pr-body.md from a previous round is cleared"
 mkdir -p "$WORK/stale"
 echo "round one's approval" >"$WORK/stale/pr-body.md"
-"$VERDICT" --execution-file "$WORK/changes.json" --out-dir "$WORK/stale" >/dev/null 2>&1
+"$FALCONET" review-verdict --execution-file "$WORK/changes.json" --out-dir "$WORK/stale" >/dev/null 2>&1
 assert_file_missing "$WORK/stale/pr-body.md"
 
 it "-h/--help is a usage error"
-"$VERDICT" --help >/dev/null 2>&1
+"$FALCONET" review-verdict --help >/dev/null 2>&1
 assert_eq 2 "$?" "exit code"
 
-# The protocol ships unwired (ADR-0002; ADR-0001 risk 9). Nothing dispatches
-# it, and the contract test in Task 11 asserts the reusable workflow names it
-# zero times. This is the half of that invariant that lives here.
-it "review-verdict is not a verb"
-out=$("$REPO_ROOT/bin/falconet" review-verdict 2>&1); rc=$?
-assert_eq 2 "$rc" "exit code"
-assert_contains "$out" "unknown verb" "dispatcher output"
+# The protocol ships unwired (ADR-0002; ADR-0001 risk 9). "Unwired" was never
+# about the dispatcher — the script was always runnable by path — it means not
+# in usage and never invoked by the workflow. contract.test.sh holds the
+# workflow half (zero references); this is the usage half. The dispatcher
+# reaches it as an unlisted subcommand, like `prompt`, since ADR-0006 D3
+# step 0, and #18 ports it the same way: "ported and unwired".
+it "review-verdict is not vocabulary: usage does not mention it"
+"$FALCONET" -h >/dev/null 2>"$WORK/usage.txt"
+assert_not_contains "$(cat "$WORK/usage.txt")" "review-verdict" "usage"
+
+it "but it is dispatched, not refused as an unknown verb"
+out=$( cd "$WORK" && "$FALCONET" review-verdict \
+         --execution-file "$WORK/changes.json" --out-dir "$WORK/dispatched" 2>&1 ); rc=$?
+assert_not_contains "$out" "unknown verb" "dispatcher output"
+[[ "$rc" -eq 2 ]] && reached=refused || reached=dispatched
+assert_eq dispatched "$reached" "exit code $rc"
 
 summary

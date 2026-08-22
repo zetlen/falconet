@@ -69,7 +69,7 @@ run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   ( cd "$c/repo" \
     && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
        GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-       "$REPO_ROOT/libexec/falconet/commit.sh" --out-dir "$c/repo/.falconet" 2>/dev/null )
+       "$FALCONET" commit --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
 run_in() { # checkout -> runs the script, stdout only
@@ -611,7 +611,7 @@ printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/com
 out="$( cd "$c/repo" \
         && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
            GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-           "$REPO_ROOT/libexec/falconet/commit.sh" 2>/dev/null )"
+           "$FALCONET" commit 2>/dev/null )"
 
 it "with no --out-dir the handoff directory defaults to .falconet"
 assert_eq "success" "$out" "outcome"
@@ -635,18 +635,18 @@ printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/c
 out="$( cd "$c/repo" \
         && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
            GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
-           "$REPO_ROOT/libexec/falconet/commit.sh" 2>/dev/null )"
+           "$FALCONET" commit 2>/dev/null )"
 
 it "and handoff_dir in config moves it, which is how a consumer migrates"
 assert_eq "success" "$out" "outcome"
 assert_eq "Add the thing" "$(cat "$c/repo/.ci-handoff/commit-subject.txt" 2>/dev/null)"
 
 it "an unknown argument exits 2"
-( cd "$REPO_ROOT" && ./libexec/falconet/commit.sh --bogus >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" commit --bogus >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help exits 2, not 0 -- help is not one of the three outcomes"
-( cd "$REPO_ROOT" && ./libexec/falconet/commit.sh --help >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" commit --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 # A pre-commit hook is a clean way to force a genuine git failure that is

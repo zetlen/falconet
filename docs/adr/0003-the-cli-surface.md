@@ -47,6 +47,13 @@ it. Two consequences, both deliberate:
 - `ci-review-verdict.sh` ships **unwired** in `libexec/` as the reference
   verdict protocol, per ADR-0002. No verb, no caller.
 
+  > **Amended during execution (2026-08-22).** "No verb" meant no dispatcher
+  > entry for a script anyone could already run by path. A single binary has
+  > no path to run by, so unwired now means absent from usage and referenced
+  > zero times by the workflow — `review-verdict.test.sh` holds the usage
+  > half and `contract.test.sh` the workflow half — and the dispatcher reaches
+  > it as an unlisted subcommand, like `prompt`, per ADR-0006 D3 step 0.
+
 The stage-level criterion yields five verbs. The sixth, `prepare`, is stage
 1's scripted half — in-flight check, claim, ack, `request.md`, branch,
 `BASE_SHA`, clean-tree assertion, baseline plan — which in the original lived

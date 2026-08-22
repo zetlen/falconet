@@ -17,6 +17,14 @@ CURRENT_TEST=""
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_ROOT
 
+# The subject. Every test spawns verbs through this and nothing else, so the
+# suite can be pointed at another implementation of the same contract:
+#
+#   FALCONET=/path/to/binary bash tests/run.sh
+#
+FALCONET="${FALCONET:-$REPO_ROOT/bin/falconet}"
+export FALCONET
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

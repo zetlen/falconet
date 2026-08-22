@@ -20,8 +20,9 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 
-# A checkout that looks like the pipeline's: the script under test lives in
-# libexec/falconet/ inside it, because that is how it finds the repository root.
+# A checkout that looks like the pipeline's: a bare remote, a clone with one
+# base commit on main, and the work branch checked out. The verb finds the
+# repository from the working directory, so every case cds into it.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
   mkdir -p "$base"
@@ -46,12 +47,12 @@ commit_in() { # checkout message
 
 push_in() { # checkout [extra args...] -> runs the script, output on stdout
   local c="$1"; shift
-  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" "$@" 2>&1 )
+  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$FALCONET" push "$@" 2>&1 )
 }
 
 push_stdout_in() { # checkout [extra args...] -> stdout ONLY, stderr discarded
   local c="$1"; shift
-  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" "$@" 2>/dev/null )
+  ( cd "$c/repo" && GITHUB_ENV="$c/github_env" "$FALCONET" push "$@" 2>/dev/null )
 }
 
 remote_tip() { # checkout -> subject of the remote branch tip, or empty
@@ -167,7 +168,7 @@ git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1
 it "the origin URL is rebuilt without any credential in it"
 ( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
+    GITHUB_ENV="$c/github_env" "$FALCONET" push \
       --branch issue-1-thing --base-sha "$base_sha" >/dev/null 2>&1 )
 assert_eq "https://127.0.0.1:1/o/r.git" \
   "$(git -C "$c/repo" remote get-url origin)" "origin URL"
@@ -182,7 +183,7 @@ assert_not_contains "$config" "fresh-token" ".git/config"
 it "an unreachable remote fails the step rather than passing quietly"
 out="$( cd "$c/repo" && GH_TOKEN=fresh-token \
     GITHUB_SERVER_URL=https://127.0.0.1:1 GITHUB_REPOSITORY=o/r \
-    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
+    GITHUB_ENV="$c/github_env" "$FALCONET" push \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 assert_contains "$out" "::error::could not push" "output"
 
@@ -206,9 +207,22 @@ base_sha="$(git -C "$c/repo" rev-parse HEAD)"
 : >"$c/github_env"
 commit_in "$c" "work to push"
 git -C "$c/repo" remote set-url origin "https://x-access-token:revoked@127.0.0.1:1/o/r.git"
-out="$( cd "$c/repo" && GH_TOKEN=fake-token-value \
+# A git that writes its argv down and then gets out of the way. What the verb
+# hands git on the command line is the evidence for the helper cases below,
+# and a recording stub is the only way to see it from outside the process —
+# the suite is not allowed to read the verb's source instead.
+REAL_GIT="$(command -v git)"
+mkdir -p "$c/stubbin"
+cat >"$c/stubbin/git" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$c/git-argv.txt"
+printf -- '--\n' >>"$c/git-argv.txt"
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$c/stubbin/git"
+out="$( cd "$c/repo" && PATH="$c/stubbin:$PATH" GH_TOKEN=fake-token-value \
     GITHUB_SERVER_URL="$c" GITHUB_REPOSITORY=remote \
-    GITHUB_ENV="$c/github_env" "$REPO_ROOT/libexec/falconet/push.sh" \
+    GITHUB_ENV="$c/github_env" "$FALCONET" push \
       --branch issue-1-thing --base-sha "$base_sha" 2>&1 )"
 
 it "the branch lands with the helper flags in place"
@@ -229,20 +243,23 @@ assert_not_contains "$out" "fake-token-value" "output"
 
 # --- the helper string itself ------------------------------------------------
 #
-# Taken out of the shipped script rather than copied here, so a change to the
-# quoting is a failing test and not a stale duplicate. git runs a `!`-prefixed
+# Taken out of git's recorded argv rather than copied here, so a change to the
+# helper is a failing test and not a stale duplicate. git runs a `!`-prefixed
 # helper through a shell with the operation appended, which is what the
 # `"$@"` reproduces.
 #
 # The property under test is WHEN $GH_TOKEN expands: single-quoted in the
-# script, it is still the literal string `$GH_TOKEN` in this process's argv,
-# and only the shell git spawns turns it into the value. Double quotes there
-# would put the token on the command line, where /proc/<pid>/cmdline shows it
-# to anything else on the runner.
+# verb, it is still the literal string `$GH_TOKEN` in git's argv, and only
+# the shell git spawns for the helper turns it into the value. Double quotes
+# there would put the token on the command line, where /proc/<pid>/cmdline
+# shows it to anything else on the runner. Until ADR-0006 D3 step 0 these
+# were the suite's two cases that read their subject's SOURCE; the recording
+# git above is what let them be rewritten rather than dropped.
+
+argv="$(cat "$c/git-argv.txt")"
 
 it "the helper hands git a password out of the environment, not out of argv"
-helper="$(grep -o "credential\.helper=!f()[^']*" \
-  "$REPO_ROOT/libexec/falconet/push.sh" | head -1)"
+helper="$(grep '^credential\.helper=!' "$c/git-argv.txt" | head -1)"
 body="${helper#credential.helper=!}"
 out="$(GH_TOKEN=fake-token-value sh -c "$body \"\$@\"" helper get 2>&1)"
 assert_contains "$out" "password=fake-token-value" "helper output"
@@ -250,28 +267,22 @@ assert_contains "$out" "password=fake-token-value" "helper output"
 it "and identifies itself as x-access-token"
 assert_contains "$out" "username=x-access-token" "helper output"
 
-# This one and the helper-extraction above are the suite's only two cases that
-# read their subject's SOURCE rather than spawning it (AGENTS.md, invariant 9).
-# The property is that a token never reaches argv, where /proc/<pid>/cmdline
-# would show it to anything else on the runner — and "the helper is written
-# single-quoted" is not observable from outside the process. They are the
-# deliberate exception, and a port rewrites them rather than dropping them.
-it "and the script writes that helper single-quoted, so nothing expands early"
-assert_contains "$(cat "$REPO_ROOT/libexec/falconet/push.sh")" \
-  "-c 'credential.helper=!" "the script source"
+it "and the token reached git unexpanded: \$GH_TOKEN is in argv, its value is not"
+assert_contains "$argv" 'password=$GH_TOKEN' "git argv"
+assert_not_contains "$argv" "fake-token-value" "git argv"
 
 # --- usage ------------------------------------------------------------------
 
 it "-h/--help is a usage error, not a successful push"
-( cd "$REPO_ROOT" && ./libexec/falconet/push.sh --help >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" push --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "and an unknown argument is too"
-( cd "$REPO_ROOT" && ./libexec/falconet/push.sh --bogus >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" push --bogus >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "a missing --branch is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/push.sh >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" push >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 # --- stdout belongs to the verbs that decide something ----------------------

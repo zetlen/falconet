@@ -106,7 +106,7 @@ v() { # checkout base [extra args...] -> sets OUT ERR RC
        TOFU_FAIL_VALIDATE="${FAIL_VALIDATE:-}" \
        TOFU_FAIL_PLAN="${FAIL_PLAN:-}" \
        GITHUB_ENV="${GH_ENV:-}" \
-       "$REPO_ROOT/libexec/falconet/validate.sh" --base "$b" "$@" 2>"$c/err" )"
+       "$FALCONET" validate --base "$b" "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
   return 0
@@ -406,15 +406,15 @@ assert_contains "$(cat "$c/repo/ci(handoff)/validation-failure.txt" 2>/dev/null)
 # --- usage ------------------------------------------------------------------
 
 it "a missing --base is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/validate.sh >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" validate >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "an unknown argument is a usage error"
-( cd "$REPO_ROOT" && ./libexec/falconet/validate.sh --bogus >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" validate --bogus >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help is 2, because for this verb 0 would mean validation passed"
-( cd "$REPO_ROOT" && ./libexec/falconet/validate.sh --help >/dev/null 2>&1 )
+( cd "$REPO_ROOT" && "$FALCONET" validate --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 summary

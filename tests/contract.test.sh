@@ -409,11 +409,7 @@ assert_contains "$action" 'echo "outcome<<FALCONET_OUTCOME_EOF"' "action"
 it "and closes it, because an unterminated heredoc swallows the rest of the file"
 assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
 
-it "push writes nothing to stdout, since it decides nothing"
-# The contract the README's verb table states. Guarded here as well as in
-# push.test.sh because this is where the coupling lives: it is the wrapper
-# that makes a verb's stdout load-bearing.
-assert_eq "" "$(grep -nE '^[[:space:]]*echo ' "$REPO_ROOT/libexec/falconet/push.sh" | grep -v '>&2' || true)" \
-  "unredirected echoes in push.sh"
+# push's silence on stdout is asserted in push.test.sh, by running it. The grep
+# of push.sh's source that used to sit here went with ADR-0006 D3 step 0.
 
 summary
