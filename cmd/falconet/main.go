@@ -282,7 +282,10 @@ flags:
 			fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
 			return 1
 		}
-		handoff.GitHubEnvAppend(kv)
+		if err := handoff.GitHubEnvAppend(kv); err != nil {
+			fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
+			return 1
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "config: unknown operation '%s'\n", op)
 		return configUsage()

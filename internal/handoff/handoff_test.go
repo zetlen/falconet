@@ -56,23 +56,62 @@ func TestGitHubEnvAppend(t *testing.T) {
 	dir := t.TempDir()
 	t.Run("unset: a silent no-op", func(t *testing.T) {
 		t.Setenv("GITHUB_ENV", "")
-		GitHubEnvAppend("BRANCH=x")
+		if err := GitHubEnvAppend("BRANCH=x"); err != nil {
+			t.Error(err)
+		}
 	})
 	t.Run("unwritable: a silent no-op", func(t *testing.T) {
 		t.Setenv("GITHUB_ENV", filepath.Join(dir, "no-such-dir", "gh_env"))
-		GitHubEnvAppend("BRANCH=x")
+		if err := GitHubEnvAppend("BRANCH=x"); err != nil {
+			t.Error(err)
+		}
 	})
 	t.Run("writable: the lines land, appended", func(t *testing.T) {
 		path := filepath.Join(dir, "gh_env")
 		t.Setenv("GITHUB_ENV", path)
-		GitHubEnvAppend("BRANCH=issue-1-x")
-		GitHubEnvAppend("A=1", "B=2")
+		if err := GitHubEnvAppend("BRANCH=issue-1-x"); err != nil {
+			t.Fatal(err)
+		}
+		if err := GitHubEnvAppend("A=1", "B=2"); err != nil {
+			t.Fatal(err)
+		}
 		got, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(got) != "BRANCH=issue-1-x\nA=1\nB=2\n" {
 			t.Errorf("got %q", got)
+		}
+	})
+
+	// A value is one line. Actions parses $GITHUB_ENV line by line, so a
+	// line break inside a value is further variables in every later step —
+	// and the values that travel this way are branch names, from issue
+	// titles. Refused before anything is written, writable or not.
+	refused := []struct{ name, line string }{
+		{"a newline in the value", "BRANCH=issue-1-x\nEVIL=1"},
+		{"a carriage return in the value", "BRANCH=issue-1-x\rEVIL=1"},
+		{"a key that is not a variable name", "BRANCH NAME=x"},
+		{"a key with a newline", "BRANCH\nEVIL=x"},
+		{"no = at all", "BRANCH"},
+		{"an empty key", "=x"},
+	}
+	for _, c := range refused {
+		t.Run("refused: "+c.name, func(t *testing.T) {
+			path := filepath.Join(dir, "refused_"+c.name)
+			t.Setenv("GITHUB_ENV", path)
+			if err := GitHubEnvAppend("OK=1", c.line); err == nil {
+				t.Fatal("expected an error")
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("nothing may be written when any line is refused; %s exists", path)
+			}
+		})
+	}
+	t.Run("an empty value is fine: clearing a variable is a real thing to say", func(t *testing.T) {
+		t.Setenv("GITHUB_ENV", filepath.Join(dir, "empty_value"))
+		if err := GitHubEnvAppend("PUSHED_BRANCH="); err != nil {
+			t.Error(err)
 		}
 	})
 }

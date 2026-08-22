@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/zetlen/falconet/internal/config"
@@ -47,16 +48,51 @@ func Init(explicit string, cfg *config.Config, cwd string) (string, error) {
 // and it can be written, and is a silent no-op otherwise. Handoff FILES are
 // written always; this is only the CI mirror of them. A verb that made a
 // decision must not fail because it happens to be running on a laptop —
-// which is why nothing here returns an error.
-func GitHubEnvAppend(lines ...string) {
+// which is why a missing or unwritable $GITHUB_ENV is not an error.
+//
+// A malformed line IS an error, and is refused before anything is written.
+// Actions reads $GITHUB_ENV line by line, so a value carrying a newline would
+// become further KEY=value lines: arbitrary environment in every later step
+// of the job, chosen by whoever chose the value — and the values that travel
+// this way are branch names, which come from issue titles. The bash verbs
+// slugify upstream (prepare.sh); this refuses here as well, because the one
+// function that writes to $GITHUB_ENV must not depend on every future caller
+// remembering to.
+func GitHubEnvAppend(lines ...string) error {
+	for _, line := range lines {
+		if err := checkLine(line); err != nil {
+			return err
+		}
+	}
 	path := os.Getenv("GITHUB_ENV")
 	if path == "" {
-		return
+		return nil
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
-		return
+		return nil
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.WriteString(strings.Join(lines, "\n") + "\n")
+	return nil
+}
+
+// envKey is what Actions accepts as a variable name, and nothing else: an
+// identifier. A key never comes from input, so a bad one is a bug in a
+// caller, and is still refused rather than written.
+var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func checkLine(line string) error {
+	key, value, ok := strings.Cut(line, "=")
+	if !ok {
+		return fmt.Errorf("refusing to write to $GITHUB_ENV: %q is not KEY=value", line)
+	}
+	if !envKey.MatchString(key) {
+		return fmt.Errorf("refusing to write to $GITHUB_ENV: %q is not a variable name", key)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("refusing to write to $GITHUB_ENV: the value of %s contains a line break, "+
+			"which would become further variables in every later step", key)
+	}
+	return nil
 }
