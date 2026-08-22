@@ -26,7 +26,7 @@ export GIT_CONFIG_SYSTEM=/dev/null
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
   mkdir -p "$base"
-  git init --bare -q "$base/remote.git"
+  git init --bare -q -b main "$base/remote.git"
   git init -q -b main "$base/repo"
   git -C "$base/repo" config user.email ci@example.invalid
   git -C "$base/repo" config user.name ci
