@@ -206,6 +206,54 @@ jobs:
           path: .falconet/
           retention-days: 7
 
+      # The agent job cannot check the repository out for itself: it holds no
+      # token, and a private repository answers a tokenless clone with
+      # "Repository not found". The first consumer's first canary died exactly
+      # there. So gate — which has a token and has already used it — hands the
+      # checkout over as an artifact, and the boundary stays what it says it
+      # is rather than being traded away for a clone.
+      #
+      # A TARBALL OF THE CHECKOUT, not a bundle. `git bundle create` from a
+      # depth-1 clone exits 0 and `git bundle verify` calls the result "a
+      # complete history"; cloning it then fails on the first traversal —
+      # `error: Could not read <parent>` — because the tip's parent was never
+      # fetched and nothing marks the clone shallow. A tar of the working tree
+      # WITH its `.git` arrives as precisely the shallow clone gate had, which
+      # is what `actions/checkout` would have produced anyway. (The range
+      # bundle from implement to publish is a different thing and is sound:
+      # both ends already hold the base commit, so the bundle records it as a
+      # prerequisite instead of pretending to carry it.)
+      #
+      # The credential comes out FIRST. checkout persists it into .git/config
+      # as an extraheader, prepare needs it while it is running — `git
+      # ls-remote origin` is how the in-flight branch check sees the remote —
+      # and by this step prepare is finished with it. Shipping it would hand
+      # the agent job a push-capable token inside a directory it can read,
+      # which is the one thing this whole job graph is built to prevent. The
+      # grep is the fail-closed half: if a future checkout writes the
+      # credential somewhere else in .git, nothing ships at all.
+      - name: Hand the checkout to the agent job, without the credential
+        id: source
+        if: steps.prepare.outputs.outcome == 'ready'
+        run: |
+          set -euo pipefail
+          git config --local --unset-all "http.${GITHUB_SERVER_URL}/.extraheader" || true
+          git remote remove origin || true
+          if grep -rIl -e extraheader -e AUTHORIZATION .git/config .git/config.worktree 2>/dev/null; then
+            echo "refusing to ship a checkout that still authenticates" >&2
+            exit 1
+          fi
+          tar -czf "$RUNNER_TEMP/source.tgz" \
+            --exclude=./.falconet-tool --exclude=./.falconet -C . .
+          echo "bytes=$(wc -c <"$RUNNER_TEMP/source.tgz")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.outcome == 'ready'
+        with:
+          name: source-gate
+          path: ${{ runner.temp }}/source.tgz
+          retention-days: 7
+
   # =========================================================================
   # implement — judgment, and nothing else
   # =========================================================================
@@ -227,12 +275,9 @@ jobs:
     outputs:
       outcome: ${{ steps.commit.outputs.outcome }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.gate.outputs.base_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
+      # falconet itself is public, so this clone needs no permission. The
+      # repository being worked on is the one that cannot be cloned from here
+      # — see gate's hand-over step.
       - uses: actions/checkout@v4
         with:
           repository: zetlen/falconet
@@ -240,9 +285,34 @@ jobs:
           path: .falconet-tool
           persist-credentials: false
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-gate
+          path: ${{ runner.temp }}/source
+
+      - name: Take the checkout the gate prepared
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/source/source.tgz" -C .
+          git rev-parse --is-inside-work-tree >/dev/null \
+            || { echo "the shipped source is not a git repository" >&2; exit 1; }
+          # Fail closed rather than run the agent against a tree that is not
+          # the one the gate planned: every guard downstream compares against
+          # this commit.
+          test "$(git rev-parse HEAD)" = "$BASE_SHA" \
+            || { echo "shipped HEAD is not the base the gate recorded" >&2; exit 1; }
+          # The clone that arrived has no remote — that is the point — so
+          # there is nothing here to push to even if something tried.
+          test -z "$(git remote)" \
+            || { echo "the shipped checkout still has a remote" >&2; exit 1; }
+        env:
+          BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+
       # As in gate: commit reads `git status --untracked-files=all`, and the
       # tool and the handoff it is about to download are the two untracked
-      # paths that are not the agent's.
+      # paths that are not the agent's. The shipped .git already carries these
+      # lines; written again because a checkout that stops being tarred with
+      # its .git would otherwise take the exclusion with it silently.
       - name: Keep the tool and the handoff out of the working tree
         run: |
           mkdir -p .git/info
@@ -253,10 +323,13 @@ jobs:
           name: handoff-gate
           path: .falconet
 
-      - name: Open the working branch
+      # prepare already opened this branch, and the tar carries it. The
+      # fallback is for a handover that ever arrives detached; the identity is
+      # set here because the commit is made here.
+      - name: Take the working branch
         run: |
           set -euo pipefail
-          git switch -c "$BRANCH"
+          git switch -q "$BRANCH" 2>/dev/null || git switch -qc "$BRANCH"
           git config user.name  "falconet[bot]"
           git config user.email "falconet[bot]@users.noreply.github.com"
         env:

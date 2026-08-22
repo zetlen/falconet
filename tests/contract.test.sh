@@ -281,4 +281,67 @@ for perm in contents issues pull-requests; do
   assert_eq "$want" "$got" "step 8's $perm grant"
 done
 
+# --- the agent job is handed its source, because it cannot fetch it ---------
+#
+# The first consumer is a PRIVATE repository, and the first canary that got
+# as far as a job died in `implement`: `permissions: {}` means a GITHUB_TOKEN
+# with no `contents: read`, and a private repository answers that clone with
+# "Repository not found". A public consumer would never have shown it.
+#
+# The fix keeps the boundary and moves the fetch: gate, which already holds a
+# token, ships its checkout as an artifact. So these cases guard the two
+# halves that make that safe — the agent still clones nothing of the
+# consumer's, and what it receives cannot authenticate as anybody.
+
+gate_job="$(awk '/^  gate:/ { f = 1 } /^  implement:/ { f = 0 } f' "$WF")"
+
+it "the agent job clones exactly one repository"
+assert_eq 1 "$(grep -c 'uses: actions/checkout' <<<"$implement_job")" \
+  "checkouts in the implement job"
+
+it "and it is falconet, which is public, never the repository being worked on"
+assert_contains "$implement_job" "repository: zetlen/falconet" "the implement job's checkout"
+
+it "the agent job takes the working tree from the gate's artifact"
+assert_contains "$implement_job" "name: source-gate" "the implement job"
+
+it "and refuses a tree whose HEAD is not the base the gate recorded"
+# Every guard downstream compares against that commit. A silent mismatch
+# would have the agent editing one tree and the plan describing another.
+assert_contains "$implement_job" 'shipped HEAD is not the base the gate recorded' \
+  "the implement job"
+
+it "and refuses one that still has a remote to push to"
+assert_contains "$implement_job" 'the shipped checkout still has a remote' "the implement job"
+
+it "the gate strips the credential before it archives anything"
+# checkout persists it into .git/config as an extraheader; prepare needs it
+# while `git ls-remote origin` runs and not one step longer. Shipping it
+# would put a push-capable token inside the one job that must not have one.
+unset_at="$(grep -n 'unset-all' <<<"$gate_job" | head -1 | cut -d: -f1)"
+tar_at="$(grep -n 'tar -czf' <<<"$gate_job" | head -1 | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$unset_at" && -n "$tar_at" && "$unset_at" -lt "$tar_at" ]] && echo true || echo false)" \
+  "the unset ($unset_at) comes before the tar ($tar_at)"
+
+it "and fails closed if anything in .git still authenticates"
+assert_contains "$gate_job" "refusing to ship a checkout that still authenticates" "the gate job"
+
+it "the archive carries neither the tool nor the handoff"
+assert_contains "$gate_job" "--exclude=./.falconet-tool --exclude=./.falconet" "the gate's tar"
+
+it "nothing bundles a whole history, which from a shallow clone is a broken bundle"
+# `git bundle create <shallow> HEAD` exits 0 and `git bundle verify` calls it
+# "a complete history"; the clone then dies on the first traversal, because
+# the tip's parent was never fetched and nothing marks the result shallow.
+# The one bundle here is a RANGE, whose prerequisite both ends already hold.
+# Comments stripped first: the prose above this file's tar step says
+# "git bundle create" while explaining why it is not used.
+wf_code="$(grep -v '^[[:space:]]*#' "$WF")"
+assert_eq 1 "$(grep -c 'git bundle create' <<<"$wf_code")" "git bundle create calls"
+
+it "and the one bundle there is names a range, whose base both ends hold"
+# Folded onto one line: the range sits on the continuation.
+assert_contains "$(grep -A2 'git bundle create' <<<"$wf_code" | tr '\n' ' ')" \
+  '..HEAD' "the bundle's ref argument"
+
 summary
