@@ -49,9 +49,11 @@ thing.
   reference verdict protocol. Any future review harness must clear the bar the
   original set: an independent, uncontaminated read of diff, commit message
   and plan before a human is asked to look.
-- **Do not port to Bun yet.** Reconsidered and reaffirmed in
-  [ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md), which also names the
-  two things that would justify reopening it.
+- **The language is Go, and the port has an order.** Decided in
+  [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md), which supersedes the
+  Bun strangler ADR-0002 D1 chose and ADR-0004 reaffirmed. Bun and Rust were
+  both weighed there, with reasons; do not re-propose either. The port begins
+  with the test suite and with setup, not with a verb.
 
 ## Tests
 
@@ -61,8 +63,10 @@ no "I'll fix it in the next task."
 **No test may reach inside its subject.** Every assertion crosses a process
 boundary: spawn the thing, then check stdout, exit code, and files on disk.
 Nothing sources the verb under test; nothing asserts on bash internals. This
-is what keeps the deferred Bun port cheap, and a test that couples to bash
-spends that option ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)).
+is what lets the Go port answer to the same suite, and a test that couples to
+bash spends that option ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md);
+[ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md) step 0 is where the suite
+stops naming `.sh` paths).
 
 Tests stub `gh`, push only into bare repositories under a temp directory, and
 never touch the network, GitHub, OpenTofu, or any credential. They need bash,

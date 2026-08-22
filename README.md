@@ -506,10 +506,10 @@ off-the-shelf option.
 | `action.yml` + `.github/workflows/falconet.yml` | written, wiring invariants tested, never run |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
 | `prompts/` | extracted from the provenance; the standing-facts block is the origin's |
-| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code |
+| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code, [0006](docs/adr/0006-the-rewrite-is-in-go.md) Go, and why |
 | `docs/provenance/` — the retired orchestrator | reference only |
 | A live run | **yes.** 2026-08-21, `zetlen/wayfinders-infra` issue #106 → PR #108: acknowledgment inside a minute, one agent pass, every guard, a real plan, and a pull request carrying it in full — authored by the App, labelled `needs-plan-review`, and the consumer's own CI ran on it, which is what the App credential was for. |
-| Bun rewrite | deferred on purpose ([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md)) |
+| Rewrite | decided — Go, setup first ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)); not started |
 
 The port from stage-shaped scripts to a coherent CLI is done; [the plan it
 followed](docs/adr/pre-execution-plan.md) records what changed and what was

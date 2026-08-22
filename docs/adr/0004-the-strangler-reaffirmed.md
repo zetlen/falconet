@@ -1,6 +1,6 @@
 # ADR-0004 — The Bun strangler, reconsidered and reaffirmed
 
-**Status:** Accepted · 2026-08-20
+**Status:** Superseded by [ADR-0006](0006-the-rewrite-is-in-go.md) · 2026-08-22
 **Reaffirms:** [ADR-0002](0002-extract-the-pipeline-into-falconet.md) D1
 **Supersedes:** nothing
 
