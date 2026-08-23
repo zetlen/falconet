@@ -707,8 +707,14 @@ jobs:
       # sentence, and the action splits args on whitespace. No branch — this
       # job does not know whether one was pushed, and a wrong link is worse
       # than none — so --branch is the empty string, which pause accepts.
+      # `!cancelled()` and not `always()`: a check that FAILED — gh could not
+      # read the issue — leaves `terminal` unset, and this runs. The issue
+      # may turn out to be closed, and a comment lands on a closed issue; the
+      # alternative is a red step in the Actions tab and nothing on the
+      # issue, which is the silence this job exists to prevent. The one
+      # thing that must not pause is a cancelled run, which a person chose.
       - name: Pause the issue, so this run is not its last word
-        if: steps.check.outputs.terminal != 'true'
+        if: "!cancelled() && steps.check.outputs.terminal != 'true'"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE: ${{ inputs.issue }}

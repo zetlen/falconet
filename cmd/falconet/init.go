@@ -62,9 +62,11 @@ Modes:
     --config           the config file, instead of .github/falconet.json
     --plan             the stacks a human will apply from the pull request
     --validate-only    every other directory with .tf in it. Both are
-                       comma-separated, and every discovered stack must be
-                       named in one of them — unless stdin is a terminal,
-                       where init asks per stack
+                       comma-separated. A discovered stack named in neither
+                       goes to validate_only — the README's rule, and the
+                       safe one, since a validate-only stack is never
+                       planned — with a note saying so; at a terminal, init
+                       asks per stack instead
     --plan-env-file    a JSON object of the variables the planned stacks
                        need, kept OUTSIDE the repository; sealed as
                        FALCONET_PLAN_ENV (step 5)
@@ -240,9 +242,13 @@ func runInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "falconet: cannot determine the working directory: %v\n", err)
 		return 1
 	}
-	// Every file the caller names resolves against where the caller stands,
-	// before the cd to the root; config resolves at the root after it.
-	for _, p := range []*string{&f.explicit, &f.planEnvFile, &f.appKey} {
+	// The files the caller hands in — the plan-env object, the App's PEM —
+	// resolve against where the caller stands, before the cd to the root. A
+	// relative --config does NOT: it resolves from the repository root after
+	// the cd, as it does for every other verb (the rule 35c98e6 set), so the
+	// config init installs against is the one doctor then confirms and the
+	// pipeline's verbs read.
+	for _, p := range []*string{&f.planEnvFile, &f.appKey} {
 		if *p != "" && !filepath.IsAbs(*p) {
 			*p = filepath.Join(cwd, *p)
 		}
@@ -443,7 +449,7 @@ func runInit(args []string) int {
 		say(doctor.NoToken(1, "the repository, its issues, its Actions policy, its secrets and its labels"))
 	} else {
 		client = github.New(github.APIURLFromEnv(), token)
-		header, err := client.Request("GET", "/repos/"+owner+"/"+name, nil, &repository)
+		header, err := client.Request("GET", github.RepoPath(owner, name, ""), nil, &repository)
 		if header != nil {
 			if note, has := doctor.ClassicToken(header.Get("X-OAuth-Scopes")); has {
 				say(note)
@@ -707,9 +713,17 @@ func runInit(args []string) int {
 			if rc := sealApp(f.appID, appKey); rc != 0 {
 				return rc
 			}
-		case hasApp && (!f.replace || f.noApp):
+		case hasApp && (!f.replace || f.noApp || f.appName == ""):
 			exists(3, "FALCONET_APP_ID")
 			exists(3, "FALCONET_APP_PRIVATE_KEY")
+			if f.replace && !f.noApp {
+				// --replace-secrets alone would register a SECOND App on the
+				// account and orphan the first — GitHub does not delete Apps
+				// through this flow — so a new one is registered over
+				// existing secrets only when it is named on purpose.
+				say(doctor.Line{Status: doctor.Note, Step: 3,
+					Text: "--replace-secrets keeps the App: to register a new one over these secrets, name it with --app-name"})
+			}
 		case f.noApp:
 			say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (--no-app)"})
 			left.add(leftApp, setup.LeftApp)
@@ -744,7 +758,18 @@ func runInit(args []string) int {
 	// check, as doctor makes it, so an entry in .git/info/exclude or a
 	// broader pattern counts; the line is appended only when it does not.
 	entry := setup.IgnoreEntry(cfg.Schema.HandoffDir)
-	switch rc, _ := checkIgnore(cfg.Schema.HandoffDir); rc {
+	rc, said := checkIgnore(cfg.Schema.HandoffDir)
+	if !underRoot(root, cfg.Schema.HandoffDir) {
+		// An absolute handoff_dir is honoured by every verb (handoff.Resolve
+		// keeps it as given), git refuses to check-ignore a path outside
+		// the work tree, and there is nothing to ignore there anyway. doctor
+		// says the same; init must not die on a configuration doctor
+		// accepts — least of all after the labels and secrets are written.
+		rc = -2
+	}
+	switch rc {
+	case -2:
+		say(doctor.HandoffOutside(cfg.Schema.HandoffDir))
 	case 0:
 		say(doctor.HandoffIgnored(cfg.Schema.HandoffDir, true))
 	case 1:
@@ -766,7 +791,7 @@ func runInit(args []string) int {
 			left.add(leftFix, setup.LeftFix(doctor.HandoffIgnored(cfg.Schema.HandoffDir, false)))
 		}
 	default:
-		fmt.Fprintln(os.Stderr, "init: git check-ignore failed")
+		fmt.Fprintf(os.Stderr, "init: git check-ignore: %s\n", said)
 		return 1
 	}
 

@@ -175,11 +175,13 @@ func (e *UnknownStackError) Error() string {
 		e.Flag, e.Name, strings.Join(e.Discovered, ", "))
 }
 
-// UnsortedError is a discovered stack that neither flag named: init cannot
-// know whether a human will apply it, and guessing `plan` would plan a
-// stack with no credentials while guessing `validate_only` would hide a
-// stack from the pull request. The verb asks when it can, and refuses
-// otherwise.
+// UnsortedError is a discovered stack that neither flag named. The verb
+// resolves it: at a terminal it asks per stack; otherwise it files the stack
+// under validate_only — the README's own rule for "every other directory
+// with .tf in it", and the safe reading, since a validate-only stack is
+// never planned and needs no credential — and prints a note naming it, so a
+// person who meant --plan sees it. Guessing `plan` would plan a stack with
+// no credentials; this error is the signal, not a refusal.
 type UnsortedError struct {
 	Names []string
 }

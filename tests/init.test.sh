@@ -745,12 +745,37 @@ c="$(new_checkout alt)"
 printf '{"stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/alt.json"
 i "$c" "$WORK/empty" --config ../alt.json
 
-it "--config names the config, relative to where the caller stands, and step 7 writes nothing"
+it "--config names the config, relative to the repository root as every verb's is, and step 7 writes nothing"
 assert_eq 0 "$RC" "exit code"
-assert_line "$OUT" "ok           7. $c/alt.json parses"
+assert_line "$OUT" "ok           7. ../alt.json parses"
 assert_file_missing "$c/repo/.github/falconet.json"
 assert_eq ".github/workflows/infra-requests.yml
 .gitignore" "$(committed_files "$c")" "committed paths"
+
+# The rule, held from a subdirectory, where it differs from "where the caller
+# stands": ../alt.json still means the file beside the root.
+OUT="$( cd "$c/repo/dns" && "$FALCONET" init --config ../alt.json <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+it "and from a subdirectory the same relative --config names the same file"
+assert_eq 0 "$RC" "exit code"
+assert_line "$OUT" "ok           7. ../alt.json parses"
+
+# --- a handoff_dir outside the tree ---------------------------------------------------------
+#
+# handoff.Resolve keeps an absolute handoff_dir as given, so it is a
+# configuration every verb honours; git refuses to check-ignore a path
+# outside the work tree. doctor notes it; init must not die on it — least of
+# all after the labels and secrets are written.
+
+c="$(new_checkout outside)"
+mkdir -p "$c/repo/.github"
+printf '{"handoff_dir":"/tmp/falconet-elsewhere-init","stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
+i "$c" "$WORK/empty"
+
+it "a handoff_dir outside the tree has nothing to gitignore: a note, and the run goes on"
+assert_eq 0 "$RC" "exit code"
+assert_line "$OUT" "note         2. /tmp/falconet-elsewhere-init is outside the repository, so nothing needs ignoring"
+assert_eq ".github/workflows/infra-requests.yml" "$(committed_files "$c")" "committed paths"
 
 # --- existing files: step 2 and step 8 ------------------------------------------------------
 

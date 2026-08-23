@@ -478,4 +478,24 @@ assert_contains "$("$FALCONET" init -h 2>&1)" "--app-timeout" "usage"
 assert_contains "$("$FALCONET" init -h 2>&1)" "--no-app" "usage"
 assert_contains "$("$FALCONET" init -h 2>&1)" "--no-browser" "usage"
 
+
+# --- --replace-secrets alone keeps the App -----------------------------------------------
+#
+# GitHub does not delete Apps through this flow, so registering a new one over
+# existing secrets orphans the first. It happens only when the new App is named.
+
+c="$(new_checkout keepapp)"
+script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":2,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"}]}}'
+: >"$FAKE_GITHUB/requests.log"; : >"$FAKE_GITHUB/requests.jsonl"
+OUT="$( cd "$c/repo" && "$FALCONET" init --replace-secrets --no-browser --app-timeout 3s --plan dns --validate-only workspace <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+
+it "--replace-secrets with the App's secrets present and no --app-name keeps the App, and says how to replace it"
+assert_eq 0 "$RC" "exit code"
+assert_line "$OUT" "ok           3. secret FALCONET_APP_ID exists (not replaced; --replace-secrets would)"
+assert_line "$OUT" "note         3. --replace-secrets keeps the App: to register a new one over these secrets, name it with --app-name"
+
+it "and registers nothing"
+assert_eq 0 "$(grep -c "^POST $conversion" "$FAKE_GITHUB/requests.log")" "conversion POSTs"
+assert_eq 0 "$(grep -c '^PUT .*/FALCONET_APP_' "$FAKE_GITHUB/requests.log")" "App secret PUTs"
+
 summary

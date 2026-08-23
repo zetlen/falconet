@@ -141,8 +141,16 @@ assert_contains "$wf" "if: always() && needs.gate.outputs.outcome == 'ready'" "w
 # guess.
 it "the containment job decides first, and its pause is conditioned on the decision"
 assert_contains "$contain_job" "id: check" "contain job"
-assert_contains "$contain_job" "if: steps.check.outputs.terminal != 'true'" "contain job"
-assert_eq 1 "$(grep -c "if: steps.check.outputs.terminal != 'true'" <<<"$contain_job")" "conditioned pauses"
+assert_contains "$contain_job" "if: \"!cancelled() && steps.check.outputs.terminal != 'true'\"" "contain job"
+assert_eq 1 "$(grep -c "steps.check.outputs.terminal != 'true'" <<<"$contain_job")" "conditioned pauses"
+
+# A check that failed — gh could not read the issue — leaves the decision
+# unset, and the pause must still run: the alternative is a red step and
+# nothing on the issue. `always()` would also pause a cancelled run, which a
+# person chose; `!cancelled()` is the line between the two.
+it "and the pause runs after a failed check too, but never after a cancellation"
+assert_contains "$contain_job" '!cancelled() &&' "contain job"
+assert_not_contains "$contain_job" 'if: always() && steps.check' "contain job"
 
 # AGENTS.md's trap, still true for the one run: step that uses gh: `grep -q`
 # exits at the first match and can SIGPIPE gh, which under pipefail turns a

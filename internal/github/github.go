@@ -391,9 +391,9 @@ type PublicKey struct {
 }
 
 // RepoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped.
-// Exported for the one caller that builds a repository request by hand to
-// read its headers (doctor), so that every call spells the repository the
-// same way.
+// Exported for the callers that build the repository request by hand to read
+// its headers (doctor and init), so that every call spells the repository
+// the same way.
 func RepoPath(owner, name, rest string) string {
 	return fmt.Sprintf("/repos/%s/%s%s", url.PathEscape(owner), url.PathEscape(name), rest)
 }
