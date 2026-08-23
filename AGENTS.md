@@ -23,6 +23,15 @@ without reading why it exists.** Two examples, both load-bearing:
 If a guard looks like paranoia, that is what a guard that has been working
 looks like.
 
+Since the rewrite in Go ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md))
+the guard logic lives in `internal/<pkg>`, with no filesystem access and
+the incident prose above each guard moved there verbatim from the bash it
+replaced; `cmd/falconet/<verb>.go` is the flags, the files, the
+subprocesses and the exit code. The operator reads Go, the comment is the
+record, and the commit that ported each verb names every departure from
+the bash and why — `git log` is where to look before calling a difference
+a bug.
+
 ## The implementing agent gets no shell and no push token
 
 Its grant is exactly `Read,Edit,Write,Grep,Glob`. It edits files, writes a

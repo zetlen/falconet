@@ -335,3 +335,31 @@ of its own.
   skill can finally be the shell around the CLI that ADR-0002 promised.
 - **The operator reads Go.** The comment above every guard moves verbatim.
   They are prose, and they were always the durable part.
+
+## Status, 2026-08-23
+
+- **The port landed.** D3 steps 0–3 are the integration branch from 49edcfd
+  (the suite spawns its subject through `$FALCONET`) through 11057cc (the
+  review of the cutover), one commit per verb, the bash deleted in e311ab6,
+  and the documents in the commit that closes #19. Every verb is native;
+  `make test` is 867 suite cases across 16 files through `dist/falconet`
+  and `go test ./...` over 19 packages.
+- **The reproducible-digest discipline: verified.** v0.1.0 (#8): the digest
+  prepared on a darwin/arm64 laptop reproduced on the ubuntu linux/amd64
+  release runner, run 32600784604, and the release published.
+- **The fine-grained permission table and `doctor`'s probes: verified
+  against the fake, not yet against GitHub.** doctor.test.sh and
+  init.test.sh hold that each refusal names the permission the reference
+  lists (a 403 on the secrets list says `needs Secrets: read`; on a label
+  POST, `the token needs Issues: write`) and that `init`'s first write is
+  the labels; whether a fine-grained token with exactly D4's four
+  permissions satisfies every endpoint awaits the first live `init`.
+- **Sealed-box interoperability and the manifest endpoint's authentication:
+  still unverified.** `SealAnonymous` is held to a property (the private key
+  opens what was sealed), and the manifest conversion is asked first without
+  a token and once more with `FALCONET_SETUP_TOKEN` on a 401 or 403, saying
+  on stderr which worked; both are proven by the first live `init` and the
+  canary that uses the secrets it stored.
+- **The first live run on the binary awaits the canary after v0.2.0.** The
+  one live run (2026-08-21, `wayfinders-infra` #106 → PR #108) was on the
+  bash.
