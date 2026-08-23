@@ -22,3 +22,6 @@
 
 # The Go binary, built out of tree: `go build -o dist/falconet ./cmd/falconet`
 /dist/
+
+# python3 byte-code the tests leave behind when they import the fake API
+__pycache__/
