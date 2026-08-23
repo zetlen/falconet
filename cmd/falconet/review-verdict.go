@@ -3,10 +3,11 @@ package main
 // review-verdict — turn the review agent's final message into the files a
 // workflow reads.
 //
-// UNWIRED, ON PURPOSE. There is no `falconet review-verdict` verb, no entry in
-// bin/falconet's verb list, and no caller anywhere in this repository. It
-// ships as the reference implementation of the verdict protocol and nothing
-// else.
+// UNWIRED, ON PURPOSE. `falconet review-verdict` is a door, not a verb: it is
+// unlisted in usage (main.go's `unlisted`; review-verdict.test.sh holds that),
+// and it has no caller anywhere in this repository — the reusable workflow
+// names it zero times, and contract.test.sh fails if that changes. It ships
+// as the reference implementation of the verdict protocol and nothing else.
 //
 // ADR-0002 dropped the independent review agent on measurements: the watchdog
 // cost ~44% of the worker on a small task, and two cold contexts cost more

@@ -434,6 +434,13 @@ func HandoffIgnored(dir string, ignored bool) Line {
 		Hint: fmt.Sprintf("printf '%s\\n' >> .gitignore   (or: falconet init)", dir)}
 }
 
+// HandoffOutside is a handoff_dir that resolves outside the repository:
+// there is nothing to gitignore, and README step 2 is about the directory
+// inside the tree.
+func HandoffOutside(dir string) Line {
+	return Line{Status: Note, Step: 2, Text: dir + " is outside the repository, so nothing needs ignoring"}
+}
+
 // --- steps 3–5: the secrets -------------------------------------------------
 
 // Secret is one of the four, and the step it is stored in.

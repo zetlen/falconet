@@ -467,6 +467,11 @@ func TestParseRemoteURL(t *testing.T) {
 		{"https://x-access-token:ghs_abc@github.com/o/r.git", "github.com", "o", "r", true},
 		{"https://GitHub.com/o/r", "github.com", "o", "r", true},
 		{"git@github.com:zetlen/wayfinders-infra.git", "github.com", "zetlen", "wayfinders-infra", true},
+		// An '@' after the colon is part of the path, not a user; these
+		// once sliced past the colon and panicked.
+		{"github.com:zetlen/falconet@v1", "github.com", "", "", false},
+		{"host:a/b@c", "github.com", "", "", false},
+		{"git@github.com:zetlen/falconet@v1", "github.com", "", "", false},
 		{"git@github.com:zetlen/wayfinders-infra", "github.com", "zetlen", "wayfinders-infra", true},
 		{"ssh://git@github.com/zetlen/wayfinders-infra.git", "github.com", "zetlen", "wayfinders-infra", true},
 		{"ssh://git@github.com:22/o/r", "github.com", "o", "r", true},

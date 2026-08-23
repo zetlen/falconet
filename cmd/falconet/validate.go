@@ -344,7 +344,8 @@ func runValidate(args []string) int {
 
 	status := 0
 	// Appends one section to the report. Every failure below is collected
-	// this way, and none of them stops the run (see internal/validate).
+	// this way; only a failed plan stops the loop it is in (see
+	// internal/validate's header, and the break below).
 	report := func(section string) bool {
 		f, err := os.OpenFile(failures, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 		if err != nil {

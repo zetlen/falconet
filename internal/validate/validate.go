@@ -21,9 +21,11 @@
 // failures in one pass. There is no amending stage to feed any more — a
 // failed validation goes straight to a human — so the one report this writes
 // is the only report anybody gets, and it had better be complete. Every
-// section below APPENDS, and the verb never stops at the first one; the two
-// guards (no commit, a smuggled handoff directory) are the exception, and
-// they are the whole point.
+// section below APPENDS, and the verb never stops at the first one, with
+// three exceptions: the two guards (no commit, a smuggled handoff directory),
+// which are the whole point, and the plan step, which stops at the first
+// failed plan — plan.txt is gone by then, and a later stack's plan would
+// have nowhere to land.
 package validate
 
 import (

@@ -11,6 +11,7 @@ package main
 // to the repository, not to GitHub.
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,11 +100,11 @@ func runDoctor(args []string) int {
 		fmt.Fprintf(os.Stderr, "falconet: cannot determine the working directory: %v\n", err)
 		return 1
 	}
-	// --config resolves against the caller's cwd before the cd, as every
-	// verb's explicit file does; config resolves at the root after it.
-	if explicit != "" && !filepath.IsAbs(explicit) {
-		explicit = filepath.Join(cwd, explicit)
-	}
+	// A relative --config resolves from the repository root, after the cd,
+	// as it does for commit, validate and prompt (and as the bash did: cd,
+	// then config_init). One rule for every verb, so that a config a person
+	// confirms with doctor from a subdirectory is the config the pipeline's
+	// verbs read from the same place.
 	root, err := repo.Root(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
@@ -162,7 +163,7 @@ func runDoctor(args []string) int {
 		// refusal or not, so it is read through Request rather than the
 		// typed wrapper.
 		var r github.Repository
-		header, err := client.Request("GET", "/repos/"+owner+"/"+name, nil, &r)
+		header, err := client.Request("GET", github.RepoPath(owner, name, ""), nil, &r)
 		if header != nil {
 			scopesNote, hasScopes = doctor.ClassicToken(header.Get("X-OAuth-Scopes"))
 		}
@@ -252,14 +253,19 @@ func runDoctor(args []string) int {
 	switch {
 	case !stacksKnown:
 		report = append(report, doctor.CannotTellWhy(2, "the handoff directory is gitignored", "the config did not parse"))
+	case !underRoot(root, cfg.Schema.HandoffDir):
+		// An absolute handoff_dir is honoured by every verb (handoff.Resolve
+		// keeps it as given), and git refuses to check-ignore a path outside
+		// the work tree.
+		report = append(report, doctor.HandoffOutside(cfg.Schema.HandoffDir))
 	default:
 		handoffDir := cfg.Schema.HandoffDir
-		switch rc := checkIgnore(handoffDir); rc {
+		switch rc, said := checkIgnore(handoffDir); rc {
 		case 0, 1:
 			report = append(report, doctor.HandoffIgnored(handoffDir, rc == 0))
 		default:
 			report = append(report, doctor.CannotTellWhy(2, strings.TrimSuffix(handoffDir, "/")+"/ is gitignored",
-				"git check-ignore failed; is this a git repository?"))
+				"git check-ignore: "+said))
 		}
 	}
 
@@ -349,17 +355,34 @@ func stackOnDisk(key, name string) doctor.Stack {
 }
 
 // checkIgnore is `git check-ignore -q <dir>/`: 0 ignored, 1 not, anything
-// else git refusing to say.
-func checkIgnore(dir string) int {
+// else git refusing to say — with what it said, so the line can quote it.
+func checkIgnore(dir string) (int, string) {
 	cmd := exec.Command("git", "check-ignore", "-q", strings.TrimSuffix(dir, "/")+"/")
-	cmd.Stdout, cmd.Stderr = nil, nil
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = nil, &stderr
+	said := func() string {
+		s := strings.TrimSpace(stderr.String())
+		if s == "" {
+			s = "exited without a message"
+		}
+		return s
+	}
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
-			return exit.ExitCode()
+			return exit.ExitCode(), said()
 		}
-		return -1
+		return -1, err.Error()
 	}
-	return 0
+	return 0, ""
+}
+
+// underRoot is whether dir, resolved against root, stays inside it.
+func underRoot(root, dir string) bool {
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(dir))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // promptsOnDisk is every prompts.* key the config FILE sets — not the
@@ -369,6 +392,12 @@ func promptsOnDisk(cfg *config.Config) []doctor.Prompt {
 	var out []doctor.Prompt
 	for _, key := range doctor.SortedKeys(raw) {
 		path, _ := raw[key].(string)
+		// An empty string or null is no override — `falconet prompt` prints
+		// the embedded prompt for either, as the bash's `// ""` did — so
+		// there is no file to look for and nothing to report.
+		if path == "" {
+			continue
+		}
 		p := doctor.Prompt{Key: key, Path: path}
 		clean := filepath.Clean(path)
 		p.Inside = path != "" && !filepath.IsAbs(path) && clean != ".." && !strings.HasPrefix(clean, "../")

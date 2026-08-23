@@ -312,10 +312,10 @@ assert_line "$OUT" "MISSING      7. prompts.implement names prompts/mine.md, whi
 it "and a prompts key falconet does not read is a note"
 assert_line "$OUT" "note         7. prompts.park_needs_info is not a prompt falconet reads (the two are implement and pause_needs_info)"
 
-it "--config names another file, relative to where the caller stands"
+it "--config names another file, relative to the repository root as every verb's is"
 printf '{"stacks":{"plan":["dns"],"validate_only":["site"]}}\n' >"$c/alt.json"
-OUT="$( cd "$c/repo/dns" && "$FALCONET" doctor --config ../../alt.json 2>/dev/null )"
-assert_contains "$OUT" "ok           7. $c/alt.json parses" "stdout"
+OUT="$( cd "$c/repo/dns" && "$FALCONET" doctor --config ../alt.json 2>/dev/null )"
+assert_line "$OUT" "ok           7. ../alt.json parses"
 assert_line "$OUT" "ok           1. stack site (.stacks.validate_only) is a directory with .tf files"
 assert_no_line_matching "$OUT" 'stack workspace' "stdout"
 
@@ -519,6 +519,37 @@ assert_eq 1 "$(cat "$WORK/rc")" "exit code"
 
 it "and one line on stderr"
 assert_eq 1 "$(grep -c . "$WORK/err2")" "stderr lines"
+
+# --- what the first review of this verb found ------------------------------------
+
+c="$(new_checkout outside)"
+printf '{"handoff_dir":"/tmp/falconet-elsewhere","stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' \
+  >"$c/repo/.github/falconet.json"
+script
+d "$c"
+it "an absolute handoff_dir outside the tree has nothing to gitignore: a note, not a failure"
+assert_line "$OUT" "note         2. /tmp/falconet-elsewhere is outside the repository, so nothing needs ignoring"
+assert_no_line_matching "$OUT" '^cannot tell  2\.' "stdout"
+
+c="$(new_checkout emptyoverride)"
+printf '{"prompts":{"implement":"","pause_needs_info":null},"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' \
+  >"$c/repo/.github/falconet.json"
+script
+d "$c"
+it "an empty or null prompts override is no override, as prompt treats it: nothing to report"
+assert_no_line_matching "$OUT" '^MISSING      7\. prompts' "stdout"
+assert_eq 0 "$RC" "exit code"
+
+it "--repo with a byte GitHub would not accept is a usage error, not a request for another repository"
+( cd "$c/repo" && "$FALCONET" doctor --repo 'zetlen/falconet?x' >/dev/null 2>&1 )
+assert_eq 2 "$?" "exit code"
+
+c="$(new_checkout atremote)"
+git -C "$c/repo" remote set-url origin 'github.com:zetlen/falconet@v1'
+it "an origin with an '@' after the colon is refused in words, never a crash"
+OUT="$( cd "$c/repo" && env -u GITHUB_REPOSITORY "$FALCONET" doctor 2>"$WORK/err" )"; rc=$?
+assert_eq 1 "$rc" "exit code"
+assert_contains "$(cat "$WORK/err")" "set GITHUB_REPOSITORY=owner/name" "stderr"
 
 # --- usage ------------------------------------------------------------------------
 

@@ -84,7 +84,7 @@ func ServerHostFromEnv() string {
 // its two halves. Anything else is an error naming what was expected.
 func SplitRepository(s string) (owner, name string, err error) {
 	owner, name, ok := strings.Cut(s, "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+	if !ok || !repoWord(owner) || !repoWord(name) {
 		return "", "", fmt.Errorf("%q is not an owner/name repository", s)
 	}
 	return owner, name, nil
@@ -114,12 +114,15 @@ func ParseRemoteURL(remote, host string) (owner, name string, err error) {
 		gotHost, path = u.Hostname(), u.Path
 	default:
 		// scp-like: [user@]HOST:path. The colon is the split, and there is
-		// no slash before it.
-		at := strings.Index(remote, "@")
+		// no slash before it. Only an '@' BEFORE the colon is a user: the
+		// path after it may carry one (`host:o/r@v1` is a remote git
+		// accepts), and taking the first '@' anywhere once sliced past the
+		// colon and panicked.
 		colon := strings.Index(remote, ":")
 		if colon < 0 || strings.Contains(remote[:colon], "/") {
 			return "", "", fmt.Errorf("%q is not a git remote URL", remote)
 		}
+		at := strings.LastIndex(remote[:colon], "@")
 		gotHost, path = remote[at+1:colon], remote[colon+1:]
 	}
 	if !strings.EqualFold(gotHost, host) {
@@ -132,6 +135,24 @@ func ParseRemoteURL(remote, host string) (owner, name string, err error) {
 		return "", "", fmt.Errorf("%q does not name an owner/name repository on %s", remote, host)
 	}
 	return owner, name, nil
+}
+
+// repoWord is GitHub's alphabet for an owner or a repository name: letters,
+// digits, '.', '_' and '-', and at least one of them. Anything else — a
+// slash, a '?', an '@' — is refused here rather than path-escaped into a
+// request that names a different repository than the one the caller spelled.
+func repoWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Client is one API endpoint and one token.
@@ -367,7 +388,11 @@ type PublicKey struct {
 	Key   string `json:"key"`
 }
 
-func repoPath(owner, name, rest string) string {
+// RepoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped.
+// Exported for the one caller that builds a repository request by hand to
+// read its headers (doctor), so that every call spells the repository the
+// same way.
+func RepoPath(owner, name, rest string) string {
 	return fmt.Sprintf("/repos/%s/%s%s", url.PathEscape(owner), url.PathEscape(name), rest)
 }
 
@@ -397,7 +422,7 @@ func (c *Client) ListIssueComments(owner, name string, number int) ([]IssueComme
 // pull request is not read.
 func (c *Client) ListOpenPulls(owner, name string) ([]PullRequest, error) {
 	var out []PullRequest
-	if err := c.Do("GET", repoPath(owner, name, "/pulls?state=open&per_page=100"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/pulls?state=open&per_page=100"), nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -415,7 +440,7 @@ func (c *Client) GetAuthenticatedUser() (*User, error) {
 // GetRepository is GET /repos/{owner}/{name}.
 func (c *Client) GetRepository(owner, name string) (*Repository, error) {
 	var out Repository
-	if err := c.Do("GET", repoPath(owner, name, ""), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, ""), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -424,7 +449,7 @@ func (c *Client) GetRepository(owner, name string) (*Repository, error) {
 // GetActionsPermissions is GET /repos/{owner}/{name}/actions/permissions.
 func (c *Client) GetActionsPermissions(owner, name string) (*ActionsPermissions, error) {
 	var out ActionsPermissions
-	if err := c.Do("GET", repoPath(owner, name, "/actions/permissions"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions"), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -434,7 +459,7 @@ func (c *Client) GetActionsPermissions(owner, name string) (*ActionsPermissions,
 // which only means something when AllowedActions is "selected".
 func (c *Client) GetSelectedActions(owner, name string) (*SelectedActions, error) {
 	var out SelectedActions
-	if err := c.Do("GET", repoPath(owner, name, "/actions/permissions/selected-actions"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions/selected-actions"), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -443,7 +468,7 @@ func (c *Client) GetSelectedActions(owner, name string) (*SelectedActions, error
 // GetWorkflowPermissions is GET /repos/{owner}/{name}/actions/permissions/workflow.
 func (c *Client) GetWorkflowPermissions(owner, name string) (*WorkflowPermissions, error) {
 	var out WorkflowPermissions
-	if err := c.Do("GET", repoPath(owner, name, "/actions/permissions/workflow"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions/workflow"), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -456,7 +481,7 @@ func (c *Client) ListSecrets(owner, name string) ([]Secret, error) {
 		TotalCount int      `json:"total_count"`
 		Secrets    []Secret `json:"secrets"`
 	}
-	if err := c.Do("GET", repoPath(owner, name, "/actions/secrets?per_page=100"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/actions/secrets?per_page=100"), nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Secrets, nil
@@ -465,7 +490,7 @@ func (c *Client) ListSecrets(owner, name string) ([]Secret, error) {
 // GetSecretsPublicKey is GET /repos/{owner}/{name}/actions/secrets/public-key.
 func (c *Client) GetSecretsPublicKey(owner, name string) (*PublicKey, error) {
 	var out PublicKey
-	if err := c.Do("GET", repoPath(owner, name, "/actions/secrets/public-key"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/actions/secrets/public-key"), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -475,7 +500,7 @@ func (c *Client) GetSecretsPublicKey(owner, name string) (*PublicKey, error) {
 // label is not read.
 func (c *Client) ListLabels(owner, name string) ([]Label, error) {
 	var out []Label
-	if err := c.Do("GET", repoPath(owner, name, "/labels?per_page=100"), nil, &out); err != nil {
+	if err := c.Do("GET", RepoPath(owner, name, "/labels?per_page=100"), nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -497,13 +522,13 @@ func (c *Client) AddIssueAssignees(owner, name string, number int, logins []stri
 // CreateLabel is POST /repos/{owner}/{name}/labels. A label that already
 // exists is a 422 from GitHub, which the caller decides about.
 func (c *Client) CreateLabel(owner, name string, label Label) error {
-	return c.Do("POST", repoPath(owner, name, "/labels"), label, nil)
+	return c.Do("POST", RepoPath(owner, name, "/labels"), label, nil)
 }
 
 // PutSecret is PUT /repos/{owner}/{name}/actions/secrets/{secret}: the value,
 // already sealed to the repository's public key and base64-encoded, and the
 // key's id. Creating and updating are the same call.
 func (c *Client) PutSecret(owner, name, secret, encryptedValue, keyID string) error {
-	return c.Do("PUT", repoPath(owner, name, "/actions/secrets/"+url.PathEscape(secret)),
+	return c.Do("PUT", RepoPath(owner, name, "/actions/secrets/"+url.PathEscape(secret)),
 		map[string]string{"encrypted_value": encryptedValue, "key_id": keyID}, nil)
 }
