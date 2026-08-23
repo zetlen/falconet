@@ -143,8 +143,14 @@ func TestTheUsersDocumentIsKeptApartFromTheMerge(t *testing.T) {
 	if len(cfg.User) != 1 || prompts["implement"] != "mine.md" {
 		t.Errorf("User: %v", cfg.User)
 	}
-	if cfg.Schema.Prompts["pause_needs_info"] != "prompts/pause-needs-info.md" {
-		t.Errorf("the merge still carries the default: %v", cfg.Schema.Prompts)
+	// A key the file did not set is still there in the merge — a default
+	// keeps standing — and absent from User. (It used to be a prompt; prompts
+	// have no default since #3 was closed, so the handoff directory stands in.)
+	if cfg.Schema.HandoffDir != ".falconet" {
+		t.Errorf("the merge lost the default: %q", cfg.Schema.HandoffDir)
+	}
+	if _, set := cfg.User["handoff_dir"]; set {
+		t.Errorf("User carries a default it never set: %v", cfg.User)
 	}
 	if cfg.Schema.Prompts["implement"] != "mine.md" {
 		t.Errorf("the merge carries the override: %v", cfg.Schema.Prompts)
