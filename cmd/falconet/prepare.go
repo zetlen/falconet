@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,6 +195,12 @@ func snapshotJSON(s *issueSnapshot) ([]byte, error) {
 	var obj map[string]any
 	if err := dec.Decode(&obj); err != nil {
 		return nil, fmt.Errorf("the issue is not a JSON object: %v", err)
+	}
+	if obj == nil {
+		// `null` decodes into a nil map without an error, and writing the
+		// thread into one is a panic — exit 2 and a stack trace where every
+		// other bad answer is exit 1 and a sentence.
+		return nil, errors.New("the issue is not a JSON object: null")
 	}
 	thread := []any{}
 	if len(s.rawComments) > 0 {
@@ -425,7 +432,12 @@ func runPrepare(args []string) int {
 	// --- rule 4: no open pull request is already carrying it --------------------
 	//
 	// See internal/prepare for the record. The list is fetched whole, then
-	// inspected: the first call that needs GitHub on the event path.
+	// inspected: the first call that needs GitHub on the event path. A list
+	// that cannot be fetched is a mechanical failure here, where the bash
+	// captured `gh pr list` with no check and fell through to ready on an
+	// empty answer — a gate that said ready on an unknown. Refusing is the
+	// departure, and it is the right one: in-flight is the one rule whose
+	// wrong answer opens a second pull request on the same issue.
 	if err := connect(); err != nil {
 		return die("prepare: could not list open pull requests for #%d: %v", number, err)
 	}
@@ -492,11 +504,25 @@ func runPrepare(args []string) int {
 	// the acknowledgment below are best-effort: an issue left parked while a
 	// run proceeds against it is a contradiction a human has to untangle
 	// later.
+	//
+	// A 404 is not a failure to clear it: GitHub answers "Label does not
+	// exist" when the label is not on the issue, and `gh issue edit
+	// --remove-label` removed nothing and said nothing in that case — which
+	// is what a retry of a re-entry run that had already cleared it, or a
+	// person clearing it between the event and the run, looks like. The
+	// contradiction the hard failure guards against cannot be standing if
+	// the label is already gone.
 	if mode == prepare.ReEntry {
-		if err := client.RemoveIssueLabel(owner, name, number, rules.NeedsInfo); err != nil {
+		err := client.RemoveIssueLabel(owner, name, number, rules.NeedsInfo)
+		var apiErr *github.Error
+		switch {
+		case err == nil:
+			say("cleared '%s': this run is a requester reply", rules.NeedsInfo)
+		case errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound:
+			say("'%s' was already clear on #%d: this run is a requester reply", rules.NeedsInfo, number)
+		default:
 			return die("prepare: could not clear '%s' from #%d: %v", rules.NeedsInfo, number, err)
 		}
-		say("cleared '%s': this run is a requester reply", rules.NeedsInfo)
 	}
 
 	// The assignment. Best effort — it buys one thing, which is dropping this

@@ -243,7 +243,9 @@ type Pull struct {
 // pipeline — the opposite of the answer just computed.
 //
 // Here the first of those is regexp.QuoteMeta on every prefix, and the second
-// is a slice: the verb fetches the whole list, then InFlight walks it.
+// is a slice: the verb fetches the whole list, then InFlight walks it. And a
+// list that could not be fetched at all is a refusal, not an empty list: the
+// bash's unchecked `gh pr list` fell open on a failure and went on to ready.
 
 // InFlightPattern is `^(prefix1|prefix2…)<issue>-`, every prefix quoted so
 // that a `.` or a `+` in one means itself. issue.in_flight_prefixes is the

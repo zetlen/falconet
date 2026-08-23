@@ -103,12 +103,18 @@ script_github() { # checkout
   jq -n --slurpfile issue "$c/issue.json" --slurpfile comments "$c/comments.json" \
     --slurpfile pulls "$c/pr.json" --arg b "$API" \
     --arg view "${VIEW_RC:-0}" --arg edit "${EDIT_RC:-0}" --arg remove "${REMOVE_RC:-0}" \
-    --arg comment "${COMMENT_RC:-0}" --arg user "${USER_RC:-0}" '
-    (if $view != "0" then [{method:"GET", path:($b+"/issues/42"), status:500, body:{message:"boom"}}] else [] end)
-    + (if $edit != "0" then [{method:"POST", path:($b+"/issues/42/assignees"), status:500, body:{message:"boom"}}] else [] end)
-    + (if $remove != "0" then [{method:"DELETE", path:($b+"/issues/42/labels/needs-info"), status:500, body:{message:"boom"}}] else [] end)
-    + (if $comment != "0" then [{method:"POST", path:($b+"/issues/42/comments"), status:500, body:{message:"boom"}}] else [] end)
-    + (if $user != "0" then [{method:"GET", path:"/user", status:500, body:{message:"boom"}}] else [] end)
+    --arg comment "${COMMENT_RC:-0}" --arg user "${USER_RC:-0}" --arg pullsrc "${PULLS_RC:-0}" \
+    --arg issuenull "${ISSUE_NULL:-0}" '
+    # A knob of 1 is a 500; any other non-zero knob is the status itself, so
+    # a case can script the one answer it is about (a 404 on the label).
+    def st: if . == "1" then 500 else tonumber end;
+    (if $view != "0" then [{method:"GET", path:($b+"/issues/42"), status:($view|st), body:{message:"boom"}}] else [] end)
+    + (if $issuenull != "0" then [{method:"GET", path:($b+"/issues/42"), status:200, body:null}] else [] end)
+    + (if $edit != "0" then [{method:"POST", path:($b+"/issues/42/assignees"), status:($edit|st), body:{message:"boom"}}] else [] end)
+    + (if $remove != "0" then [{method:"DELETE", path:($b+"/issues/42/labels/needs-info"), status:($remove|st), body:{message:"Label does not exist"}}] else [] end)
+    + (if $comment != "0" then [{method:"POST", path:($b+"/issues/42/comments"), status:($comment|st), body:{message:"boom"}}] else [] end)
+    + (if $user != "0" then [{method:"GET", path:"/user", status:($user|st), body:{message:"boom"}}] else [] end)
+    + (if $pullsrc != "0" then [{method:"GET", path:($b+"/pulls"), status:($pullsrc|st), body:{message:"boom"}}] else [] end)
     + [{method:"GET", path:($b+"/issues/42"), body:$issue[0]},
        {method:"GET", path:($b+"/issues/42/comments"), body:$comments[0]},
        {method:"GET", path:($b+"/pulls"), body:$pulls[0]}]
@@ -135,8 +141,8 @@ p() { # checkout [args...] -> sets OUT ERR RC
     "$FAKE_GITHUB/requests.jsonl" >"$c/posted.md"
   return 0
 }
-reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; T_RC=""; T_INIT_RC=""
-          GH_ENV=""; RUN_ID=""; ACTOR=""; }
+reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; PULLS_RC=""; ISSUE_NULL=""
+          T_RC=""; T_INIT_RC=""; GH_ENV=""; RUN_ID=""; ACTOR=""; }
 reset
 
 ghlog() { cat "$1/requests.log" 2>/dev/null; }
@@ -484,6 +490,34 @@ it "a label that cannot be cleared is fatal, unlike the claim and the ack"
 assert_eq 1 "$RC" "exit code"
 it "because an issue left parked while a run proceeds is a contradiction"
 assert_eq "" "$OUT" "stdout"
+
+# GitHub answers 404 when the label is not on the issue; gh removed nothing and
+# said nothing. A retry of a re-entry run that had already cleared it is that.
+c="$(new_checkout reentry_alreadyclear)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+REMOVE_RC=404 p "$c" --re-entry; reset
+it "a label that is already gone is not a failure to clear it: the run is ready"
+assert_eq "ready" "$OUT" "outcome"
+it "and says so"
+assert_contains "$ERR" "was already clear" "stderr"
+
+# The bash captured `gh pr list` with no check and fell through to ready on an
+# empty answer. A gate must not say ready on an unknown.
+c="$(new_checkout pullsfail)"; issue_json "$c/issue.json" "infra-request" "x"
+PULLS_RC=1 p "$c"; reset
+it "an open-pull-request list that cannot be fetched is a mechanical failure, not ready"
+assert_eq 1 "$RC" "exit code"
+assert_eq "" "$OUT" "stdout"
+it "and nothing was changed on the way"
+assert_eq "" "$(mutations "$c")" "mutating calls"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
+
+c="$(new_checkout issuenull)"; issue_json "$c/issue.json" "infra-request" "x"
+jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"infra-request"}], body:"x"}}' >"$c/event.json"
+ISSUE_NULL=1 p "$c" --event "$c/event.json"; reset
+it "an issue that comes back as null is a sentence and exit 1, not a stack trace"
+assert_eq 1 "$RC" "exit code"
+assert_not_contains "$ERR" "panic" "stderr"
+assert_contains "$ERR" "not a JSON object" "stderr"
 
 # --- the event file itself --------------------------------------------------
 
