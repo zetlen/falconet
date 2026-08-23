@@ -13,7 +13,7 @@
 # the sense that it is vocabulary.
 #
 # The name is looked up at `prompts.<name>` in the config — with `-` folded to
-# `_`, so `falconet prompt park-needs-info` finds `prompts.park_needs_info`.
+# `_`, so `falconet prompt pause-needs-info` finds `prompts.pause_needs_info`.
 # An override is a path relative to the repository root. With no override the
 # shipped `prompts/<name>.md` is printed.
 #

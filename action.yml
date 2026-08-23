@@ -7,7 +7,7 @@ author: zetlen
 
 inputs:
   verb:
-    description: 'One of prepare, commit, push, validate, park, assemble (or the unlisted prompt).'
+    description: 'One of prepare, commit, push, validate, pause, assemble (or the unlisted prompt).'
     required: true
   args:
     description: >-
@@ -60,7 +60,7 @@ runs:
     #
     # `gitleaks version` last: proof that what came out of the tarball
     # actually runs, on this runner, before anything depends on it. The scan
-    # fails closed on a missing binary, so a broken install parks the issue
+    # fails closed on a missing binary, so a broken install pauses the issue
     # rather than publishing unscanned text — but failing here is better than
     # failing there.
     - name: Install gitleaks (pinned)

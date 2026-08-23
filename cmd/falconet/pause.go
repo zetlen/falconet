@@ -1,9 +1,13 @@
 package main
 
-// park — put an infra-request issue into a terminal state and say so, in
+// pause — put an infra-request issue into a terminal state and say so, in
 // plain language, where the requester will see it. The comment and the two
-// rules it is held to are internal/park, which carries the record; this file
+// rules it is held to are internal/pause, which carries the record; this file
 // is the flags, the body file, the three GitHub calls, and the exit code.
+//
+// It was `park` until #5's rename was taken, the commit after #15 landed the
+// port. No alias: there are no users yet, and two words for one verb is the
+// drift #5 was filed to prevent.
 //
 // The first verb to talk to GitHub without `gh` (ADR-0006 D2): three calls
 // against GITHUB_API_URL with the token from GH_TOKEN or GITHUB_TOKEN, on the
@@ -18,22 +22,22 @@ import (
 
 	"github.com/zetlen/falconet/internal/config"
 	"github.com/zetlen/falconet/internal/github"
-	"github.com/zetlen/falconet/internal/park"
+	"github.com/zetlen/falconet/internal/pause"
 )
 
-const parkUsageText = `park — put an infra-request issue into a terminal state and say so, in
+const pauseUsageText = `pause — put an infra-request issue into a terminal state and say so, in
 plain language, where the requester will see it.
 
 Modes:
-  falconet park --issue N --label needs-info|ready-for-human
-                --preamble TEXT
-                [--body FILE] [--body-title TEXT]
-                [--run-url URL] [--unassign LOGIN] [--branch NAME]
-                [--config FILE]
+  falconet pause --issue N --label needs-info|ready-for-human
+                 --preamble TEXT
+                 [--body FILE] [--body-title TEXT]
+                 [--run-url URL] [--unassign LOGIN] [--branch NAME]
+                 [--config FILE]
 
     --preamble    the plain-language sentence the requester reads first
     --body        extra detail appended after the preamble. A file that is
-                  missing or empty is no detail, not an error: a run parked
+                  missing or empty is no detail, not an error: a run paused
                   before it planned has no plan.
     --body-title  if given, --body is folded into a collapsed <details>
                   block and fenced as code. Use it for machine output
@@ -44,7 +48,7 @@ Modes:
                   made, named and linked immediately under the preamble.
                   Pass it wherever a commit exists; pass nothing (or an
                   empty string) where none does.
-    --label       one of the two parking labels from config
+    --label       one of the two pause labels from config
                   (labels.needs_info, labels.human); anything else is a
                   usage error
 
@@ -55,16 +59,29 @@ else in this pipeline, content is dropped loudly or not at all.
 Requires GH_TOKEN or GITHUB_TOKEN, and GITHUB_REPOSITORY (owner/name), in
 the environment. GITHUB_API_URL overrides the API endpoint.
 
-Exit codes: 0 = parked, 1 = a GitHub call failed (the caller must treat the
-            issue as still un-parked), 2 = usage error.
+Prints exactly one word on stdout, once the flags have been read:
+
+  success   the comment is posted and the label is on the issue. Releasing
+            the claim is best-effort: a failed un-assign is a warning.
+  failure   anything else — a GitHub call refused, no token, no repository,
+            a --body that cannot be read. The caller must treat the issue
+            as still un-paused.
+
+Exit codes: 0 = success, 1 = failure, 2 = usage error (nothing on stdout).
+
+failure is exit 1 here, where commit's is 0, because nothing downstream
+routes on this verb's word: a pause that did not fully happen must fail the
+step that asked for it, so that the containment job runs and tries again.
+A step that passed with "failure" in an output nobody reads is the silent
+disappearance this verb exists to prevent.
 `
 
-func parkUsage() int {
-	fmt.Fprint(os.Stderr, parkUsageText)
+func pauseUsage() int {
+	fmt.Fprint(os.Stderr, pauseUsageText)
 	return 2
 }
 
-func runPark(args []string) int {
+func runPause(args []string) int {
 	var issue, label, preamble, bodyPath, bodyTitle, runURL, unassign, branch, explicit string
 	for len(args) > 0 {
 		flag := args[0]
@@ -113,10 +130,10 @@ func runPark(args []string) int {
 			v, ok = value("a file")
 			explicit = v
 		case "-h", "--help":
-			return parkUsage()
+			return pauseUsage()
 		default:
 			fmt.Fprintf(os.Stderr, "unknown argument: %s\n", flag)
-			return parkUsage()
+			return pauseUsage()
 		}
 		if !ok {
 			return 2
@@ -125,7 +142,7 @@ func runPark(args []string) int {
 	}
 
 	if issue == "" || label == "" || preamble == "" {
-		return parkUsage()
+		return pauseUsage()
 	}
 	if !digits.MatchString(issue) {
 		fmt.Fprintln(os.Stderr, "--issue must be a number")
@@ -137,35 +154,41 @@ func runPark(args []string) int {
 		return 2
 	}
 
-	// Config is read where this verb stands, as it always was: park never
+	// From here on every refusal is the word `failure` and exit 1: the issue
+	// is not paused, and the caller hears that from the word and the exit
+	// code both. See the usage text for why failure is not exit 0 here.
+	failure := func(format string, a ...any) int {
+		fmt.Fprintf(os.Stderr, format+"\n", a...)
+		fmt.Println("failure")
+		return 1
+	}
+
+	// Config is read where this verb stands, as it always was: pause never
 	// needed the repository root, because it operates on an issue and not on
 	// a tree.
 	cfg, err := config.Load(explicit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
-		return 1
+		return failure("falconet: %v", err)
 	}
-	if err := park.Label(label, cfg.Schema.Labels.NeedsInfo, cfg.Schema.Labels.Human); err != nil {
+	if err := pause.Label(label, cfg.Schema.Labels.NeedsInfo, cfg.Schema.Labels.Human); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 
-	// Both of these are checked before anything is built or sent: a park
-	// with nowhere to post is a mechanical failure, and the caller must know
-	// the issue is still un-parked.
+	// Both of these are checked before anything is built or sent: a pause
+	// with nowhere to post is a failure before any call, and the caller must
+	// know the issue is still un-paused.
 	token := github.TokenFromEnv()
 	if token == "" {
-		fmt.Fprintf(os.Stderr, "park needs a token in GH_TOKEN or GITHUB_TOKEN to comment on #%d\n", number)
-		return 1
+		return failure("pause needs a token in GH_TOKEN or GITHUB_TOKEN to comment on #%d", number)
 	}
 	owner, name, err := github.SplitRepository(os.Getenv("GITHUB_REPOSITORY"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "park needs GITHUB_REPOSITORY (owner/name) to know which repository #%d is in: %v\n", number, err)
-		return 1
+		return failure("pause needs GITHUB_REPOSITORY (owner/name) to know which repository #%d is in: %v", number, err)
 	}
 
 	// `[[ -s FILE ]]`: a missing or empty body is no body — the workflow
-	// passes the handoff file a step MAY have written, and a run parked
+	// passes the handoff file a step MAY have written, and a run paused
 	// before it planned has no plan. A directory, or a file that exists and
 	// cannot be read, is a mechanical failure: the bash posted a comment with
 	// nothing where the detail should have been.
@@ -176,18 +199,16 @@ func runPark(args []string) int {
 		case err != nil:
 			// No file: no detail.
 		case info.IsDir():
-			fmt.Fprintf(os.Stderr, "--body names a directory: %s\n", bodyPath)
-			return 1
+			return failure("--body names a directory: %s", bodyPath)
 		case info.Size() > 0:
 			body, err = os.ReadFile(bodyPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "falconet: cannot read %s: %v\n", bodyPath, err)
-				return 1
+				return failure("falconet: cannot read %s: %v", bodyPath, err)
 			}
 		}
 	}
 
-	comment := park.Comment(park.Input{
+	comment := pause.Comment(pause.Input{
 		Preamble:   preamble,
 		Branch:     branch,
 		ServerURL:  os.Getenv("GITHUB_SERVER_URL"),
@@ -199,7 +220,8 @@ func runPark(args []string) int {
 
 	// The three things "stopped" always means, each attempted regardless of
 	// the one before: an issue that got its label and not its comment is
-	// still better parked than not, and the exit code says it was partial.
+	// still better paused than not, and the word and the exit code say it
+	// was partial.
 	client := github.New(github.APIURLFromEnv(), token)
 	status := 0
 	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
@@ -212,16 +234,15 @@ func runPark(args []string) int {
 	}
 	if unassign != "" {
 		// Releasing the claim is best-effort: the claim itself is (see the
-		// workflow) and an issue that keeps a stale assignee is still parked.
+		// workflow) and an issue that keeps a stale assignee is still paused.
 		if err := client.RemoveIssueAssignees(owner, name, number, []string{unassign}); err != nil {
 			fmt.Fprintf(os.Stderr, "::warning::could not un-assign %s from #%d: %v\n", unassign, number, err)
 		}
 	}
 
 	if status == 0 {
-		fmt.Printf("issue #%d parked %s\n", number, label)
+		fmt.Println("success")
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "failed to fully park issue #%d\n", number)
-	return 1
+	return failure("failed to fully pause issue #%d", number)
 }

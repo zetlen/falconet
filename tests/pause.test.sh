@@ -29,29 +29,30 @@ export GITHUB_SERVER_URL=https://github.com
 export GITHUB_REPOSITORY=zetlen/wayfinders-infra
 
 # Not a stub: a tripwire. This file used to answer for `gh` with a script on
-# PATH, and stopped when park moved to the API (#15). A falconet that still
-# shells out to gh must fail here, loudly, and before the real gh on this
-# machine could carry the fake token above to the real GitHub.
+# PATH, and stopped when the verb (park, then) moved to the API (#15). A
+# falconet that still shells out to gh must fail here, loudly, and before
+# the real gh on this machine could carry the fake token above to the real
+# GitHub.
 mkdir -p "$WORK/no-gh"
 cat >"$WORK/no-gh/gh" <<'TRIPWIRE'
 #!/usr/bin/env bash
-echo "gh: park.test.sh no longer stubs gh — the subject must speak GITHUB_API_URL" >&2
+echo "gh: pause.test.sh no longer stubs gh — the subject must speak GITHUB_API_URL" >&2
 exit 1
 TRIPWIRE
 chmod +x "$WORK/no-gh/gh"
 PATH="$WORK/no-gh:$PATH"
 export PATH
 
-park() { # out-name -- args...
-  # Runs park, then leaves two files: $name.log, one line per API call as
-  # `METHOD PATH BODY`, and $name.comment, the exact bytes of the comment a
-  # requester would have been shown — the body field of the one POST to
-  # .../comments, unescaped. Returns park's exit code.
+pause() { # out-name -- args...
+  # Runs pause, then leaves three files: $name.out, its stdout; $name.log,
+  # one line per API call as `METHOD PATH BODY`; and $name.comment, the
+  # exact bytes of the comment a requester would have been shown — the body
+  # field of the one POST to .../comments, unescaped. Returns the exit code.
   local name="$1"; shift
   [ "$1" = "--" ] && shift
   : >"$FAKE_GITHUB/requests.log"
   : >"$FAKE_GITHUB/requests.jsonl"
-  "$FALCONET" park "$@" >/dev/null 2>&1
+  "$FALCONET" pause "$@" >"$WORK/$name.out" 2>/dev/null
   local rc=$?
   cp "$FAKE_GITHUB/requests.log" "$WORK/$name.log"
   jq -j 'select(.method == "POST" and (.path | endswith("/comments"))) | .body.body' \
@@ -65,7 +66,7 @@ calls() { # out-name -> "METHOD PATH" per line, in order
 
 # --- a hand-over with work behind it ----------------------------------------
 
-park review -- \
+pause review -- \
   --issue 36 \
   --label ready-for-human \
   --unassign zetlen \
@@ -77,6 +78,9 @@ comment="$(cat "$WORK/review.comment")"
 
 it "a hand-over is exit 0"
 assert_eq 0 "$rc" "exit code"
+
+it "and the one word on stdout is success"
+assert_eq "success" "$(cat "$WORK/review.out")" "stdout"
 
 it "the hand-over comment still leads with its preamble"
 case "$comment" in
@@ -123,10 +127,18 @@ Bearer test-token
 Bearer test-token" \
   "$(jq -r '.headers.authorization' "$FAKE_GITHUB/requests.jsonl")" "Authorization"
 
-it "park says what it did on stdout"
+# --- the old name ------------------------------------------------------------
+#
+# `park` was the verb until #5's rename. It is not an alias: there are no
+# users yet, and two words for one verb is the drift #5 was filed to prevent.
+
+it "park is gone, not aliased"
 : >"$FAKE_GITHUB/requests.log"; : >"$FAKE_GITHUB/requests.jsonl"
-out="$("$FALCONET" park --issue 36 --label ready-for-human --preamble "Parked." 2>/dev/null)"
-assert_eq "issue #36 parked ready-for-human" "$out" "stdout"
+out="$("$FALCONET" park --issue 36 --label ready-for-human --preamble "Parked." 2>"$WORK/park.err")"
+assert_eq 2 "$?" "exit code"
+assert_eq "" "$out" "stdout"
+assert_contains "$(cat "$WORK/park.err")" "unknown verb 'park'" "stderr"
+assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
 # --- a hand-over with nothing behind it -------------------------------------
 #
@@ -135,7 +147,7 @@ assert_eq "issue #36 parked ready-for-human" "$out" "stdout"
 # branch that was never pushed — the failure this whole change is about,
 # reintroduced from the other direction.
 
-park empty -- \
+pause empty -- \
   --issue 36 \
   --label ready-for-human \
   --run-url https://example.invalid/run/1 \
@@ -158,7 +170,7 @@ assert_not_contains "$(cat "$WORK/empty.log")" "assignees" "API calls"
 # --- outside Actions, name the branch but invent no URL ---------------------
 
 ( unset GITHUB_SERVER_URL
-  park local -- --issue 36 --label ready-for-human --branch issue-36-thing \
+  pause local -- --issue 36 --label ready-for-human --branch issue-36-thing \
     --preamble "Parked." )
 comment="$(cat "$WORK/local.comment")"
 
@@ -176,25 +188,27 @@ assert_not_contains "$comment" "http" "comment"
 # GH_TOKEN or GITHUB_TOKEN, the two names the workflow hands the verbs.
 
 ( unset GITHUB_REPOSITORY
-  park norepo -- --issue 36 --label ready-for-human --preamble "Parked." )
+  pause norepo -- --issue 36 --label ready-for-human --preamble "Parked." )
 rc=$?
 
-it "with no GITHUB_REPOSITORY there is nowhere to post: exit 1"
+it "with no GITHUB_REPOSITORY there is nowhere to post: exit 1, and the word is failure"
 assert_eq 1 "$rc" "exit code"
+assert_eq "failure" "$(cat "$WORK/norepo.out")" "stdout"
 
 it "and nothing was posted anywhere"
 assert_eq "" "$(cat "$WORK/norepo.log")" "API calls"
 
 ( unset GH_TOKEN GITHUB_TOKEN
-  park notoken -- --issue 36 --label ready-for-human --preamble "Parked." )
+  pause notoken -- --issue 36 --label ready-for-human --preamble "Parked." )
 rc=$?
 
-it "with neither GH_TOKEN nor GITHUB_TOKEN it is exit 1, before any call"
+it "with neither GH_TOKEN nor GITHUB_TOKEN it is failure, before any call"
 assert_eq 1 "$rc" "exit code"
+assert_eq "failure" "$(cat "$WORK/notoken.out")" "stdout"
 assert_eq "" "$(cat "$WORK/notoken.log")" "API calls"
 
 ( unset GH_TOKEN; export GITHUB_TOKEN=actions-token
-  park ghtoken -- --issue 36 --label ready-for-human --preamble "Parked." )
+  pause ghtoken -- --issue 36 --label ready-for-human --preamble "Parked." )
 rc=$?
 
 it "GITHUB_TOKEN is accepted when GH_TOKEN is unset"
@@ -204,17 +218,20 @@ assert_eq "Bearer actions-token" \
 
 # --- a GitHub call fails ----------------------------------------------------
 #
-# Exit 1 means "the caller must treat the issue as still un-parked". Each of
-# the three calls is attempted regardless of the one before it: an issue that
-# got its label and not its comment is still better parked than not.
+# `failure`, exit 1: the caller must treat the issue as still un-paused. It
+# is exit 1 and not commit's 0 because nothing downstream routes on the word
+# — the step must fail so the containment job runs. Each of the three calls
+# is attempted regardless of the one before it: an issue that got its label
+# and not its comment is still better paused than not.
 
 printf '[{"method":"POST","path":"/repos/zetlen/wayfinders-infra/issues/36/comments","status":500,"body":{"message":"boom"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
-park nocomment -- --issue 36 --label ready-for-human --unassign zetlen --preamble "Parked."
+pause nocomment -- --issue 36 --label ready-for-human --unassign zetlen --preamble "Parked."
 rc=$?
 
-it "a comment GitHub refuses is exit 1"
+it "a comment GitHub refuses is failure, exit 1"
 assert_eq 1 "$rc" "exit code"
+assert_eq "failure" "$(cat "$WORK/nocomment.out")" "stdout"
 
 it "and the label and the un-assign are still tried"
 assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/comments
@@ -223,23 +240,25 @@ DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees" "$(calls nocomment)" 
 
 printf '[{"method":"POST","path":"/repos/zetlen/wayfinders-infra/issues/36/labels","status":404,"body":{"message":"Not Found"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
-park nolabel -- --issue 36 --label ready-for-human --preamble "Parked."
+pause nolabel -- --issue 36 --label ready-for-human --preamble "Parked."
 rc=$?
 
-it "a label GitHub refuses is exit 1 too"
+it "a label GitHub refuses is failure too"
 assert_eq 1 "$rc" "exit code"
+assert_eq "failure" "$(cat "$WORK/nolabel.out")" "stdout"
 
 # Releasing the claim is best-effort: an issue that keeps a stale assignee is
-# still parked.
+# still paused.
 printf '[{"method":"DELETE","path":"/repos/zetlen/wayfinders-infra/issues/36/assignees","status":422,"body":{"message":"Validation Failed"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
 : >"$FAKE_GITHUB/requests.log"
-err="$("$FALCONET" park --issue 36 --label ready-for-human --unassign zetlen --preamble "Parked." 2>&1 >/dev/null)"
+out="$("$FALCONET" pause --issue 36 --label ready-for-human --unassign zetlen --preamble "Parked." 2>"$WORK/unassign.err")"
 rc=$?
 
 it "a failed un-assign is a warning, not a failure"
 assert_eq 0 "$rc" "exit code"
-assert_contains "$err" "::warning::could not un-assign zetlen from #36" "stderr"
+assert_eq "success" "$out" "stdout"
+assert_contains "$(cat "$WORK/unassign.err")" "::warning::could not un-assign zetlen from #36" "stderr"
 
 rm -f "$FAKE_GITHUB/responses.json"
 
@@ -276,7 +295,7 @@ git -C "$checkout/repo" commit -qm "Add Ozamataz Buckshank to the employees list
 # hand-over step reads PUSHED_BRANCH out of the environment the push wrote.
 # shellcheck source=/dev/null
 . "$checkout/github_env"
-park pipeline -- \
+pause pipeline -- \
   --issue 36 \
   --label ready-for-human \
   --run-url https://example.invalid/run/32093607680 \
@@ -305,7 +324,7 @@ assert_contains \
 # so a requester sees one line and a click rather than a wall of tofu.
 
 printf 'First question?\n\nSecond question, with `code` in it.\n' >"$WORK/prose.md"
-park prose -- \
+pause prose -- \
   --issue 36 \
   --label needs-info \
   --branch "" \
@@ -321,7 +340,7 @@ assert_not_contains "$comment" '<details>' "comment"
 assert_not_contains "$comment" '```' "comment"
 
 printf 'Error: Unsupported argument\n\n  on dns/records.tf line 3\n' >"$WORK/log.txt"
-park fenced -- \
+pause fenced -- \
   --issue 36 \
   --label ready-for-human \
   --branch "" \
@@ -344,7 +363,7 @@ assert_contains "$comment" $'</details>\n\n(Run log: https://example.invalid/run
 # markdown does not see it: the block never closed, and the run link and the
 # </details> rendered inside it.
 printf 'Error: no newline at the end' >"$WORK/nonl.txt"
-park nonl -- \
+pause nonl -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/nonl.txt" --body-title "validation output" --preamble "Parked."
 comment="$(cat "$WORK/nonl.comment")"
@@ -357,7 +376,7 @@ assert_contains "$comment" $'Error: no newline at the end\n```\n\n</details>' "c
 # markdown. The fence outruns any backtick run the body carries, as the
 # pull-request body's does.
 printf 'before\n```\nafter\n' >"$WORK/ticks.txt"
-park ticks -- \
+pause ticks -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/ticks.txt" --body-title "validation output" --preamble "Parked."
 comment="$(cat "$WORK/ticks.comment")"
@@ -366,24 +385,25 @@ it "a body carrying a fence of its own is fenced with a longer one"
 assert_contains "$comment" $'\n````\nbefore\n```\nafter\n````\n\n</details>' "comment"
 
 it "a --body that names no file is no body, not an error"
-park nobody -- \
+pause nobody -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/does-not-exist.txt" --preamble "Parked."
 assert_eq "Parked." "$(cat "$WORK/nobody.comment")" "comment"
 
 it "and so is an empty one"
 : >"$WORK/empty.txt"
-park emptybody -- \
+pause emptybody -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/empty.txt" --preamble "Parked."
 assert_eq "Parked." "$(cat "$WORK/emptybody.comment")" "comment"
 
-it "but a --body that names a directory is a mechanical failure, not a comment with a hole in it"
+it "but a --body that names a directory is failure, not a comment with a hole in it"
 mkdir -p "$WORK/adir"
-park dirbody -- \
+pause dirbody -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/adir" --preamble "Parked."
 assert_eq 1 "$?" "exit code"
+assert_eq "failure" "$(cat "$WORK/dirbody.out")" "stdout"
 assert_eq "" "$(cat "$WORK/dirbody.log")" "API calls"
 
 # The cap. A GitHub comment holds 65,536 characters; the body is cut at
@@ -395,7 +415,7 @@ assert_eq "" "$(cat "$WORK/dirbody.log")" "API calls"
 # 1,250 lines of 48 bytes each: exactly 60,000 bytes, not over the cap.
 awk 'BEGIN { for (i = 1; i <= 1250; i++) printf "line %04d %s\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }' \
   >"$WORK/exact.txt"
-park exact -- \
+pause exact -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/exact.txt" --body-title "plan" --preamble "Parked."
 comment="$(cat "$WORK/exact.comment")"
@@ -408,7 +428,7 @@ assert_not_contains "$comment" "cut here" "comment"
 # line inside the budget goes too, never half a line.
 awk 'BEGIN { for (i = 1; i <= 1250; i++) printf "line %04d %s\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; printf "x" }' \
   >"$WORK/over.txt"
-park over -- \
+pause over -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/over.txt" --body-title "plan" \
   --run-url https://example.invalid/run/9 --preamble "Parked."
@@ -431,7 +451,7 @@ assert_contains "$comment" $'      https://example.invalid/run/9 ]\n```\n\n</det
 # it fell inside, which can be most of the body. Loud, and whole-line.
 awk 'BEGIN { printf "short first line\n"; for (i = 0; i < 70000; i++) printf "y"; printf "\n" }' \
   >"$WORK/longline.txt"
-park longline -- \
+pause longline -- \
   --issue 36 --label ready-for-human --branch "" \
   --body "$WORK/longline.txt" --preamble "Parked."
 comment="$(cat "$WORK/longline.comment")"
@@ -443,7 +463,7 @@ assert_contains "$comment" $'short first line\n' "comment"
 it "and without --run-url the note points at the Actions tab"
 assert_contains "$comment" "the Actions tab of this repository ]" "comment"
 
-# --- the parking labels come from config ------------------------------------
+# --- the pause labels come from config --------------------------------------
 #
 # The allowlist survives the move; only its contents are configurable now. It
 # stays an allowlist because every route in is one of two terminal states, and
@@ -456,12 +476,12 @@ printf '{"labels":{"needs_info":"awaiting-reply","human":"escalated"}}\n' \
   >"$cfgdir/.github/falconet.json"
 
 it "a label the config names is accepted"
-( cd "$cfgdir" && "$FALCONET" park --issue 7 --label escalated --preamble "This needs a person." \
+( cd "$cfgdir" && "$FALCONET" pause --issue 7 --label escalated --preamble "This needs a person." \
     >/dev/null 2>&1 )
 assert_eq 0 "$?" "exit code"
 
 it "and the default label is refused once the config has replaced it"
-out=$( cd "$cfgdir" && "$FALCONET" park --issue 7 --label ready-for-human --preamble x 2>&1 )
+out=$( cd "$cfgdir" && "$FALCONET" pause --issue 7 --label ready-for-human --preamble x 2>&1 )
 rc=$?
 assert_eq 2 "$rc" "exit code"
 
@@ -469,27 +489,28 @@ it "and the message names the labels that would have worked"
 assert_contains "$out" "awaiting-reply" "usage message"
 
 it "an invented label is a usage error, not a silent third terminal state"
-( cd "$WORK" && "$FALCONET" park --issue 7 --label parked-somewhere --preamble x >/dev/null 2>&1 )
+( cd "$WORK" && "$FALCONET" pause --issue 7 --label parked-somewhere --preamble x >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 # --- usage ------------------------------------------------------------------
 
 it "-h/--help is a usage error"
-( cd "$WORK" && "$FALCONET" park --help >/dev/null 2>&1 )
+( cd "$WORK" && "$FALCONET" pause --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "a missing --preamble is a usage error"
-( cd "$WORK" && "$FALCONET" park --issue 7 --label needs-info >/dev/null 2>&1 )
+( cd "$WORK" && "$FALCONET" pause --issue 7 --label needs-info >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
 it "an --issue that is not a number is a usage error"
-( cd "$WORK" && "$FALCONET" park --issue seven --label needs-info --preamble x >/dev/null 2>&1 )
+( cd "$WORK" && "$FALCONET" pause --issue seven --label needs-info --preamble x >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
-it "a usage error posts nothing"
+it "a usage error posts nothing, and puts no word on stdout"
 : >"$FAKE_GITHUB/requests.log"
-( cd "$WORK" && "$FALCONET" park --issue 7 --label needs-info --preamble x --bogus >/dev/null 2>&1 )
+out="$( cd "$WORK" && "$FALCONET" pause --issue 7 --label needs-info --preamble x --bogus 2>/dev/null )"
 assert_eq 2 "$?" "exit code"
+assert_eq "" "$out" "stdout"
 assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
 summary

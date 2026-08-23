@@ -193,7 +193,7 @@ func TestRefusals(t *testing.T) {
 func TestGetAndArray(t *testing.T) {
 	dir := bare(t)
 	write(t, filepath.Join(dir, ".github", "falconet.json"),
-		`{"paths":{"deny_content":["zzz(","aaa("]},"prompts":{"park-needs-info":"x.md"},"n":7,"b":true}`)
+		`{"paths":{"deny_content":["zzz(","aaa("]},"prompts":{"pause-needs-info":"x.md"},"n":7,"b":true}`)
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestGetAndArray(t *testing.T) {
 	if got := get(".nope.deeper"); got != "null" {
 		t.Errorf("a missing path prints null, as jq does; got %q", got)
 	}
-	if got := get(`.prompts."park-needs-info"`); got != "x.md" {
+	if got := get(`.prompts."pause-needs-info"`); got != "x.md" {
 		t.Errorf("quoted segment: got %q", got)
 	}
 	if got := get(".n"); got != "7" {

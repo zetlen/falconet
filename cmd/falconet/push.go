@@ -266,7 +266,7 @@ func runPush(args []string) int {
 		// The hand-over comments read this, and they read it INSTEAD of
 		// --branch: written here and only here, it is a statement that the
 		// branch is on the remote right now, not that the workflow intended
-		// to put it there. Every `--branch` argument to park in the workflow
+		// to put it there. Every `--branch` argument to pause in the workflow
 		// is this variable.
 		if err := handoff.GitHubEnvAppend("PUSHED_BRANCH=" + branch); err != nil {
 			fmt.Fprintf(os.Stderr, "falconet: %v\n", err)

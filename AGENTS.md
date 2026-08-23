@@ -80,8 +80,10 @@ and python3 stdlib. Adding a dependency to run the tests is a decision, not
 a convenience.
 
 The Go binary answers the same suite, and since #15 it is the only subject
-that can: `park.test.sh` serves the fake API instead of stubbing `gh`, which
-the bash `park` cannot speak to, so "green" means green through the binary.
+that can: `pause.test.sh` serves the fake API instead of stubbing `gh`, and
+`pause` (`park` until #5's rename; no alias) has no bash behind it —
+`park.sh` was deleted with the rename, ahead of the cutover — so "green"
+means green through the binary.
 Build it out of tree — `CGO_ENABLED=0 go build -trimpath -o dist/falconet
 ./cmd/falconet` — then
 `FALCONET=$PWD/dist/falconet FALCONET_HOME=$PWD bash tests/run.sh`

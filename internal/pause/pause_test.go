@@ -1,4 +1,4 @@
-package park
+package pause
 
 import (
 	"bytes"

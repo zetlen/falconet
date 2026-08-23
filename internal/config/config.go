@@ -76,7 +76,7 @@ const Defaults = `{
   },
   "prompts": {
     "implement": "prompts/implement.md",
-    "park_needs_info": "prompts/park-needs-info.md"
+    "pause_needs_info": "prompts/pause-needs-info.md"
   }
 }`
 
@@ -245,7 +245,7 @@ func (c *Config) decodeSchema() error {
 // Get returns the value at a jq-style path such as `.issue.queue_label`. A
 // path that names nothing yields nil, which Raw prints as `null` — the
 // answer jq gives. Only the dotted-identifier form, with optional quoted
-// segments (`.prompts."park-needs-info"`), is understood; the tests and the
+// segments (`.prompts."pause-needs-info"`), is understood; the tests and the
 // verbs need nothing more, and a filter language is not this package's job.
 func (c *Config) Get(path string) (any, error) {
 	segments, err := splitPath(path)

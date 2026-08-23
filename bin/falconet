@@ -32,7 +32,7 @@
 
 set -uo pipefail
 
-VERBS="prepare commit push park validate assemble"
+VERBS="prepare commit push pause validate assemble"
 UNLISTED="prompt scan config review-verdict"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +47,7 @@ Usage: falconet <verb> [args]
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   validate  validate and plan every configured stack, collecting failures
-  park      put an issue into a terminal state and say so where it will be read
+  pause     put an issue into a terminal state and say so where it will be read
   assemble  build a pull-request body carrying the whole plan
 
 Run `falconet <verb> -h` for a verb's own options.
@@ -69,8 +69,9 @@ case " $VERBS $UNLISTED " in
 esac
 
 # A known verb with no file behind it is this repository mid-port, not a user
-# error. Say which verb and which path, and exit 1 — a bare 127 from exec
-# would be true but useless.
+# error — `pause` is the first: its bash was deleted when the verb was
+# renamed, and only the Go binary answers for it. Say which verb and which
+# path, and exit 1 — a bare 127 from exec would be true but useless.
 target="$LIBEXEC/$verb.sh"
 if [ ! -f "$target" ]; then
   echo "falconet: verb '$verb' is not implemented yet (no $target)" >&2

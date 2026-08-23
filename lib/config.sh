@@ -68,7 +68,7 @@ falconet_default_config() {
   },
   "prompts": {
     "implement": "prompts/implement.md",
-    "park_needs_info": "prompts/park-needs-info.md"
+    "pause_needs_info": "prompts/pause-needs-info.md"
   }
 }
 JSON

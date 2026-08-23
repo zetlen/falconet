@@ -277,7 +277,7 @@ func runCommit(args []string) int {
 	// Above both needs-info exits, for the same reason the two refusals above
 	// are: a run that leaked something must not park quietly with the leak in
 	// the very comment that parks it. needs-info.md is scanned here precisely
-	// because it is the file the park verb posts unfenced.
+	// because it is the file the pause verb posts unfenced.
 	if rc, done := refuseOnSecret([]string{message, questions}, false); done {
 		return rc
 	}

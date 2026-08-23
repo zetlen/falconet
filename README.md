@@ -202,8 +202,8 @@ done
 | Label | Applied by | Config key |
 | --- | --- | --- |
 | `infra-request` | a person, to queue a request | `issue.queue_label` |
-| `needs-info` | falconet, parking a question back to the requester | `labels.needs_info` |
-| `ready-for-human` | falconet, parking a run a person has to take over | `labels.human` |
+| `needs-info` | falconet, pausing a question back to the requester | `labels.needs_info` |
+| `ready-for-human` | falconet, pausing a run a person has to take over | `labels.human` |
 | `needs-plan-review` | falconet, on the pull request it opens | `labels.pr` |
 
 All four before the first run: `gh issue edit --add-label` fails on a label
@@ -258,7 +258,7 @@ Every key, with its default:
 | `issue.in_flight_prefixes` | `["issue-", "claude/issue-"]` | An open PR from a branch with any of these prefixes and this number means "already in flight". |
 | `labels.needs_info` / `labels.human` / `labels.pr` | `needs-info` / `ready-for-human` / `needs-plan-review` | Step 6's labels, if you named them differently. |
 | `prompts.implement` | `prompts/implement.md` | Path, relative to your repository root, of the agent's prompt. |
-| `prompts.park_needs_info` | `prompts/park-needs-info.md` | Likewise, for the question posted back to a requester. |
+| `prompts.pause_needs_info` | `prompts/pause-needs-info.md` | Likewise, for the question posted back to a requester. |
 | `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
 
 **The one default that does not transfer is the prompt.** The shipped
@@ -345,7 +345,7 @@ Three things about this file that are not obvious:
   label**, carries none of the blocking labels, has no ticked opt-out box,
   and has no open pull request already on a branch for that number. A
   comment from a bot, or on a pull request, is never a way in. A comment
-  from a person on an issue parked `needs-info` is the way back in.
+  from a person on an issue paused `needs-info` is the way back in.
 - **The ref in `uses:` must be a literal** — GitHub does not expand
   expressions there. `falconet-ref` is a different thing: it chooses which
   falconet the inner checkout steps fetch. Keep the two in step or you will
@@ -376,7 +376,7 @@ Then watch. `gh run watch` follows it, or the Actions tab:
 | next | **implement**: one agent pass, then every guard, then the commit. The agent's only output that outlives the run is its commit message. |
 | next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then validate, plan, and the pull request. |
 | within ~15 minutes | One of exactly three endings on the issue, below. |
-| always | **contain** runs whatever happened above, and if the issue is still open with neither a parked label nor an open PR, it parks it `ready-for-human` with a link to the run. |
+| always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
 
 The three endings:
 
@@ -411,9 +411,9 @@ development is integration here. Put the SHA you ran in both places:
 | `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | Step 3. |
 | `Resource not accessible by integration` | The caller's `permissions:` block is missing, or the App lacks one of its three permissions. | Steps 3 and 8. |
 | `sha256sum: WARNING: 1 computed checksum did NOT match` | The runner is not Linux x64. | `runs-on: ubuntu-latest`. |
-| Parked `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
-| Parked `ready-for-human`: *did not validate*, followed by OpenTofu output | Validation or the plan failed on the agent's change. The fenced output is tofu's own. | Read it. A credential error is step 5; anything else is the change. |
-| `could not add label` / `label not found` in a park step | One of step 6's labels is missing. | Step 6. |
+| Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
+| Paused `ready-for-human`: *did not validate*, followed by OpenTofu output | Validation or the plan failed on the agent's change. The fenced output is tofu's own. | Read it. A credential error is step 5; anything else is the change. |
+| `could not add label` / `label not found` in a pause step | One of step 6's labels is missing. | Step 6. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 8. |
 | The PR's explanation talks about a sandbox or a tenant you do not have | The shipped prompt's standing facts are the origin's. | Step 7, `prompts.implement`. |
 
@@ -553,7 +553,7 @@ print exactly one word on stdout.
 | `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
 | `push --branch B` | the branch onto the remote, the moment a commit exists | — |
 | `validate --base S` | validate and plan each stack, collecting failures | — |
-| `park --issue N --label L` | a terminal state, said where the requester reads it | — |
+| `pause --issue N --label L` | a terminal state, said where the requester reads it | `success` `failure` |
 | `assemble --plan F --out F` | a PR body carrying the whole plan | — |
 
 The reusable workflow runs them as four jobs — **gate**, **implement**,
@@ -564,7 +564,7 @@ model key; the scripted jobs hold the token and do the mechanics.
 the trade it makes and why.
 
 The same verbs run by hand, against the repository you are standing in — no
-workflow, no credentials beyond a `gh` login (`park`, which speaks to the
+workflow, no credentials beyond a `gh` login (`pause`, which speaks to the
 API directly, wants `GH_TOKEN` and `GITHUB_REPOSITORY=owner/name` instead):
 
 ```sh
@@ -642,9 +642,9 @@ They stub `gh` for the verbs that still use it, serve a fake GitHub API on
 loopback (`tests/fixtures/fake-github.py`) for the verbs that have moved off
 it, push only into bare repositories under a temp directory, and never touch
 the network, GitHub, OpenTofu, or any credential. The suite is green through
-the Go binary: `make test`. `park` speaks to the API directly and its tests
-serve the fake, so the bash `park` cannot pass them; it is deleted in the
-cutover.
+the Go binary: `make test`. `pause` (`park` until #5's rename) speaks to
+the API directly, its tests serve the fake, and its bash was deleted with
+the rename, ahead of the cutover.
 
 ## Support
 

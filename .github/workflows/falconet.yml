@@ -541,7 +541,7 @@ jobs:
           name: tofu-plan-issue-${{ inputs.issue }}
           path: .falconet/plan.txt
           retention-days: 30
-          # Hidden path, as above. `ignore` stays: a run that parked before it
+          # Hidden path, as above. `ignore` stays: a run that paused before it
           # planned has no plan to keep, and that is not a failure.
           include-hidden-files: true
           if-no-files-found: ignore
@@ -584,7 +584,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
-          verb: park
+          verb: pause
           setup: 'false'
           args: >-
             --issue ${{ inputs.issue }}
@@ -600,7 +600,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
-          verb: park
+          verb: pause
           setup: 'false'
           args: >-
             --issue ${{ inputs.issue }}
@@ -616,7 +616,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
-          verb: park
+          verb: pause
           setup: 'false'
           args: >-
             --issue ${{ inputs.issue }}
@@ -655,7 +655,7 @@ jobs:
           ref: ${{ inputs.falconet-ref }}
           path: .falconet-tool
 
-      # Terminal state, or park. Closed, already parked, or an open PR across
+      # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a
       # comment with a link to this run, because a request that vanishes into
       # an empty green run is the failure this pipeline cares about most.
@@ -672,14 +672,14 @@ jobs:
           fi
           if jq -r '.labels[].name' <<<"$state" \
                | grep -qxE 'needs-info|ready-for-human'; then
-            echo "issue #$ISSUE is already parked — terminal"; exit 0
+            echo "issue #$ISSUE is already paused — terminal"; exit 0
           fi
           heads="$(gh pr list --state open --json number,headRefName \
             --jq '.[] | select(.headRefName | test("^(claude/)?issue-" + env.ISSUE + "-")) | .number')"
           if [ -n "$heads" ]; then
             echo "issue #$ISSUE has an open PR — terminal"; exit 0
           fi
-          ./.falconet-tool/bin/falconet park \
+          ./.falconet-tool/bin/falconet pause \
             --issue "$ISSUE" \
             --label ready-for-human \
             --branch "" \

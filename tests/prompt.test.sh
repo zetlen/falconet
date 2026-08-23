@@ -36,12 +36,12 @@ it "--out-dir moves the handoff paths the prompt names"
 out="$("$FALCONET" prompt implement --out-dir /tmp/elsewhere)"
 assert_contains "$out" "/tmp/elsewhere/request.md" "prompt"
 
-it "the park preambles ship too"
-assert_contains "$("$FALCONET" prompt park-needs-info)" \
+it "the pause preambles ship too"
+assert_contains "$("$FALCONET" prompt pause-needs-info)" \
   "I need a bit more from you" "prompt"
 
 it "including the one for a run that could not finish"
-assert_contains "$("$FALCONET" prompt park-failure)" \
+assert_contains "$("$FALCONET" prompt pause-failure)" \
   "This one needs a person." "prompt"
 
 # --- config overrides -------------------------------------------------------
@@ -56,10 +56,10 @@ out="$( cd "$d" && "$FALCONET" prompt implement --config "$d/.github/falconet.js
 assert_contains "$out" "A different prompt entirely." "prompt"
 
 it "and the name is looked up with dashes folded to underscores"
-printf 'Custom parking text.\n' >"$d/custom/park.md"
-printf '{"prompts":{"park_needs_info":"custom/park.md"}}\n' >"$d/.github/falconet.json"
-out="$( cd "$d" && "$FALCONET" prompt park-needs-info --config "$d/.github/falconet.json" 2>&1 )"
-assert_contains "$out" "Custom parking text." "prompt"
+printf 'Custom pause text.\n' >"$d/custom/pause.md"
+printf '{"prompts":{"pause_needs_info":"custom/pause.md"}}\n' >"$d/.github/falconet.json"
+out="$( cd "$d" && "$FALCONET" prompt pause-needs-info --config "$d/.github/falconet.json" 2>&1 )"
+assert_contains "$out" "Custom pause text." "prompt"
 
 it "an override pointing at nothing is an error, not a silent fallback"
 printf '{"prompts":{"implement":"custom/gone.md"}}\n' >"$d/.github/falconet.json"
@@ -87,7 +87,7 @@ it "no name at all is a usage error"
 assert_eq 2 "$?" "exit code"
 
 it "two names at once is a usage error"
-"$FALCONET" prompt implement park-failure >/dev/null 2>&1
+"$FALCONET" prompt implement pause-failure >/dev/null 2>&1
 assert_eq 2 "$?" "exit code"
 
 it "-h/--help is a usage error"

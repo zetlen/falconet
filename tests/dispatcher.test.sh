@@ -50,13 +50,19 @@ assert_eq "" "$OUT" "stdout"
 
 it "usage lists all six verbs"
 run --help
-for v in prepare commit push validate park assemble; do
+for v in prepare commit push validate pause assemble; do
   case "$ERR" in *"  $v "*) ;; *) echo "  FAIL  usage omits $v" ;; esac
 done
 assert_contains "$ERR" "assemble"
 
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
+
+it "park is gone, not aliased or listed"
+assert_not_contains "$ERR" "  park "
+run park --issue 1 --label needs-info --preamble x
+assert_eq "2" "$RC" "exit code"
+assert_contains "$ERR" "unknown verb 'park'"
 
 it "scan and config are unlisted too, and dispatch rather than being refused"
 OUT="$( cd "$WORK" && "$FALCONET" config get .handoff_dir 2>/dev/null )"; RC=$?

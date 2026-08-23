@@ -17,10 +17,10 @@ ACTION="$REPO_ROOT/action.yml"
 wf="$(cat "$WF")"
 action="$(cat "$ACTION")"
 
-# Every park invocation, with backslash and YAML folded continuations pulled
+# Every pause invocation, with backslash and YAML folded continuations pulled
 # into one line, so a check can see the whole argument list.
-park_calls="$(awk '
-  /verb: park/ { inpark = 1; buf = ""; next }
+pause_calls="$(awk '
+  /verb: pause/ { inpark = 1; buf = ""; next }
   inpark {
     buf = buf " " $0
     if ($0 ~ /^[ \t]*- name:/ || $0 ~ /^[ \t]*- uses:/) { print buf; inpark = 0 }
@@ -86,10 +86,10 @@ assert_contains "$wf" "git bundle create" "workflow"
 
 # --- every hand-over names its branch --------------------------------------
 
-it "every park call passes --branch"
-missing="$(printf '%s\n' "$park_calls" | grep -c -- '--branch' || true)"
-total="$(grep -c 'verb: park' "$WF")"
-assert_eq "$total" "$missing" "park calls passing --branch"
+it "every pause call passes --branch"
+missing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
+total="$(grep -c 'verb: pause' "$WF")"
+assert_eq "$total" "$missing" "pause calls passing --branch"
 
 it "and reads PUSHED_BRANCH rather than the branch prepare intended"
 assert_contains "$wf" 'env.PUSHED_BRANCH' "workflow"
@@ -140,7 +140,7 @@ tar_line="$(grep -n 'tar -xzf' "$ACTION" | cut -d: -f1)"
 # in its job has nothing behind that claim, and the secret scan fails closed,
 # so the run dies on a missing scanner rather than on anything real.
 #
-# Dependency-shaped rather than positional: push, park and assemble need none
+# Dependency-shaped rather than positional: push, pause and assemble need none
 # of the pinned binaries and are free to skip the install.
 it "no verb that needs the pinned binaries runs before an install in its job"
 unmet="$(awk '

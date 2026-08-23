@@ -51,7 +51,7 @@ const usageText = `Usage: falconet <verb> [args]
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   validate  validate and plan every configured stack, collecting failures
-  park      put an issue into a terminal state and say so where it will be read
+  pause     put an issue into a terminal state and say so where it will be read
   assemble  build a pull-request body carrying the whole plan
   version   print the version and the toolchain this binary was built with
 
@@ -61,7 +61,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // The verbs, and the unlisted doors. Both lists are the dispatcher's whole
 // knowledge of what exists; a name in neither is a usage error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "park", "validate", "assemble"}
+	verbs    = []string{"prepare", "commit", "push", "pause", "validate", "assemble"}
 	unlisted = []string{"prompt", "scan", "config", "review-verdict"}
 )
 
@@ -75,7 +75,7 @@ var native = map[string]func(args []string) int{
 	"commit":   runCommit,
 	"scan":     runScan,
 	"push":     runPush,
-	"park":     runPark,
+	"pause":    runPause,
 }
 
 func main() {

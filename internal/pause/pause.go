@@ -1,6 +1,6 @@
-// Package park is the hand-over comment the park verb posts, and the two
-// rules the verb holds it to — the parking-label allowlist and the cap — with
-// the record of why above each. The verb itself, cmd/falconet/park.go, is the
+// Package pause is the hand-over comment the pause verb posts, and the two
+// rules the verb holds it to — the pause-label allowlist and the cap — with
+// the record of why above each. The verb itself, cmd/falconet/pause.go, is the
 // flags, the body file, the three GitHub calls, and the exit code.
 //
 // Nothing here touches the filesystem or the network: the verb hands in the
@@ -12,7 +12,7 @@
 // The staged pipeline has several places a request can legitimately stop:
 // the implementing agent needs more information, validation failed, the
 // reviewing agent did not approve, or a step simply died. Every one of them
-// comes through park, so "stopped" always means the same three things
+// comes through pause, so "stopped" always means the same three things
 // happened — a comment, a label, and the claim released — and never means
 // "silently nothing". A request that vanishes into an empty green run is the
 // failure mode this repository cares about most.
@@ -31,7 +31,7 @@
 // The pointer goes directly under the sentence that mentions it, and before
 // any collapsed <details> block a reader might not open. One fixed wording,
 // written once, here: "no pull request" is true of every path that comes
-// through park, because a run that opened one does not park the issue.
+// through pause, because a run that opened one does not pause the issue.
 //
 // GITHUB_SERVER_URL / GITHUB_REPOSITORY are set in every Actions run. A
 // local invocation may lack the first, and then names the branch without a
@@ -51,15 +51,15 @@
 // on a line boundary with an explicit note pointing at --run-url. As
 // everywhere else in this pipeline, content is dropped loudly or not at all.
 //
-// # The parking labels
+// # The pause labels
 //
-// The two parking labels come from config. This stays an allowlist rather
+// The two pause labels come from config. This stays an allowlist rather
 // than becoming "any label the caller names": every route into this verb is
 // one of the two terminal states, and a typo that invented a third would
-// park an issue under a label nothing queries and no one is watching —
+// pause an issue under a label nothing queries and no one is watching —
 // which is the silent-disappearance failure this whole verb exists to
 // prevent.
-package park
+package pause
 
 import (
 	"bytes"
@@ -182,7 +182,7 @@ func Truncate(body []byte, limit int, where string) []byte {
 	return out
 }
 
-// Label checks --label against the two parking labels from config, and
+// Label checks --label against the two pause labels from config, and
 // names both when it is neither.
 func Label(label, needsInfo, human string) error {
 	if label == "" {
@@ -191,6 +191,6 @@ func Label(label, needsInfo, human string) error {
 	if label == needsInfo || label == human {
 		return nil
 	}
-	return fmt.Errorf("--label must be %s or %s (the two parking labels; set labels.needs_info and labels.human to change them)",
+	return fmt.Errorf("--label must be %s or %s (the two pause labels; set labels.needs_info and labels.human to change them)",
 		needsInfo, human)
 }
