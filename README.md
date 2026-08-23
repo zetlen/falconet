@@ -564,7 +564,8 @@ model key; the scripted jobs hold the token and do the mechanics.
 the trade it makes and why.
 
 The same verbs run by hand, against the repository you are standing in — no
-workflow, no credentials beyond a `gh` login:
+workflow, no credentials beyond a `gh` login (`park`, which speaks to the
+API directly, wants `GH_TOKEN` and `GITHUB_REPOSITORY=owner/name` instead):
 
 ```sh
 falconet validate --base "$(git rev-parse main)"
@@ -637,8 +638,13 @@ bash tests/run.sh            # all of them
 bash tests/run.sh handover   # just the files matching "handover"
 ```
 
-They stub `gh`, push only into bare repositories under a temp directory, and
-never touch the network, GitHub, OpenTofu, or any credential.
+They stub `gh` for the verbs that still use it, serve a fake GitHub API on
+loopback (`tests/fixtures/fake-github.py`) for the verbs that have moved off
+it, push only into bare repositories under a temp directory, and never touch
+the network, GitHub, OpenTofu, or any credential. The suite is green through
+the Go binary: `make test`. `park` speaks to the API directly and its tests
+serve the fake, so the bash `park` cannot pass them; it is deleted in the
+cutover.
 
 ## Support
 

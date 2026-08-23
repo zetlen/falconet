@@ -77,6 +77,33 @@ summary() {
   return "$TESTS_FAILED"
 }
 
+# A GitHub API on loopback, for the verbs that have stopped shelling out to
+# `gh` (ADR-0006 D2): tests/fixtures/fake-github.py, which answers from
+# fixtures and writes down what it was asked. Exports GITHUB_API_URL pointing
+# at it and FAKE_GITHUB as the directory it records into; see the fixture's
+# header for the files. Started once per test file, and killed with the
+# scratch directory.
+fake_github() {
+  FAKE_GITHUB="$WORK/fake-github"
+  mkdir -p "$FAKE_GITHUB"
+  python3 "$REPO_ROOT/tests/fixtures/fake-github.py" --dir "$FAKE_GITHUB" &
+  FAKE_GITHUB_PID=$!
+  # Out of the job table, so the kill below is not reported as "Terminated".
+  disown "$FAKE_GITHUB_PID"
+  trap 'kill "$FAKE_GITHUB_PID" 2>/dev/null; rm -rf "$WORK"' EXIT
+  local waited=0
+  until [ -s "$FAKE_GITHUB/port" ]; do
+    waited=$((waited + 1))
+    if [ "$waited" -gt 200 ] || ! kill -0 "$FAKE_GITHUB_PID" 2>/dev/null; then
+      echo "fake-github.py did not start" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+  GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")"
+  export GITHUB_API_URL FAKE_GITHUB
+}
+
 # An execution log shaped like the one claude-code-action writes: a JSON array
 # whose last `result` entry carries the agent's final message. Built with jq
 # from a file so a fixture can hold the message verbatim, backticks, em dashes

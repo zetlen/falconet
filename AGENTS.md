@@ -71,14 +71,21 @@ suite, and a test that couples to bash spends that option
 [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md) step 0 is where the suite
 stopped naming `.sh` paths).
 
-Tests stub `gh`, push only into bare repositories under a temp directory, and
-never touch the network, GitHub, OpenTofu, or any credential. They need bash,
-git, jq, awk and python3 stdlib. Adding a dependency to run the tests is a
-decision, not a convenience.
+Tests stub `gh` for the verbs that still use it and serve a fake GitHub API
+on loopback — `tests/fixtures/fake-github.py`, started by `fake_github` in
+`tests/lib.sh` — for the verbs that have moved off it (ADR-0006 D2). They
+push only into bare repositories under a temp directory, and never touch the
+network, GitHub, OpenTofu, or any credential. They need bash, git, jq, awk
+and python3 stdlib. Adding a dependency to run the tests is a decision, not
+a convenience.
 
-The Go binary answers the same suite. Build it out of tree — `CGO_ENABLED=0
-go build -trimpath -o dist/falconet ./cmd/falconet` — then
-`FALCONET=$PWD/dist/falconet FALCONET_HOME=$PWD bash tests/run.sh`.
+The Go binary answers the same suite, and since #15 it is the only subject
+that can: `park.test.sh` serves the fake API instead of stubbing `gh`, which
+the bash `park` cannot speak to, so "green" means green through the binary.
+Build it out of tree — `CGO_ENABLED=0 go build -trimpath -o dist/falconet
+./cmd/falconet` — then
+`FALCONET=$PWD/dist/falconet FALCONET_HOME=$PWD bash tests/run.sh`
+(`make test` does both).
 `FALCONET_HOME` is what lets a verb the binary does not implement yet fall
 through to its bash script, silently; unset it to prove a verb is native.
 `go test ./...` covers what the suite cannot see from outside a process — the

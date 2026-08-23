@@ -1,6 +1,7 @@
 # falconet's own tests, on every pull request and every push to main.
 #
-# The suite stubs gh, gitleaks and tofu, pushes only into bare repositories
+# The suite stubs gh, gitleaks and tofu, serves a fake GitHub API on loopback
+# for the verbs that have moved off gh, pushes only into bare repositories
 # under a temp directory, and never touches the network, GitHub, OpenTofu or
 # any credential — which is why it can run here with no secrets and no
 # permissions at all.
