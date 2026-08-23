@@ -499,3 +499,49 @@ func TestParseRemoteURL(t *testing.T) {
 		}
 	}
 }
+
+// The raw reads hand back exactly the bytes GitHub sent — every field, in
+// GitHub's order — and ask the same endpoints the typed reads do.
+func TestTheRawReadsAreTheBytesGitHubSent(t *testing.T) {
+	issue := `{"number":42,"title":"Add MX","body":null,"state":"open","labels":[{"name":"infra-request","color":"ededed"}],"reactions":{"+1":3},"node_id":"I_1"}`
+	comments := `[{"id":9,"user":{"login":"zetlen","type":"User"},"created_at":"2026-08-01T00:00:00Z","body":"bump","reactions":{}}]`
+	c, seen := served(t, map[string]string{
+		"GET /repos/o/r/issues/42":                       issue,
+		"GET /repos/o/r/issues/42/comments?per_page=100": comments,
+	}, nil)
+	rawIssue, err := c.GetIssueRaw("o", "r", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rawIssue) != issue {
+		t.Errorf("GetIssueRaw = %s, want the bytes served", rawIssue)
+	}
+	rawComments, err := c.ListIssueCommentsRaw("o", "r", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rawComments) != comments {
+		t.Errorf("ListIssueCommentsRaw = %s, want the bytes served", rawComments)
+	}
+	// The typed views decode from those same bytes.
+	var typed Issue
+	if err := json.Unmarshal(rawIssue, &typed); err != nil || typed.Number != 42 || typed.Title != "Add MX" || typed.Body != "" {
+		t.Errorf("the typed issue does not decode from the raw one: %v %+v", err, typed)
+	}
+	var thread []IssueComment
+	if err := json.Unmarshal(rawComments, &thread); err != nil || len(thread) != 1 || thread[0].User.Login != "zetlen" {
+		t.Errorf("the typed comments do not decode from the raw ones: %v %+v", err, thread)
+	}
+	want := []string{"GET /repos/o/r/issues/42", "GET /repos/o/r/issues/42/comments?per_page=100"}
+	var got []string
+	for _, r := range *seen {
+		got = append(got, r.Method+" "+r.Path)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("requests: got %q, want %q", got, want)
+	}
+	// A refusal is the same *Error the typed reads return.
+	if _, err := c.GetIssueRaw("o", "r", 43); err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("a 404 on the raw read: %v", err)
+	}
+}

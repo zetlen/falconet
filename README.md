@@ -22,7 +22,7 @@ green steps that had done nothing. See [Where this stands](#where-this-stands).
 Someone files an issue that says, in ordinary words, what they want changed.
 falconet:
 
-1. claims the issue, opens a branch, and captures a baseline plan
+1. assigns itself the issue, opens a branch, and captures a baseline plan
 2. runs **one** agent pass with a deliberately narrow toolset — it edits
    config and writes a commit message, and holds no shell and no push token
 3. commits through deterministic guards that an agent cannot talk its way past
@@ -373,7 +373,7 @@ Then watch. `gh run watch` follows it, or the Actions tab:
 
 | When | What you should see |
 | --- | --- |
-| within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the claim and branch exist, the baseline plan ran. |
+| within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the issue is assigned and the branch exists, the baseline plan ran. |
 | next | **implement**: one agent pass, then every guard, then the commit. The agent's only output that outlives the run is its commit message. |
 | next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then validate, plan, and the pull request. |
 | within ~15 minutes | One of exactly three endings on the issue, below. |
@@ -550,7 +550,7 @@ print exactly one word on stdout.
 
 | Verb | What it does | Words |
 | --- | --- | --- |
-| `prepare --issue N` | eligibility gate, claim, branch, baseline plan | `ready` `in-flight` `ineligible` |
+| `prepare --issue N` | eligibility gate, assignment, branch, baseline plan | `ready` `in-flight` `ineligible` |
 | `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
 | `push --branch B` | the branch onto the remote, the moment a commit exists | — |
 | `validate --base S` | validate and plan each stack, collecting failures | — |

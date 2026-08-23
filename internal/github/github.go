@@ -407,10 +407,34 @@ func (c *Client) GetIssue(owner, name string, number int) (*Issue, error) {
 	return &out, nil
 }
 
+// GetIssueRaw is GetIssue's answer as GitHub sent it, undecoded. prepare
+// writes the issue down as the one snapshot every later step reads, and a
+// snapshot is the whole object rather than the fields this package happens
+// to type; the caller decodes its typed view from the same bytes, so both
+// views come from one fetch.
+func (c *Client) GetIssueRaw(owner, name string, number int) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := c.Do("GET", issuePath(owner, name, number, ""), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListIssueComments is GET /repos/{owner}/{name}/issues/{number}/comments,
 // one page of 100 in creation order. The 101st comment is not read.
 func (c *Client) ListIssueComments(owner, name string, number int) ([]IssueComment, error) {
 	var out []IssueComment
+	if err := c.Do("GET", issuePath(owner, name, number, "comments?per_page=100"), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListIssueCommentsRaw is ListIssueComments's answer as GitHub sent it, for
+// the same snapshot GetIssueRaw serves. One page of 100; the 101st comment is
+// not read.
+func (c *Client) ListIssueCommentsRaw(owner, name string, number int) (json.RawMessage, error) {
+	var out json.RawMessage
 	if err := c.Do("GET", issuePath(owner, name, number, "comments?per_page=100"), nil, &out); err != nil {
 		return nil, err
 	}

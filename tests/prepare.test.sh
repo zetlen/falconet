@@ -7,37 +7,39 @@
 # this is a ported test, and every assertion is a decision. Where the two
 # origin sources disagreed — the workflow and the human-facing skill that
 # worked the same queue — the case name says which one is encoded and why.
+#
+# GitHub is tests/fixtures/fake-github.py on loopback, with GITHUB_API_URL
+# pointing at it (ADR-0006 D2): a case scripts the issue, its comment thread,
+# the open pull-request list and any failure in responses.json, and reads
+# back what the verb asked for from requests.log. This file stubbed `gh`
+# until #17 moved the verb to the API; libexec/falconet/prepare.sh still
+# shells out to gh, so it cannot pass this file any more — as pause.test.sh
+# has been red against the bash since #15. Green means through the binary.
 
+# shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
-# A gh that answers from canned JSON, records every call, honours --jq by
-# running jq the way the real one does, and captures --body-file so a test can
-# read what a requester would have seen.
-make_gh() { # path
-  cat >"$1" <<'STUB'
+# --- the fake API, and no gh ------------------------------------------------
+
+fake_github
+export GH_TOKEN=test-token
+export GITHUB_REPOSITORY=zetlen/wayfinders-infra
+export GITHUB_SERVER_URL=https://github.com
+
+# Not a stub: a tripwire, as pause.test.sh has. A prepare that still shells
+# out to gh must fail here, loudly, and before the real gh on this machine
+# could carry the fake token above to the real GitHub.
+mkdir -p "$WORK/no-gh"
+cat >"$WORK/no-gh/gh" <<'TRIPWIRE'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GH_LOG"
-case "${1:-}:${2:-}" in
-  issue:view) src="$GH_ISSUE_JSON"; rc="${GH_VIEW_RC:-0}" ;;
-  pr:list)    src="$GH_PR_JSON";    rc=0 ;;
-  issue:edit)
-    for a in "$@"; do [[ "$a" == "--remove-label" ]] && exit "${GH_REMOVE_RC:-0}"; done
-    exit "${GH_EDIT_RC:-0}" ;;
-  issue:comment)
-    prev=""
-    for a in "$@"; do [[ "$prev" == "--body-file" ]] && cp "$a" "$GH_COMMENT"; prev="$a"; done
-    exit "${GH_COMMENT_RC:-0}" ;;
-  *) exit 0 ;;
-esac
-[[ "$rc" -eq 0 ]] || { echo "gh: boom" >&2; exit "$rc"; }
-filter=""; prev=""
-for a in "$@"; do [[ "$prev" == "--jq" ]] && filter="$a"; prev="$a"; done
-if [[ -n "$filter" ]]; then jq -r "$filter" <"$src"; else cat "$src"; fi
-STUB
-  chmod +x "$1"
-}
+echo "gh: prepare.test.sh no longer stubs gh — the subject must speak GITHUB_API_URL" >&2
+exit 1
+TRIPWIRE
+chmod +x "$WORK/no-gh/gh"
+PATH="$WORK/no-gh:$PATH"
+export PATH
 
 # init and plan answer separately: this stage runs both, and a stub that
 # failed them together would let "the baseline plan failed" pass on a run
@@ -74,43 +76,71 @@ new_checkout() { # name -> echoes path
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" remote add origin "$base/origin.git"
   git -C "$base/repo" push -q origin main
-  make_gh "$base/bin/gh"
   make_tofu "$base/bin/tofu"
-  printf '[]\n' >"$base/pr.json"
   printf '%s' "$base"
 }
 
-# The issue snapshot, as `gh issue view --json ...` returns it.
+# The issue as GET /repos/{o}/{r}/issues/42 answers it, and its comment
+# thread as GET …/issues/42/comments does.
 issue_json() { # path labels-csv body [state]
-  local out="$1" labels="$2" body="$3" state="${4:-OPEN}"
+  local out="$1" labels="$2" body="$3" state="${4:-open}"
   jq -n --arg b "$body" --arg s "$state" --arg l "$labels" \
     '{number:42, title:"Add MX records for papernapkin.tech", body:$b, state:$s,
-      labels: ($l | if . == "" then [] else split(",") end | map({name:.})),
-      comments: [{author:{login:"zetlen"}, createdAt:"2026-08-01T00:00:00Z", body:"bump"}]}' \
+      labels: ($l | if . == "" then [] else split(",") end | map({name:.}))}' \
     >"$out"
+  printf '[{"user":{"login":"zetlen"},"created_at":"2026-08-01T00:00:00Z","body":"bump"}]\n' \
+    >"$(dirname "$out")/comments.json"
+}
+
+API=/repos/zetlen/wayfinders-infra
+
+# responses.json for one case: the failure knobs first, so they win, then the
+# issue, its thread and the pull-request list from the checkout's files.
+script_github() { # checkout
+  local c="$1"
+  [[ -f "$c/comments.json" ]] || printf '[]\n' >"$c/comments.json"
+  [[ -f "$c/pr.json" ]] || printf '[]\n' >"$c/pr.json"
+  jq -n --slurpfile issue "$c/issue.json" --slurpfile comments "$c/comments.json" \
+    --slurpfile pulls "$c/pr.json" --arg b "$API" \
+    --arg view "${VIEW_RC:-0}" --arg edit "${EDIT_RC:-0}" --arg remove "${REMOVE_RC:-0}" \
+    --arg comment "${COMMENT_RC:-0}" --arg user "${USER_RC:-0}" '
+    (if $view != "0" then [{method:"GET", path:($b+"/issues/42"), status:500, body:{message:"boom"}}] else [] end)
+    + (if $edit != "0" then [{method:"POST", path:($b+"/issues/42/assignees"), status:500, body:{message:"boom"}}] else [] end)
+    + (if $remove != "0" then [{method:"DELETE", path:($b+"/issues/42/labels/needs-info"), status:500, body:{message:"boom"}}] else [] end)
+    + (if $comment != "0" then [{method:"POST", path:($b+"/issues/42/comments"), status:500, body:{message:"boom"}}] else [] end)
+    + (if $user != "0" then [{method:"GET", path:"/user", status:500, body:{message:"boom"}}] else [] end)
+    + [{method:"GET", path:($b+"/issues/42"), body:$issue[0]},
+       {method:"GET", path:($b+"/issues/42/comments"), body:$comments[0]},
+       {method:"GET", path:($b+"/pulls"), body:$pulls[0]}]
+  ' >"$FAKE_GITHUB/responses.json"
 }
 
 p() { # checkout [args...] -> sets OUT ERR RC
   local c="$1"; shift
+  script_github "$c"
+  : >"$FAKE_GITHUB/requests.log"
+  : >"$FAKE_GITHUB/requests.jsonl"
   OUT="$( cd "$c/repo" \
-    && PATH="$c/bin:$PATH" \
-       GH_LOG="$c/gh.log" GH_ISSUE_JSON="$c/issue.json" GH_PR_JSON="$c/pr.json" \
-       GH_COMMENT="$c/posted.md" \
-       GH_VIEW_RC="${VIEW_RC:-0}" GH_EDIT_RC="${EDIT_RC:-0}" \
-       GH_REMOVE_RC="${REMOVE_RC:-0}" GH_COMMENT_RC="${COMMENT_RC:-0}" \
-       TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
+    && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
        TOFU_INIT_RC="${T_INIT_RC:-0}" \
        GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
+       GITHUB_TRIGGERING_ACTOR="${ACTOR:-}" \
        "$FALCONET" prepare --issue 42 "$@" 2>"$c/err" )"
   RC=$?
   ERR="$(cat "$c/err")"
+  # What the verb asked GitHub, one `METHOD PATH BODY` line each, and the
+  # exact bytes of the comment a requester would have been shown.
+  cp "$FAKE_GITHUB/requests.log" "$c/requests.log"
+  jq -j 'select(.method == "POST" and (.path | endswith("/comments"))) | .body.body' \
+    "$FAKE_GITHUB/requests.jsonl" >"$c/posted.md"
   return 0
 }
-reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; T_RC=""; T_INIT_RC=""
-          GH_ENV=""; RUN_ID=""; }
+reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; T_RC=""; T_INIT_RC=""
+          GH_ENV=""; RUN_ID=""; ACTOR=""; }
 reset
 
-ghlog() { cat "$1/gh.log" 2>/dev/null; }
+ghlog() { cat "$1/requests.log" 2>/dev/null; }
+mutations() { grep -E '^(POST|DELETE|PUT|PATCH) ' "$1/requests.log" 2>/dev/null; }
 hand()  { cat "$1/repo/.falconet/$2" 2>/dev/null; }
 
 # --- the gate ---------------------------------------------------------------
@@ -146,7 +176,7 @@ p "$c"
 it "a label that merely starts like a blocking one does not block"
 assert_eq "ready" "$OUT" "outcome"
 
-c="$(new_checkout closed)"; issue_json "$c/issue.json" "infra-request" "x" "CLOSED"
+c="$(new_checkout closed)"; issue_json "$c/issue.json" "infra-request" "x" "closed"
 p "$c"
 it "a closed issue is ineligible"
 assert_eq "ineligible" "$OUT" "outcome"
@@ -192,8 +222,9 @@ p "$c"
 it "the opt-out is anchored to a checkbox, not found anywhere in the prose"
 assert_eq "ready" "$OUT" "outcome"
 
+# gh spelled the state OPEN; the API spells it open. Both are open.
 c="$(new_checkout nullbody)"
-jq -n '{number:42,title:"T",body:null,state:"OPEN",labels:[{name:"infra-request"}],comments:[]}' \
+jq -n '{number:42,title:"T",body:null,state:"OPEN",labels:[{name:"infra-request"}]}' \
   >"$c/issue.json"
 p "$c"
 it "a null body is not a crash"
@@ -202,27 +233,31 @@ assert_eq "ready" "$OUT" "outcome"
 # --- in flight --------------------------------------------------------------
 
 c="$(new_checkout inflight)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '[{"number":57,"headRefName":"issue-42-add-mx"}]\n' >"$c/pr.json"
+printf '[{"number":57,"head":{"ref":"issue-42-add-mx"}}]\n' >"$c/pr.json"
 p "$c"
 it "an open PR on this issue's branch is in-flight"
 assert_eq "in-flight" "$OUT" "outcome"
 it "and the reason names the pull request"
 assert_contains "$ERR" "#57" "stderr"
+it "and in-flight changes nothing either: no mutating call"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+it "and the checkout stays on its original branch"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 c="$(new_checkout inflight_claude)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '[{"number":57,"headRefName":"claude/issue-42-20250101"}]\n' >"$c/pr.json"
+printf '[{"number":57,"head":{"ref":"claude/issue-42-20250101"}}]\n' >"$c/pr.json"
 p "$c"
 it "the legacy claude/ prefix counts too"
 assert_eq "in-flight" "$OUT" "outcome"
 
 c="$(new_checkout inflight_other)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '[{"number":57,"headRefName":"issue-421-other"}]\n' >"$c/pr.json"
+printf '[{"number":57,"head":{"ref":"issue-421-other"}}]\n' >"$c/pr.json"
 p "$c"
 it "issue 421's PR does not make issue 42 in-flight"
 assert_eq "ready" "$OUT" "outcome"
 
 c="$(new_checkout inflight_unanchored)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '[{"number":57,"headRefName":"feature/issue-42-x"}]\n' >"$c/pr.json"
+printf '[{"number":57,"head":{"ref":"feature/issue-42-x"}}]\n' >"$c/pr.json"
 p "$c"
 it "and the match is anchored, so a nested name is not this issue's branch"
 assert_eq "ready" "$OUT" "outcome"
@@ -246,10 +281,10 @@ it "an ineligible issue leaves no handoff files"
 assert_file_missing "$c/repo/.falconet/request.md"
 it "and no issue.json, so 'ineligible' is not distinguishable from 'never ran'"
 assert_file_missing "$c/repo/.falconet/issue.json"
-it "and makes no mutating gh call"
-assert_not_contains "$(ghlog "$c")" "issue edit" "gh log"
+it "and makes no mutating API call"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
 it "and posts no comment"
-assert_not_contains "$(ghlog "$c")" "issue comment" "gh log"
+assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 it "and exports nothing"
 assert_eq "" "$(cat "$c/github_env" 2>/dev/null)" "GITHUB_ENV"
 it "and leaves the checkout on its original branch"
@@ -283,16 +318,22 @@ assert_contains "$(hand "$c" plan-baseline.txt)" "No changes" "plan-baseline.txt
 it "and the planner is never asked for color"
 assert_contains "$(cat "$c/tofu-calls.txt")" "-no-color" "tofu calls"
 it "the claim is recorded"
-assert_contains "$(ghlog "$c")" "--add-assignee" "gh log"
+assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees" "API calls"
 it "and the requester is thanked, in the words that promise only what is true"
 assert_contains "$(cat "$c/posted.md" 2>/dev/null)" \
   "Thanks — this request has been picked up" "posted comment"
 it "including that a person still decides"
 assert_contains "$(cat "$c/posted.md" 2>/dev/null)" \
   "Nothing takes effect until a person has reviewed it." "posted comment"
+it "issue.json is the API's issue object"
+assert_eq "42 Add MX records for papernapkin.tech" \
+  "$(jq -r '"\(.number) \(.title)"' "$c/repo/.falconet/issue.json")" "issue.json"
+it "with the comment thread merged in"
+assert_eq "zetlen bump" \
+  "$(jq -r '.comments[0] | "\(.user.login) \(.body)"' "$c/repo/.falconet/issue.json")" "issue.json comments"
 
 c="$(new_checkout nocomments)"
-jq -n '{number:42,title:"T",body:"b",state:"OPEN",labels:[{name:"infra-request"}],comments:[]}' \
+jq -n '{number:42,title:"T",body:"b",state:"open",labels:[{name:"infra-request"}]}' \
   >"$c/issue.json"
 p "$c"
 it "an issue with no comments gets no comment-thread heading"
@@ -319,7 +360,7 @@ assert_eq "ready" "$OUT" "outcome"
 slug_of() { # title -> echoes branch.txt
   local c; c="$(new_checkout "slug$RANDOM")"
   jq -n --arg t "$1" \
-    '{number:42,title:$t,body:"b",state:"OPEN",labels:[{name:"infra-request"}],comments:[]}' \
+    '{number:42,title:$t,body:"b",state:"open",labels:[{name:"infra-request"}]}' \
     >"$c/issue.json"
   p "$c" >/dev/null
   hand "$c" branch.txt
@@ -383,9 +424,9 @@ assert_contains "$ERR" "dns/main.tf" "stderr"
 # tree thanked the requester, assigned the issue, cut a branch and then died.
 # The human-facing skill put it in preflight. Preflight is encoded here.
 it "and the requester is not thanked for a run that was never going to happen"
-assert_not_contains "$(ghlog "$c")" "issue comment" "gh log"
+assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 it "nor is the issue claimed"
-assert_not_contains "$(ghlog "$c")" "issue edit" "gh log"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
 it "nor is a branch left behind"
 assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
@@ -408,9 +449,9 @@ p "$c" --event "$c/event.json"
 it "a human's comment on a needs-info issue is a way back in"
 assert_eq "ready" "$OUT" "outcome"
 it "and the parking label is cleared, because requesters usually cannot"
-assert_contains "$(ghlog "$c")" "--remove-label needs-info" "gh log"
+assert_contains "$(ghlog "$c")" "DELETE $API/issues/42/labels/needs-info" "API calls"
 it "but the requester is not thanked twice"
-assert_not_contains "$(ghlog "$c")" "issue comment" "gh log"
+assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 it "and no ack.md is written"
 assert_file_missing "$c/repo/.falconet/ack.md"
 
@@ -444,6 +485,21 @@ assert_eq 1 "$RC" "exit code"
 it "because an issue left parked while a run proceeds is a contradiction"
 assert_eq "" "$OUT" "stdout"
 
+# --- the event file itself --------------------------------------------------
+
+c="$(new_checkout noevent)"; issue_json "$c/issue.json" "infra-request" "x"
+p "$c" --event "$c/nowhere.json"
+it "an --event that names no file is a mechanical failure, not an outcome"
+assert_eq 1 "$RC" "exit code"
+assert_eq "" "$OUT" "stdout"
+
+c="$(new_checkout badevent)"; issue_json "$c/issue.json" "infra-request" "x"
+printf '{not json\n' >"$c/event.json"
+p "$c" --event "$c/event.json"
+it "and so is one that is not JSON"
+assert_eq 1 "$RC" "exit code"
+assert_eq "" "$OUT" "stdout"
+
 # --- best-effort calls really are best-effort -------------------------------
 
 c="$(new_checkout claimfails)"; issue_json "$c/issue.json" "infra-request" "x"
@@ -461,12 +517,39 @@ assert_eq "ready" "$OUT" "outcome"
 c="$(new_checkout noack)"; issue_json "$c/issue.json" "infra-request" "x"
 p "$c" --no-ack
 it "--no-ack skips the greeting for a caller that only wants the branch"
-assert_not_contains "$(ghlog "$c")" "issue comment" "gh log"
+assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 
 c="$(new_checkout assignee)"; issue_json "$c/issue.json" "infra-request" "x"
 p "$c" --assignee bob
 it "--assignee names who the claim is recorded against"
-assert_contains "$(ghlog "$c")" "--add-assignee bob" "gh log"
+assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"bob\"]}" "API calls"
+
+# --- who is assigned, when nobody said -------------------------------------
+#
+# gh resolved `@me` on its own; the port asks GET /user, which an App token
+# cannot answer. In CI the triggering actor is named instead, so the login
+# lookup is the workstation's path.
+
+c="$(new_checkout whoami)"; issue_json "$c/issue.json" "infra-request" "x"
+p "$c"
+it "with neither --assignee nor GITHUB_TRIGGERING_ACTOR the token's own login is asked for"
+assert_contains "$(ghlog "$c")" "GET /user" "API calls"
+it "and the issue is assigned to it"
+assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"fake-user\"]}" "API calls"
+
+c="$(new_checkout actor)"; issue_json "$c/issue.json" "infra-request" "x"
+ACTOR=alice p "$c"; reset
+it "GITHUB_TRIGGERING_ACTOR names the assignee in CI"
+assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"alice\"]}" "API calls"
+it "and the token's login is not asked for"
+assert_not_contains "$(ghlog "$c")" "GET /user" "API calls"
+
+c="$(new_checkout whoami_fails)"; issue_json "$c/issue.json" "infra-request" "x"
+USER_RC=1 p "$c"; reset
+it "a token that cannot say whose it is — an App token — is a warning, not a failure"
+assert_contains "$ERR" "could not assign" "stderr"
+it "and the run is still ready"
+assert_eq "ready" "$OUT" "outcome"
 
 # --- hard failures ----------------------------------------------------------
 
@@ -534,6 +617,40 @@ c="$(new_checkout viewfails)"; issue_json "$c/issue.json" "infra-request" "x"
 VIEW_RC=1 p "$c"; reset
 it "an issue that cannot be read is a mechanical failure, not an outcome"
 assert_eq 1 "$RC" "exit code"
+
+# --- the token and the repository, resolved when first needed --------------
+
+c="$(new_checkout notoken)"; issue_json "$c/issue.json" "infra-request" "x"
+( unset GH_TOKEN GITHUB_TOKEN; p "$c"; printf '%s\n%s\n' "$RC" "$OUT" >"$c/result" )
+it "with no GH_TOKEN the ready path is a mechanical failure"
+assert_eq 1 "$(sed -n 1p "$c/result")" "exit code"
+it "and prints no outcome word"
+assert_eq "" "$(sed -n 2p "$c/result")" "stdout"
+it "and nothing reaches GitHub"
+assert_eq "" "$(ghlog "$c")" "API calls"
+
+c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "infra-request,wontfix" "x"
+jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"infra-request"},{name:"wontfix"}], body:"x"}}' \
+  >"$c/event.json"
+( unset GH_TOKEN GITHUB_TOKEN; p "$c" --event "$c/event.json"; printf '%s\n' "$OUT" >"$c/result" )
+it "an event that says ineligible needs no token at all"
+assert_eq "ineligible" "$(cat "$c/result")" "outcome"
+it "and makes no request, not even to read"
+assert_eq "" "$(ghlog "$c")" "API calls"
+
+# The fixture's origin is a bare repository on disk, not github.com, so
+# without GITHUB_REPOSITORY there is no repository to ask about.
+c="$(new_checkout norepo)"; issue_json "$c/issue.json" "infra-request" "x"
+( unset GITHUB_REPOSITORY; p "$c"; printf '%s\n%s\n' "$RC" "$OUT" >"$c/result"; cp "$c/err" "$c/err.saved" )
+it "with no GITHUB_REPOSITORY and an origin that is not on github.com there is nowhere to ask: exit 1"
+assert_eq 1 "$(sed -n 1p "$c/result")" "exit code"
+assert_eq "" "$(sed -n 2p "$c/result")" "stdout"
+it "and the message names both sources"
+assert_contains "$(cat "$c/err.saved")" "GITHUB_REPOSITORY" "stderr"
+assert_contains "$(cat "$c/err.saved")" "origin" "stderr"
+it "before any mutation"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 # --- $GITHUB_ENV is optional ------------------------------------------------
 

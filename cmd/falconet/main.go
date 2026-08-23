@@ -47,7 +47,7 @@ var version = "dev"
 
 const usageText = `Usage: falconet <verb> [args]
 
-  prepare   claim an eligible issue, open a branch, capture a baseline plan
+  prepare   gate an issue, assign it, open a branch, capture a baseline plan
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   validate  validate and plan every configured stack, collecting failures
@@ -71,6 +71,7 @@ var (
 // step 2); the map grows one entry per port, and fallback is deleted in #19.
 var native = map[string]func(args []string) int{
 	"version":        runVersion,
+	"prepare":        runPrepare,
 	"config":         runConfig,
 	"assemble":       runAssemble,
 	"commit":         runCommit,
