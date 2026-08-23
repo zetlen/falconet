@@ -78,6 +78,8 @@ var native = map[string]func(args []string) int{
 	"pause":    runPause,
 	"validate": runValidate,
 	"prompt":   runPrompt,
+
+	"review-verdict": runReviewVerdict,
 }
 
 func main() {
