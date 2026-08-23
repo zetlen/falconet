@@ -456,8 +456,12 @@ const (
 		"(or: for l in infra-request needs-info ready-for-human needs-plan-review; do gh label create \"$l\"; done)"
 	LeftPrompt = "step 7 — edit the standing-facts block in " + PromptPath + ": it describes the repository falconet was extracted from " +
 		"(its registrar sandbox, its scratch tenant), and the agent will believe it of this one until it says what is true here"
+	// Not `falconet prompt implement > file`: that output has {handoff} and
+	// {workspace} substituted with THIS machine's paths, and a copy of it
+	// would carry them into CI. The shipped file is the one to copy.
 	LeftPromptUnset = "step 7 — prompts.implement is not set, so the shipped prompt is used, and its standing facts are the origin's: " +
-		"copy it into the repository (falconet prompt implement > " + PromptPath + "), edit that block, and point prompts.implement at the copy"
+		"copy falconet's prompts/implement.md (the file at the tag you run, not `falconet prompt` output, which carries this machine's paths) to " +
+		PromptPath + ", edit that block, and point prompts.implement at the copy"
 	LeftCanary = "step 9 — file a canary issue: the smallest change the planned stack can carry (one DNS record, one tag), " +
 		"labelled infra-request, then watch the run; once it has reached a pull request, pin the ref in uses: to the SHA or tag you ran"
 	LeftDoctor = "then: falconet doctor"

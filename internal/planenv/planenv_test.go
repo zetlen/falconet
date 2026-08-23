@@ -189,24 +189,33 @@ func TestMasks(t *testing.T) {
 }
 
 // For any value: there is exactly one mask per non-empty line, each is the
-// prefix followed by that line, in order, and no mask spans a line — a mask
-// with a newline in it would be two workflow commands, the second of them
-// garbage.
+// prefix followed by that line in the runner's encoding, in order, and no
+// mask spans a line — a mask with a newline in it would be two workflow
+// commands, the second of them garbage — nor carries a raw '%', which the
+// runner would decode into something other than the line.
 func TestEveryNonEmptyLineIsMaskedOnceAndNothingElse(t *testing.T) {
 	f := func(value string) bool {
 		got := Masks(value)
 		var want []string
 		for _, line := range strings.Split(value, "\n") {
 			if line != "" {
-				want = append(want, MaskPrefix+line)
+				want = append(want, MaskPrefix+maskEscape(line))
 			}
 		}
 		if !reflect.DeepEqual(got, want) {
 			return false
 		}
 		for _, m := range got {
-			if strings.Contains(m, "\n") || m == MaskPrefix {
+			if strings.ContainsAny(m, "\r\n") || m == MaskPrefix {
 				return false
+			}
+			// Every '%' left in the mask is the start of one of the three
+			// escapes, never a raw one.
+			body := strings.TrimPrefix(m, MaskPrefix)
+			for i := 0; i < len(body); i++ {
+				if body[i] == '%' && !(strings.HasPrefix(body[i:], "%25") || strings.HasPrefix(body[i:], "%0D") || strings.HasPrefix(body[i:], "%0A")) {
+					return false
+				}
 			}
 		}
 		return true
