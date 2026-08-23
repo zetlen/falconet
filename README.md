@@ -257,16 +257,17 @@ Every key, with its default:
 | `issue.branch_prefix` | `issue-` | Branches are `<prefix><number>-<slug>`. |
 | `issue.in_flight_prefixes` | `["issue-", "claude/issue-"]` | An open PR from a branch with any of these prefixes and this number means "already in flight". |
 | `labels.needs_info` / `labels.human` / `labels.pr` | `needs-info` / `ready-for-human` / `needs-plan-review` | Step 6's labels, if you named them differently. |
-| `prompts.implement` | `prompts/implement.md` | Path, relative to your repository root, of the agent's prompt. |
-| `prompts.pause_needs_info` | `prompts/pause-needs-info.md` | Likewise, for the question posted back to a requester. |
+| `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. |
+| `prompts.pause_needs_info` | the shipped [`prompts/pause-needs-info.md`](prompts/pause-needs-info.md), embedded in the binary | Likewise, for the question posted back to a requester. |
 | `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
 
 **The one default that does not transfer is the prompt.** The shipped
 [`prompts/implement.md`](prompts/implement.md) carries a "standing facts"
 block describing the repository this came from — its registrar sandbox, its
-scratch tenant. Copy the file into your repository, replace that block with
-what is true of yours, and point `prompts.implement` at the copy. `{handoff}`
-and `{workspace}` in it are substituted at run time.
+scratch tenant — and the copy embedded in the binary is that one. To change
+it, copy the file into your repository, replace that block with what is true
+of yours, and point `prompts.implement` at the copy. `{handoff}` and
+`{workspace}` in it are substituted at run time.
 
 **Check:**
 

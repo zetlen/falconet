@@ -52,6 +52,35 @@ func TestInit(t *testing.T) {
 	})
 }
 
+// Resolve is Init's answer without Init's directory: the prompt verb names
+// the handoff directory in text, and must not create it.
+func TestResolveNamesTheDirectoryAndLeavesNothingBehind(t *testing.T) {
+	cfg, dir := defaults(t)
+	cases := []struct{ name, explicit, want string }{
+		{"the configured default, under cwd", "", filepath.Join(dir, ".falconet")},
+		{"an explicit absolute path wins", filepath.Join(dir, "elsewhere"), filepath.Join(dir, "elsewhere")},
+		{"an explicit relative path resolves against cwd", "rel-dir", filepath.Join(dir, "rel-dir")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Resolve(c.explicit, cfg, dir)
+			if got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+			if _, err := os.Stat(got); !os.IsNotExist(err) {
+				t.Errorf("%s exists: Resolve must not create", got)
+			}
+		})
+	}
+	t.Run("Init is Resolve plus the directory", func(t *testing.T) {
+		want := Resolve("", cfg, dir)
+		got, err := Init("", cfg, dir)
+		if err != nil || got != want {
+			t.Errorf("Init = %q, %v; Resolve = %q", got, err, want)
+		}
+	})
+}
+
 func TestGitHubEnvAppend(t *testing.T) {
 	dir := t.TempDir()
 	t.Run("unset: a silent no-op", func(t *testing.T) {

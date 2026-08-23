@@ -43,7 +43,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"issue.queue_label":  s.Issue.QueueLabel,
 		"labels.human":       s.Labels.Human,
 		"plan.command":       s.Plan.Command,
-		"prompts.implement":  s.Prompts["implement"],
 		"paths.allow[0]":     s.Paths.Allow[0],
 		"stacks.plan[0]":     s.Stacks.Plan[0],
 		"blocking_labels[3]": s.Issue.BlockingLabels[3],
@@ -53,7 +52,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"issue.queue_label":  "infra-request",
 		"labels.human":       "ready-for-human",
 		"plan.command":       "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false",
-		"prompts.implement":  "prompts/implement.md",
 		"paths.allow[0]":     "*.tf",
 		"stacks.plan[0]":     "dns",
 		"blocking_labels[3]": "wontfix",
@@ -68,6 +66,12 @@ func TestDefaultsStandAlone(t *testing.T) {
 	tf, f := index(deny, "templatefile("), index(deny, "file(")
 	if tf < 0 || f < 0 || tf > f {
 		t.Errorf("deny_content order: templatefile( at %d, file( at %d in %v", tf, f, deny)
+	}
+	// prompts has no default (#3). The old one named a path relative to the
+	// consumer's repository, which made the default an override and the
+	// shipped prompt unreachable; an absent key is the embedded prompt.
+	if len(s.Prompts) != 0 {
+		t.Errorf("prompts default = %v, want none: the shipped prompt is the binary's, not a path", s.Prompts)
 	}
 }
 
@@ -169,6 +173,7 @@ func TestRefusals(t *testing.T) {
 		{"not an object", `["a"]`, "", "is not valid JSON: the top-level value is not an object"},
 		{"--config names nothing", "", filepath.Join(dir, "nope.json"), "--config names no file"},
 		{"a value of the wrong type", `{"handoff_dir": ["x"]}`, "", "does not match the schema"},
+		{"a prompt override of the wrong type", `{"prompts": {"implement": 5}}`, "", "does not match the schema"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -214,6 +219,9 @@ func TestGetAndArray(t *testing.T) {
 	}
 	if got := get(`.prompts."pause-needs-info"`); got != "x.md" {
 		t.Errorf("quoted segment: got %q", got)
+	}
+	if p := cfg.Schema.Prompts; len(p) != 1 || p["pause-needs-info"] != "x.md" {
+		t.Errorf("a user's prompts are the whole map, there being no default: got %v", p)
 	}
 	if got := get(".n"); got != "7" {
 		t.Errorf("number as written: got %q", got)

@@ -39,8 +39,12 @@ import (
 )
 
 // Defaults is the schema with every default, as the JSON document lib/config.sh
-// carried. Every key in docs/adr/0003-the-cli-surface.md is here; a verb never
-// has to ask whether a key is set.
+// carried. Every key in docs/adr/0003-the-cli-surface.md is here but one, so
+// a verb never has to ask whether a key is set. The one is prompts: its
+// default was issue #3 — a path relative to the consumer's repository, which
+// made the default an override and the shipped prompt unreachable — and the
+// shipped prompts are embedded in the binary now, so an absent key means
+// exactly that. See Schema.Prompts.
 const Defaults = `{
   "handoff_dir": ".falconet",
   "issue": {
@@ -73,10 +77,6 @@ const Defaults = `{
   },
   "plan": {
     "command": "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false"
-  },
-  "prompts": {
-    "implement": "prompts/implement.md",
-    "pause_needs_info": "prompts/pause-needs-info.md"
   }
 }`
 
@@ -113,7 +113,11 @@ type Schema struct {
 		Command string `json:"command"`
 	} `json:"plan"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
-	// because `falconet prompt <name>` looks names up dynamically.
+	// because `falconet prompt <name>` looks names up dynamically. It has no
+	// default (#3): an absent key means the prompt embedded in the binary,
+	// and a set one is a path relative to the repository root — an override,
+	// and nothing else. A value of any other type is refused with the rest
+	// of the schema.
 	Prompts map[string]string `json:"prompts"`
 }
 

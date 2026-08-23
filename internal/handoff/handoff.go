@@ -25,12 +25,16 @@ import (
 	"github.com/zetlen/falconet/internal/config"
 )
 
-// Init resolves the handoff directory and creates it. An explicit override —
-// the --out-dir flag several verbs carry — wins over the config, and a
-// relative path is resolved against cwd, which for a verb is the repository
-// root: verbs cd there before they read config, and a relative path would
-// otherwise mean somewhere else.
-func Init(explicit string, cfg *config.Config, cwd string) (string, error) {
+// Resolve is where the handoff directory is, without creating it. An
+// explicit override — the --out-dir flag several verbs carry — wins over the
+// config, and a relative path is resolved against cwd, which for a verb is
+// the repository root: verbs cd there before they read config, and a
+// relative path would otherwise mean somewhere else.
+//
+// On its own it is for a verb that only names the directory: the prompt verb
+// substitutes it into the text it prints, and printing a prompt is a read —
+// a caller asking what the text says should not leave a directory behind.
+func Resolve(explicit string, cfg *config.Config, cwd string) string {
 	dir := explicit
 	if dir == "" {
 		dir = cfg.Schema.HandoffDir
@@ -38,6 +42,12 @@ func Init(explicit string, cfg *config.Config, cwd string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(cwd, dir)
 	}
+	return dir
+}
+
+// Init resolves the handoff directory and creates it.
+func Init(explicit string, cfg *config.Config, cwd string) (string, error) {
+	dir := Resolve(explicit, cfg, cwd)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("cannot create handoff directory %s", dir)
 	}

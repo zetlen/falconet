@@ -10,8 +10,6 @@
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-FALCONET="$REPO_ROOT/bin/falconet"
-
 proj() { local d="$WORK/$1"; mkdir -p "$d/.github"; printf '%s' "$d"; }
 
 it "a shipped prompt prints"
