@@ -433,7 +433,8 @@ func TestWorkflowRef(t *testing.T) {
 		"v1.2.3":                               "v1.2.3",
 		"v0.0.0-20260822120000-0123456789ab":   "main",
 		"v0.1.1-0.20260822120000-0123456789ab": "main",
-		"v0.2.0-pre.0.20260822120000-abcdefabcdef": "main",
+		"v0.1.1-0.20260822120000-0123456789ab+dirty": "main",
+		"v0.2.0-pre.0.20260822120000-abcdefabcdef":   "main",
 		"v0.2.0-rc1": "v0.2.0-rc1",
 	} {
 		if got := WorkflowRef(in); got != want {

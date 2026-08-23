@@ -332,7 +332,10 @@ func Uses(ref string) string {
 
 // pseudoVersion is what the go command records for a module built from a
 // commit with no tag: vX.Y.Z-[pre.]0.YYYYMMDDHHMMSS-abcdefabcdef.
-var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}$`)
+// Build metadata after it — `+dirty`, which the go command appends when the
+// tree had uncommitted changes, or `+incompatible` — is still a
+// pseudo-version; no uses: line can fetch those either.
+var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}(\+[0-9A-Za-z.-]+)?$`)
 
 // WorkflowRef is the ref the `uses:` line pins, from this binary's version:
 // a release tag pins itself — one coordinate, the binary and the workflow

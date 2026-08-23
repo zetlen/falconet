@@ -112,9 +112,16 @@ head_of() { git -C "$1/repo" rev-parse HEAD; }
 committed_files() { git -C "$1/repo" show --format= --name-only HEAD | sort; }
 
 # The ref the workflow must carry: the binary's own version, and main for a
-# dev build (the one the suite builds).
+# build with no tag to name — `dev`, or the pseudo-version the go command
+# stamps into a build from a git checkout (with `+dirty` when the tree had
+# changes), which no uses: line could fetch. The same rule as
+# setup.WorkflowRef, held here from outside.
 ver="$("$FALCONET" version | awk '{ print $2 }')"
-ref="$ver"; [[ "$ver" == dev ]] && ref=main
+ref="$ver"
+case "$ver" in
+  dev|"(devel)") ref=main ;;
+  *[-.][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]|*[0-9a-f]+dirty) ref=main ;;
+esac
 reusable="zetlen/falconet/.github/workflows/falconet.yml"
 
 # --- issue #10's Done-when: a fresh clone, no token, one commit ----------------
