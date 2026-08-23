@@ -329,10 +329,23 @@ func runInit(args []string) int {
 				fmt.Fprintf(os.Stderr, "init: %v\n", err)
 				return 1
 			}
+		case errors.As(err, &unsorted):
+			// Not at a terminal and named in neither flag: validate_only,
+			// which is the README's own rule — "validate_only is every other
+			// directory with .tf in it" — and the safe reading, since a
+			// validate-only stack is never planned and needs no credential.
+			// Said per stack, so a person who meant --plan sees it.
+			for _, s := range unsorted.Names {
+				say(doctor.Line{Status: doctor.Note, Step: 7,
+					Text: fmt.Sprintf("stack %s is named in neither --plan nor --validate-only: validate_only, the README's rule for every other directory with .tf in it", s)})
+			}
+			stacks, err = setup.Sort(discovered, setup.SplitList(f.plan), append(setup.SplitList(f.validateOnly), unsorted.Names...))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "init: %v\n", err)
+				return 1
+			}
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "init: %v\n", err)
-			fmt.Fprintf(os.Stderr, "name each of these in --plan (a human will apply it from the pull request) or --validate-only (every other stack); found: %s\n",
-				strings.Join(discovered, ", "))
 			return 1
 		}
 	} else {

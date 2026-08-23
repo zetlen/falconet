@@ -652,14 +652,6 @@ it "--plan naming a stack that was not discovered is usage, naming it and what w
 assert_eq 2 "$RC" "exit code"
 assert_contains "$ERR" "--plan names nosuch, which is not a directory with .tf files in it (found: dns, workspace)" "stderr"
 
-i "$c" "$WORK/empty" --plan dns
-
-it "a discovered stack named in neither flag is refused with stdin not a terminal, naming it"
-assert_eq 1 "$RC" "exit code"
-assert_contains "$ERR" "workspace is in neither" "stderr"
-assert_contains "$ERR" "--validate-only" "stderr"
-assert_eq "" "$(git -C "$c/repo" status --porcelain)" "status"
-
 i "$c" "$WORK/empty" --plan dns --validate-only dns,workspace
 
 it "a stack in both lists is usage"
@@ -676,6 +668,16 @@ assert_eq '    "plan": [
       "dns",
       "envs/prod"
     ],' "$(grep -A3 '"plan"' "$c/repo/.github/falconet.json")" "plan list"
+
+c="$(new_checkout unsorted)"
+i "$c" "$WORK/empty" --plan dns
+
+it "a discovered stack named in neither flag goes to validate_only, the README's rule, and says so"
+assert_eq 0 "$RC" "exit code"
+assert_line "$OUT" "note         7. stack workspace is named in neither --plan nor --validate-only: validate_only, the README's rule for every other directory with .tf in it"
+assert_eq '    "validate_only": [
+      "workspace"
+    ]' "$(grep -A2 '"validate_only"' "$c/repo/.github/falconet.json")" "validate_only list"
 
 # --- an existing config is kept, never rewritten -----------------------------------------
 
