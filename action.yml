@@ -9,10 +9,13 @@ author: zetlen
 inputs:
   verb:
     description: >-
-      One of prepare, commit, push, validate, pause, assemble; the unlisted
-      prompt and plan-env; or doctor and init. Empty means setup only: the
-      pinned binaries are installed and no verb runs, which is how a job puts
-      falconet on PATH before its first verb.
+      One of prepare, commit, push, validate, assemble; the unlisted prompt;
+      or doctor. Not pause and not plan-env: `args` is split on whitespace,
+      a pause preamble is a sentence, and plan-env's masks must reach the
+      runner's stdout directly — both run from PATH in the workflow's own
+      run: steps. Empty means setup only: the pinned binaries are installed
+      and no verb runs, which is how a job puts falconet on PATH before its
+      first verb.
     required: false
     default: ''
   args:

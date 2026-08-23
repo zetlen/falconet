@@ -128,7 +128,13 @@ it "and the ones in publish read PUSHED_BRANCH rather than the branch prepare in
 # The branch that IS on the remote, set by the push verb; empty when nothing
 # was pushed, which pause takes as "no branch".
 publish_pauses="$(awk '/falconet pause/ { p = 1; buf = "" } p { buf = buf " " $0; if ($0 !~ /\\$/) { print buf; p = 0 } }' <<<"$publish_job")"
-assert_eq 3 "$(grep -c -- '--branch "$PUSHED_BRANCH"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+assert_eq 3 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+
+# Unset, not empty, when nothing was pushed — and the two hand-overs for a
+# question and a failure are exactly the paths with nothing to push. A bare
+# "$PUSHED_BRANCH" under set -u ends the step before pause runs.
+it "and never as a bare expansion, which set -u would refuse on the paths that need it most"
+assert_eq 0 "$(grep -c -- '--branch "\$PUSHED_BRANCH"' <<<"$wf_code")" "bare \$PUSHED_BRANCH expansions"
 
 it "and the containment's passes the empty string, because it does not know"
 assert_contains "$(grep 'falconet pause' <<<"$pause_calls" | tail -1)" '--branch ""' "contain's pause"
@@ -152,7 +158,7 @@ it "and the pause runs after a failed check too, but never after a cancellation"
 assert_contains "$contain_job" '!cancelled() &&' "contain job"
 assert_not_contains "$contain_job" 'if: always() && steps.check' "contain job"
 
-# AGENTS.md's trap, still true for the one run: step that uses gh: `grep -q`
+# AGENTS.md's trap, still true for the two run: steps that use gh: `grep -q`
 # exits at the first match and can SIGPIPE gh, which under pipefail turns a
 # FOUND match into a failed pipeline. Every answer is captured into a
 # variable, then inspected.

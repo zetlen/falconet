@@ -64,8 +64,8 @@ func Init(explicit string, cfg *config.Config, cwd string) (string, error) {
 // Actions reads $GITHUB_ENV line by line, so a value carrying a newline would
 // become further KEY=value lines: arbitrary environment in every later step
 // of the job, chosen by whoever chose the value — and the values that travel
-// this way are branch names, which come from issue titles. The bash verbs
-// slugify upstream (prepare.sh); this refuses here as well, because the one
+// this way are branch names, which come from issue titles. prepare slugifies
+// upstream (internal/prepare); this refuses here as well, because the one
 // function that writes to $GITHUB_ENV must not depend on every future caller
 // remembering to.
 func GitHubEnvAppend(lines ...string) error {

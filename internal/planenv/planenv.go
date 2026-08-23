@@ -127,8 +127,19 @@ func Masks(value string) []string {
 	var out []string
 	for _, line := range strings.Split(value, "\n") {
 		if line != "" {
-			out = append(out, MaskPrefix+line)
+			out = append(out, MaskPrefix+maskEscape(line))
 		}
 	}
 	return out
+}
+
+// maskEscape is the runner's own escaping for a command's value: it decodes
+// %25, %0D and %0A before it uses the value, so a line carrying a literal
+// "%25" would have been masked as "%" and left the real text visible. The
+// same three the runner documents, and nothing else.
+func maskEscape(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	s = strings.ReplaceAll(s, "\r", "%0D")
+	s = strings.ReplaceAll(s, "\n", "%0A")
+	return s
 }

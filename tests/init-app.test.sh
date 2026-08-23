@@ -357,6 +357,8 @@ it "a conversion GitHub refuses outright is exit 1, after the labels and before 
 assert_eq 1 "$RC" "exit code"
 assert_eq 1 "$(grep -c "^POST $conversion" "$FAKE_GITHUB/requests.log")" "conversion POSTs: a 404 is not retried with the token"
 assert_contains "$ERR" "could not convert the manifest code into an App" "stderr"
+it "and the line does not carry the code, which is still good for a conversion"
+assert_not_contains "$ERR" "testcode" "stderr"
 assert_contains "$ERR" "stopped at step 3" "stderr"
 assert_eq 4 "$(grep -c '^POST /repos/zetlen/wayfinders-infra/labels' "$FAKE_GITHUB/requests.log")" "label POSTs"
 assert_eq 0 "$(grep -c "^PUT .*FALCONET_APP" "$FAKE_GITHUB/requests.log")" "App PUTs"

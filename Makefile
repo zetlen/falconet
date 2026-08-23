@@ -102,7 +102,7 @@ RELEASE_LDFLAGS   = -buildid= -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := build
 
-.PHONY: build test clean release-prep release-build release-verify \
+.PHONY: build check test clean release-prep release-build release-verify \
         require-version go-toolchain FORCE
 
 # The development binary, out of tree, unstamped: the exact command AGENTS.md
@@ -110,6 +110,15 @@ RELEASE_LDFLAGS   = -buildid= -X main.version=$(VERSION)
 build:
 	@mkdir -p $(DIST)
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(DIST)/falconet $(CMD)
+
+# The fail-closed discipline, at the versions ci.yml pins: `go run` fetches
+# each tool at exactly that version, so a laptop and the runner disagree on
+# nothing. govulncheck reaches the vulnerability database over the network.
+check:
+	$(GO) vet ./...
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+	$(GO) run github.com/kisielk/errcheck@v1.20.0 ./...
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 test: build
 	$(GO) test ./...
@@ -163,13 +172,13 @@ release-prep: require-version go-toolchain $(DIST)/falconet_$(DIGEST_TARGET)
 	mkdir -p $(dir $(DIGEST_FILE)); \
 	( cd $(DIST) && $(SHA256) falconet_$(DIGEST_TARGET) ) > $(DIGEST_FILE); \
 	printf '%s\n' '$(VERSION)' > $(VERSION_FILE); \
-	grep -q '^ *$(USES_REF)' $(WORKFLOW) || { echo "release-prep: $(WORKFLOW) has no '$(USES_REF)' line to rewrite" >&2; exit 1; }; \
-	sed -e 's#^\( *\)$(USES_REF)[^ ]*$$#\1$(USES_REF)$(VERSION)#' $(WORKFLOW) > $(WORKFLOW).release-prep.tmp; \
+	grep -Eq '^ *(- )?$(USES_REF)' $(WORKFLOW) || { echo "release-prep: $(WORKFLOW) has no '$(USES_REF)' line to rewrite" >&2; exit 1; }; \
+	sed -e 's#^\( *\(- \)\{0,1\}\)$(USES_REF)[^ ]*$$#\1$(USES_REF)$(VERSION)#' $(WORKFLOW) > $(WORKFLOW).release-prep.tmp; \
 	mv $(WORKFLOW).release-prep.tmp $(WORKFLOW); \
 	echo; \
 	echo "wrote $(VERSION_FILE):     $$(cat $(VERSION_FILE))"; \
 	echo "wrote $(DIGEST_FILE): $$(cat $(DIGEST_FILE))"; \
-	echo "wrote $(WORKFLOW): $$(grep -c '^ *$(USES_REF)$(VERSION)$$' $(WORKFLOW)) lines now read '$(USES_REF)$(VERSION)'"; \
+	echo "wrote $(WORKFLOW): $$(grep -Ec '^ *(- )?$(USES_REF)$(VERSION)$$' $(WORKFLOW)) lines now read '$(USES_REF)$(VERSION)'"; \
 	echo; \
 	echo "Next, by hand:"; \
 	echo "  git add $(VERSION_FILE) $(DIGEST_FILE) $(WORKFLOW)"; \
@@ -183,7 +192,7 @@ release-prep: require-version go-toolchain $(DIST)/falconet_$(DIGEST_TARGET)
 	echo "touches cmd/, internal/ or go.mod makes it stale. The workflow's"; \
 	echo "refs now name a tag that does not exist until you push it."
 
-# The guarantee, and the reason the two files above are worth committing.
+# The guarantee, and the reason the three files above are worth committing.
 # release.yml runs this BEFORE it creates a release or uploads an asset, so a
 # build that does not reproduce publishes nothing at all.
 release-verify: require-version $(DIST)/falconet_$(DIGEST_TARGET)
@@ -196,8 +205,8 @@ release-verify: require-version $(DIST)/falconet_$(DIGEST_TARGET)
 	  echo "  A digest is only a claim about one build of one commit. Re-run release-prep." >&2; \
 	  exit 1; \
 	fi; \
-	grep -q '^ *$(USES_REF)' $(WORKFLOW) || { echo "release-verify: $(WORKFLOW) pins no falconet at all: no '$(USES_REF)' line" >&2; exit 1; }; \
-	stray="$$(grep -n '^ *$(USES_REF)' $(WORKFLOW) | grep -v '$(USES_REF)$(VERSION)$$' || true)"; \
+	grep -Eq '^ *(- )?$(USES_REF)' $(WORKFLOW) || { echo "release-verify: $(WORKFLOW) pins no falconet at all: no '$(USES_REF)' line" >&2; exit 1; }; \
+	stray="$$(grep -En '^ *(- )?$(USES_REF)' $(WORKFLOW) | grep -v '$(USES_REF)$(VERSION)$$' || true)"; \
 	if [[ -n "$$stray" ]]; then \
 	  echo "release-verify: $(WORKFLOW) pins falconet at a ref that is not $(VERSION):" >&2; \
 	  printf '  %s\n' "$$stray" >&2; \

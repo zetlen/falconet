@@ -157,6 +157,16 @@ func itoa(n int) string {
 	return string(b)
 }
 
+// The runner decodes %25, %0D and %0A in a command's value, so a line with a
+// literal "%25" would have been masked as "%" and left visible.
+func TestMasksEscapeWhatTheRunnerDecodes(t *testing.T) {
+	got := Masks("a%b\r\nc%25d")
+	want := []string{MaskPrefix + "a%25b%0D", MaskPrefix + "c%2525d"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Masks = %q, want %q", got, want)
+	}
+}
+
 func TestMasks(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -169,7 +179,7 @@ func TestMasks(t *testing.T) {
 		{"a trailing newline adds no mask", "a\n", []string{"::add-mask::a"}},
 		{"an empty value masks nothing", "", nil},
 		{"only newlines mask nothing", "\n\n", nil},
-		{"a carriage return stays on its line", "a\r\nb", []string{"::add-mask::a\r", "::add-mask::b"}},
+		{"a carriage return stays on its line, in the runner's encoding", "a\r\nb", []string{"::add-mask::a%0D", "::add-mask::b"}},
 	} {
 		got := Masks(tc.value)
 		if !reflect.DeepEqual(got, tc.want) {

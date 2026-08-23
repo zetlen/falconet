@@ -585,8 +585,13 @@ jobs:
       # binary is on PATH. Every argument that is not a literal comes through
       # `env:`, never a template expression inside the block; the branch is
       # $PUSHED_BRANCH, which the push verb set — the branch that IS on the
-      # remote, not the one prepare intended — and is empty when nothing was
-      # pushed, which pause accepts as "no branch".
+      # remote, not the one prepare intended. When nothing was pushed it is
+      # UNSET, not empty (push writes $GITHUB_ENV only when a push landed),
+      # and the two hand-overs below are exactly the paths with nothing to
+      # push; under `set -u` a bare "$PUSHED_BRANCH" killed the step before
+      # pause ran — the agent's question never reached the issue, and contain
+      # paused it under the wrong label. `${PUSHED_BRANCH:-}` passes the empty
+      # string, which pause accepts as "no branch".
       - name: Hand over — the agent asked a question
         if: needs.implement.outputs.outcome == 'needs-info'
         env:
@@ -598,7 +603,7 @@ jobs:
           falconet pause \
             --issue "$ISSUE" \
             --label needs-info \
-            --branch "$PUSHED_BRANCH" \
+            --branch "${PUSHED_BRANCH:-}" \
             --body .falconet/needs-info.md \
             --run-url "$RUN_URL" \
             --preamble "Before I can prepare this change I need a bit more from you:"
@@ -614,7 +619,7 @@ jobs:
           falconet pause \
             --issue "$ISSUE" \
             --label ready-for-human \
-            --branch "$PUSHED_BRANCH" \
+            --branch "${PUSHED_BRANCH:-}" \
             --body .falconet/failure-reason.txt \
             --run-url "$RUN_URL" \
             --preamble "I wasn't able to prepare this change automatically. This one needs a person."
@@ -630,7 +635,7 @@ jobs:
           falconet pause \
             --issue "$ISSUE" \
             --label ready-for-human \
-            --branch "$PUSHED_BRANCH" \
+            --branch "${PUSHED_BRANCH:-}" \
             --body .falconet/validation-failure.txt \
             --body-title "validation output" \
             --run-url "$RUN_URL" \

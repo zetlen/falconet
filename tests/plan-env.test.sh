@@ -57,6 +57,19 @@ B_TOKEN<<FALCONET_PLAN_ENV_EOF
 second
 FALCONET_PLAN_ENV_EOF" "$ENV" "\$GITHUB_ENV"
 
+# The runner decodes %25, %0D and %0A in a command's value before it uses
+# it, so a line carrying a literal "%25" would be masked as "%" and stay
+# visible. The mask line is escaped the way the runner will decode it; the
+# value in $GITHUB_ENV is the bytes the operator stored.
+run '{"PCT": "a%b%25c"}'
+it "a value with a percent sign is masked in the runner's own encoding, and exported as itself"
+assert_eq "::add-mask::a%25b%2525c
+plan-env: set PCT" "$OUT" "stdout"
+assert_eq "PCT<<FALCONET_PLAN_ENV_EOF
+a%b%25c
+FALCONET_PLAN_ENV_EOF" "$ENV" "\$GITHUB_ENV"
+
+run '{"B_TOKEN": "second", "A_KEY": "first"}'
 it "with nothing on stderr"
 assert_eq "" "$ERR" "stderr"
 

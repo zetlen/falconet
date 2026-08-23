@@ -69,8 +69,9 @@ thing.
   config order, the config merge (objects recurse, arrays and scalars
   replace), the handoff directory, the repository root, the dispatcher's
   lists in step with what it implements. `go vet`, `staticcheck`,
-  `errcheck` and `govulncheck` are part of green: an ignored error is a red
-  build (ADR-0006 D1).
+  `errcheck` and `govulncheck` are part of green in CI — ci.yml runs them
+  before the suite, and `make check` runs the same pinned versions locally:
+  an ignored error is a red build (ADR-0006 D1).
 - **`bash tests/run.sh`** — the acceptance suite and the incident record,
   run through the binary. It is not rewritten for Go and it reaches inside
   nothing: **no test may reach inside its subject.** Every assertion crosses
@@ -112,8 +113,8 @@ used to carry went with it — but true in any language:
 - **Always pass `-no-color`** when the output lands in a file. Without it,
   ANSI escapes are in the plan and whoever reads it next has to strip them.
 
-And one shell trap that survives, because one `run:` step in the workflow
-still uses `gh`: **never `gh ... | grep -q`.** `grep -q` exits at the first
+And one shell trap that survives, because two `run:` steps in the workflow
+still use `gh` (the pull request, and contain's check): **never `gh ... | grep -q`.** `grep -q` exits at the first
 match and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found*
 match into a non-zero pipeline — the exact opposite of the answer just
 computed. Capture the whole result, then inspect it.

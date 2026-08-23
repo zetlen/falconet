@@ -81,7 +81,9 @@ Modes:
     --app-key FILE     step 3), sealed as FALCONET_APP_ID and
                        FALCONET_APP_PRIVATE_KEY instead of registering one
     --replace-secrets  seal a new value over a secret that already exists;
-                       without it an existing secret is left as it is
+                       without it an existing secret is left as it is. The
+                       App's two are replaced only by registering a new App,
+                       which needs --app-name as well (step 3)
     --no-commit        leave what was written staged, and say so
 
 Runs from the root of the repository it is standing in, which must have a

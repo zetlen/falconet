@@ -125,9 +125,16 @@ func registerApp(s appStep) int {
 	failed := make(chan string, 1)
 	var mu sync.Mutex
 	mismatches := 0
+	// The nonce is the only thing that gates /callback, and its secrecy rests
+	// on no other origin being able to read the page that carries it. A page
+	// that rebinds its own name to 127.0.0.1 could: its fetch lands here with
+	// that name in Host. So the listener answers only when the browser asked
+	// for it by its own address, and 404s everything else — Chrome's
+	// private-network rules already refuse the rebind; Firefox does not.
+	self := map[string]bool{fmt.Sprintf("127.0.0.1:%d", port): true, fmt.Sprintf("localhost:%d", port): true}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
+		if r.URL.Path != "/" || !self[r.Host] {
 			http.NotFound(w, r)
 			return
 		}
@@ -135,6 +142,10 @@ func registerApp(s appStep) int {
 		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		if !self[r.Host] {
+			http.NotFound(w, r)
+			return
+		}
 		code, err := appmanifest.Callback(r.URL.Query(), nonce)
 		if err != nil {
 			// Refused: the browser is told, the terminal is told, and the
@@ -199,9 +210,12 @@ func registerApp(s appStep) int {
 	}
 	if err != nil {
 		if unreachable(err) {
-			return unreachableExit(err)
+			return unreachableExit(errors.New(strings.ReplaceAll(err.Error(), code, "<code>")))
 		}
-		fmt.Fprintf(os.Stderr, "init: could not convert the manifest code into an App: %v\n", err)
+		// The error carries the request path, and the path carries the
+		// code: good for an hour and one conversion, and worth the App's
+		// private key to whoever reads the line. Redacted before it is said.
+		fmt.Fprintf(os.Stderr, "init: could not convert the manifest code into an App: %s\n", strings.ReplaceAll(err.Error(), code, "<code>"))
 		fmt.Fprintln(os.Stderr, "the code is good for one hour and for one conversion; run init again to register the App, or register it by hand (README step 3)")
 		fmt.Fprintln(os.Stderr, "stopped at step 3; what was done before it stands, and a second run carries on from here")
 		return 1
@@ -273,13 +287,17 @@ func registerApp(s appStep) int {
 
 // waitWord is a duration as a person reads one: "10m", not "10m0s".
 func waitWord(d time.Duration) string {
-	w := d.String()
-	for _, zero := range []string{"0s", "0m"} {
-		if len(w) > len(zero) && strings.HasSuffix(w, zero) {
-			w = strings.TrimSuffix(w, zero)
-		}
+	// By unit, not by trimming: "10m0s" trimmed of "0s" and then "0m" is
+	// "1", which is what the default once told a person it was waiting.
+	switch {
+	case d >= time.Hour && d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d >= time.Minute && d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d < time.Minute && d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
 	}
-	return w
+	return d.String()
 }
 
 // unregistered is step 3 ending before an App exists: nothing was stored,
