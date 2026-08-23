@@ -18,8 +18,10 @@
 // troubleshooting table catalogues (ADR-0006). doctor (#9) turned each
 // step's Check: line into a question with a mechanical answer; init turns
 // each step's write into one too. Steps 2, 7 and 8 need no token (#10);
-// steps 4, 5 and 6 need one, and step 3's two secrets can be sealed from
-// flags until #12 makes the App by manifest (#11).
+// steps 4, 5 and 6 need one (#11); step 3's App is registered by manifest
+// from a browser, its two secrets sealed straight from GitHub's answer
+// (#12, internal/appmanifest), or sealed from flags when a person
+// registered it by hand.
 //
 // # Every read before any write, and the first write is the idempotent one
 //
@@ -438,10 +440,11 @@ func LeftForYou(items []string) string {
 // The items, in the README's words. Each names its step so the reader can
 // find it in the README.
 const (
-	LeftApp = "step 3 — the GitHub App: register one (Settings → Developer settings → GitHub Apps → New GitHub App; " +
+	LeftApp = "step 3 — the GitHub App: falconet init with FALCONET_SETUP_TOKEN set registers one by manifest from your browser and stores its two secrets; " +
+		"or by hand (Settings → Developer settings → GitHub Apps → New GitHub App; " +
 		"webhook off; repository permissions Contents, Issues and Pull requests: read and write; installable only on this account), " +
 		"note its App ID, generate a private key, Install App on this repository, then: " +
-		"falconet init --app-id <App ID> --app-key <the .pem>   (#12 will create the App by manifest, and the flags will go)"
+		"falconet init --app-id <App ID> --app-key <the .pem>"
 	LeftAnthropic = "step 4 — store the Anthropic API key (an API key from the console, not a Claude Code subscription token): " +
 		"falconet init with FALCONET_SETUP_TOKEN set reads it from a no-echo prompt, or from stdin   (or: gh secret set ANTHROPIC_API_KEY)"
 	LeftPlanEnv = "step 5 — store the planning environment, one JSON object of the variables the planned stacks need " +
@@ -457,6 +460,12 @@ const (
 		"labelled infra-request, then watch the run; once it has reached a pull request, pin the ref in uses: to the SHA or tag you ran"
 	LeftDoctor = "then: falconet doctor"
 )
+
+// LeftInstall is the App registered and its secrets stored, with the
+// installation not made within the wait: the click, and the check after it.
+func LeftInstall(installURL, repository string) string {
+	return "step 3 — install the App: " + installURL + " → Install → Only select repositories → " + repository + ", then: falconet doctor"
+}
 
 // LeftPush is the push init never runs.
 func LeftPush(branch string) string {

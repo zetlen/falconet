@@ -27,15 +27,22 @@ What it answers:
 
     - a request with no Authorization header is 401, as GitHub's answer to an
       unauthenticated write is. A verb that forgot its token fails here
-      rather than in production.
+      rather than in production. One route is excepted, below: the App
+      manifest conversion, whose whole point is that no credential exists
+      yet (OPEN_ROUTES); a responses.json rule can still script a 401 for it.
     - DIR/responses.json, if present, is re-read on EVERY request: a list of
       {"method": "POST", "path": "/repos/o/r/issues/1/comments",
-       "status": 500, "body": {...}, "headers": {"X-OAuth-Scopes": "repo"}}
+       "status": 500, "body": {...}, "headers": {"X-OAuth-Scopes": "repo"},
+       "times": 2}
       objects, first match wins on method+path, every key optional. A test
       writes it to script a specific issue, pull-request list, label list,
       secret list, permissions or a failure, and removes it to let the next
       call through. "headers" are sent with the answer: that is how a test
-      makes the fake look like a classic token's GitHub.
+      makes the fake look like a classic token's GitHub. "times" is how many
+      requests the rule answers before it stops matching — "404 twice, then
+      the default 200" is how a test watches a poll — counted in
+      DIR/responses.state, which is reset whenever responses.json's bytes
+      change, so a test that rewrites the rules starts every count over.
     - otherwise the routes below, with bodies shaped like GitHub's. The
       defaults are a private repository with issues enabled, Actions
       allowing every action, a read-only default token, NO secrets and NO
@@ -55,6 +62,7 @@ tests/lib.sh kills it anyway.
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
@@ -72,6 +80,70 @@ PUBLIC_KEY = {
     "key": base64.b64encode(bytes(range(1, 33))).decode("ascii"),
 }
 
+# The App's private key, as POST /app-manifests/{code}/conversions answers
+# it: a FIXED 2048-bit RSA key in the PKCS#1 form GitHub issues ("RSA
+# PRIVATE KEY"), generated once with `openssl genrsa -traditional 2048` while
+# building #12. It is a TEST KEY and nothing else: it has never been given to
+# GitHub, signs nothing but the JWTs a test watches init poll with, and is
+# committed as such. A test asserts that these bytes reach the fake only
+# sealed, and reach no file under the scratch directory at all.
+TEST_PEM = """-----BEGIN RSA PRIVATE KEY-----
+MIIEogIBAAKCAQEA7O/Qoqy+MwFsW31PvW8iNkYtJr7En44Emt12w1h+yVQU1FeO
+lfWnoLd1Um+MpfnLAhBIUgNgc/aiaKWpQ5zA/KUsHcti5C4rgHiKPR2X+cL252ay
+7365FdJAscOeg5iUYjkabmIcrhmTDZle3o7TuU3CUFUmTmXaBD+vd6OayiPjVi59
+pUC1e1nBYUl8WV3Bti4JTukInCCu+V/AzYfHCqWaFAMjUOTr3TN/zUgiHMhGYTzA
+BRQ4ujDVVLFT+jrKMdtYkbunjSt9wVt1u9bzW1OgQiyCPu2uLCbwucAimJiz0oj0
+dc/zU7eEtHeZh1M7UYj66h7PPZqcEtaWdrBjKwIDAQABAoIBAAihreyXNXCfPybQ
+GF0S1OC8Sr3MGlajslg/9CkmqqvD8+ROckPVSK+Kr2v641lSkco39KKEO/nNhNoi
+Gtn7Nm6dx88oDyi3497QxVx3nQc8yojgjWk7KRv55mBze21Y3CL96JAX4+qVxO0s
+Zq/d7SmlgwwxJe2aOUiJV2eY3rU5aoT8v3P4XSjgTW8TLfe3ubvh4Q+WsJVCU4Wo
+FyaDuSzbpXEhbfqCL1Kuw2/DQA6xXJpzNvA1akb0M4Ieo6r9kr2m+jLxvBQflt6f
+AMBjhhNcuyOEzAJ679M0HrAPdcXal142PEX8spJVgAfSYEYPh+1o3epcu4sagd/A
+DhfhUDkCgYEA/oy7+zgCh/nvTwjnMF9z37zSo4g/XAuj0e7TAv3SXRrxLMPP118L
+Ashw2uqq6nrXIY40BaOHv5RSfDeDzdLnkPocXRe3U7Y3PJXK2TuiX/FS9sS1QOtE
+EocESJjwaET5EacLqSRFEK2QhuDojdTA8ri00d+qYwDFYDWmHcFsqckCgYEA7klk
+Tv0onJClVWhZLZbDZOJmEpKhuJRAFxr/K93gOtsVRdMi024pRm9NfOMvEBKXNC1/
+feoP4RAoZB+uieR/e5DhXSrI3mPGvP4ddxdBjcwG70RSXd9h8ulIaWHT37btuSMd
+YgbBkFmxbwWJI1jzwKRS607m8wmFMVQOVku2H1MCgYAJ2pbYVcW7T9CUxap1c+x/
+Z8bbr8WMIaM42D7w6bSACC/35KiiFLrPY8UCpHzzUMgNM30ODtONdgdvaZK/n/94
+3EXG0Mk3A2HGBaJxoF5bynLEvL6rgbAD65gd21XLI4hkx4urA41s5NsobYJzIx5J
+Bx9w1HC7HmeFnu4MTtWPCQKBgH2e52jVAbH4d5EdH9Zu4reuu00TTHq4fUkxDFEd
++XZNxVs4QeXg75WYW+t5AXihtGDnk4zX9mMaV5DhOuyrL6H+8TBiu96yDzXXacU8
+12xfoVBGXn3qpAKhhXE5B6+rCoxNvNHO6gClqGr1KiUeYfKvLp+qywpZfIRS4fQQ
+mgTNAoGAc0021fD2fZssGg5BI5zBC3k65q5bj2pHmwkkm0hy0T25av1O9F+FuLXH
+sxXD5TagsUSeeyQpHalE56cN8/PDJYZnVuPSrmIUtCTh7FKG47I0RDIFHZFFYkzn
+qY3I382xBMtGmB99DW2SOfLIMMN3+hwW0A4rb7lIXIBnpTLZ+F0=
+-----END RSA PRIVATE KEY-----"""
+
+# The App the conversion registers, and the installation of it the poll
+# waits for. Fixed, so a test can name them.
+APP = {
+    "id": 12345,
+    "slug": "falconet-zetlen-wayfinders-infra",
+    "name": "falconet-zetlen-wayfinders-infra",
+    "node_id": "A_kwDOAAAAAc4AAAAB",
+    "client_id": "Iv1.0123456789abcdef",
+    "owner": {"login": "zetlen", "type": "User"},
+    "html_url": "https://github.com/apps/falconet-zetlen-wayfinders-infra",
+    "external_url": "https://github.com/zetlen/wayfinders-infra",
+    "permissions": {"contents": "write", "issues": "write", "pull_requests": "write"},
+    "events": [],
+    # The two a verb must discard unused: neither is the credential.
+    "client_secret": "CLIENT-SECRET-MARKER-0123456789",
+    "webhook_secret": "WEBHOOK-SECRET-MARKER-0123456789",
+    "pem": TEST_PEM,
+}
+
+# Routes that answer WITHOUT an Authorization header, the one exception to
+# the 401 rule: the manifest conversion is the bootstrap of a credential,
+# and the documentation lists no token for it. init tries it without a
+# token first and a test asserts that it did; a responses.json rule is still
+# consulted, so a test can script the 401 that would send init back with
+# the setup token.
+OPEN_ROUTES = [
+    ("POST", r"^/app-manifests/([^/]+)/conversions$"),
+]
+
 ROUTES = [
     # (method, path regex, handler) — the handler gets the match and the
     # parsed body and returns (status, body).
@@ -79,7 +151,9 @@ ROUTES = [
     # --- reads -------------------------------------------------------------
     ("GET", r"^/repos/([^/]+)/([^/]+)$",
      lambda m, b: (200, {
-         "name": m[2], "full_name": f"{m[1]}/{m[2]}", "owner": {"login": m[1]},
+         "name": m[2], "full_name": f"{m[1]}/{m[2]}",
+         "owner": {"login": m[1], "type": "User"},
+         "html_url": f"https://github.com/{m[1]}/{m[2]}",
          "private": True, "visibility": "private", "has_issues": True,
          "default_branch": "main",
      })),
@@ -104,7 +178,20 @@ ROUTES = [
      lambda m, b: (200, dict(PUBLIC_KEY))),
     ("GET", r"^/repos/([^/]+)/([^/]+)/labels$",
      lambda m, b: (200, [])),
+    # The App's installation on the repository: installed, by default. A
+    # test scripts a 404 — with "times" — to watch init wait for the click.
+    ("GET", r"^/repos/([^/]+)/([^/]+)/installation$",
+     lambda m, b: (200, {
+         "id": 777, "app_id": APP["id"], "target_type": "User",
+         "account": {"login": m[1], "type": "User"},
+         "repository_selection": "selected",
+         "permissions": APP["permissions"], "events": [],
+     })),
     # --- writes ------------------------------------------------------------
+    # The manifest conversion: the App, its private key included. See
+    # OPEN_ROUTES for why this answers without a token.
+    ("POST", r"^/app-manifests/([^/]+)/conversions$",
+     lambda m, b: (201, dict(APP))),
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
      lambda m, b: (201, {
          "id": 1,
@@ -154,18 +241,46 @@ class State:
     def scripted(self, method, path):
         # -> (status, body, headers) or None
         try:
-            with open(os.path.join(self.dir, "responses.json")) as f:
-                rules = json.load(f)
+            with open(os.path.join(self.dir, "responses.json"), "rb") as f:
+                raw = f.read()
+            rules = json.loads(raw.decode("utf-8"))
         except (OSError, ValueError):
             return None
-        for rule in rules:
-            if "method" in rule and rule["method"] != method:
-                continue
-            if "path" in rule and rule["path"] != path:
-                continue
-            return (int(rule.get("status", 200)), rule.get("body", {}),
-                    rule.get("headers") or {})
+        with self.lock:
+            state = self._state(hashlib.sha256(raw).hexdigest())
+            for i, rule in enumerate(rules):
+                if "method" in rule and rule["method"] != method:
+                    continue
+                if "path" in rule and rule["path"] != path:
+                    continue
+                if "times" in rule:
+                    used = state["used"].get(str(i), 0)
+                    if used >= int(rule["times"]):
+                        continue
+                    state["used"][str(i)] = used + 1
+                    self._save_state(state)
+                return (int(rule.get("status", 200)), rule.get("body", {}),
+                        rule.get("headers") or {})
         return None
+
+    def _state(self, digest):
+        # How many times each "times" rule has answered, keyed by the rule's
+        # index, for the responses.json whose digest this is; any other
+        # file's counts are stale and start over.
+        try:
+            with open(os.path.join(self.dir, "responses.state")) as f:
+                state = json.load(f)
+            if state.get("rules") == digest:
+                return state
+        except (OSError, ValueError):
+            pass
+        return {"rules": digest, "used": {}}
+
+    def _save_state(self, state):
+        tmp = os.path.join(self.dir, "responses.state.tmp")
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, os.path.join(self.dir, "responses.state"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -194,7 +309,9 @@ class Handler(BaseHTTPRequestHandler):
         })
 
         extra = {}
-        if not self.headers.get("Authorization"):
+        open_route = any(m == method and re.match(pattern, path)
+                         for m, pattern in OPEN_ROUTES)
+        if not self.headers.get("Authorization") and not open_route:
             status, answer = 401, {"message": "Requires authentication"}
         else:
             found = self.state.scripted(method, path)

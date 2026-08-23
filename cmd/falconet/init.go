@@ -32,7 +32,9 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/zetlen/falconet/internal/appmanifest"
 	"github.com/zetlen/falconet/internal/config"
 	"github.com/zetlen/falconet/internal/doctor"
 	"github.com/zetlen/falconet/internal/github"
@@ -50,6 +52,7 @@ Modes:
   falconet init [--repo owner/name] [--config FILE]
                 [--plan a,b] [--validate-only c,d]
                 [--plan-env-file FILE]
+                [--app-name NAME] [--app-timeout 10m] [--no-browser] [--no-app]
                 [--app-id N --app-key FILE]
                 [--replace-secrets]
                 [--no-commit]
@@ -65,9 +68,16 @@ Modes:
     --plan-env-file    a JSON object of the variables the planned stacks
                        need, kept OUTSIDE the repository; sealed as
                        FALCONET_PLAN_ENV (step 5)
-    --app-id N         with --app-key, the App README step 3 registers,
-    --app-key FILE     sealed as FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY
-                       (#12 will create the App by manifest; these go then)
+    --app-name         the name of the App init registers (default
+                       falconet-<owner>-<repo>, cut to GitHub's 34)
+    --app-timeout      how long to wait for you and a browser, twice: for
+                       GitHub's redirect, then for the installation
+                       (default 10m)
+    --no-browser       print each URL instead of opening it
+    --no-app           do not register an App; step 3 is left for you
+    --app-id N         with --app-key, an App registered by hand (README
+    --app-key FILE     step 3), sealed as FALCONET_APP_ID and
+                       FALCONET_APP_PRIVATE_KEY instead of registering one
     --replace-secrets  seal a new value over a secret that already exists;
                        without it an existing secret is left as it is
     --no-commit        leave what was written staged, and say so
@@ -79,6 +89,15 @@ Order (ADR-0006 D4): every read before any write, and the first write is
 the idempotent one. The labels (6), then the secrets (4, 5, then 3), then
 the local files (2, 7, 8), then one commit. A token short of a permission
 fails at the labels, before anything harder to undo; a 403 names it.
+
+Step 3, the App, is done by manifest (ADR-0006 D5): init serves a page on
+localhost that sends the App's configuration — the three repository
+permissions, no webhook, installable only on this account — to GitHub,
+where you click "Create GitHub App"; GitHub sends the browser back with a
+code, and the code is exchanged for the App's ID and private key, which go
+straight into sealed boxes and into the repository's secrets. The key is
+never written to disk. Then the App's install page opens, and init waits
+for you to install it on this repository.
 
 ANTHROPIC_API_KEY is read from a no-echo prompt when stdin is a terminal,
 and from stdin otherwise — never from an argument, which would be in shell
@@ -121,7 +140,10 @@ func initUsage() int {
 // initFlags is the command line, read.
 type initFlags struct {
 	repo, explicit, plan, validateOnly, planEnvFile, appID, appKey string
-	planGiven, validateGiven, replace, noCommit                    bool
+	appName, appTimeout                                            string
+	planGiven, validateGiven, replace, noCommit, noApp, noBrowser  bool
+	// timeout is --app-timeout, parsed.
+	timeout time.Duration
 }
 
 func runInit(args []string) int {
@@ -160,6 +182,16 @@ func runInit(args []string) int {
 		case "--app-key":
 			v, ok = value("the App's private key, a .pem file")
 			f.appKey = v
+		case "--app-name":
+			v, ok = value("a name for the App")
+			f.appName = v
+		case "--app-timeout":
+			v, ok = value("a duration, like 10m")
+			f.appTimeout = v
+		case "--no-app":
+			f.noApp, takes = true, false
+		case "--no-browser":
+			f.noBrowser, takes = true, false
 		case "--replace-secrets":
 			f.replace, takes = true, false
 		case "--no-commit":
@@ -186,6 +218,21 @@ func runInit(args []string) int {
 	if f.appID != "" && !digits.MatchString(f.appID) {
 		fmt.Fprintln(os.Stderr, "--app-id must be a number (the App ID near the top of the App's page)")
 		return 2
+	}
+	// An App name GitHub would refuse is refused here, before a browser
+	// opens on it.
+	if _, _, err := appmanifest.Name(f.appName, "", ""); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	f.timeout = appTimeoutDefault
+	if f.appTimeout != "" {
+		d, err := time.ParseDuration(f.appTimeout)
+		if err != nil || d <= 0 {
+			fmt.Fprintf(os.Stderr, "--app-timeout must be a positive duration, like 10m or 90s (got %q)\n", f.appTimeout)
+			return 2
+		}
+		f.timeout = d
 	}
 
 	cwd, err := os.Getwd()
@@ -385,6 +432,7 @@ func runInit(args []string) int {
 	// the step before it.
 	var (
 		client                          *github.Client
+		repository                      github.Repository
 		existingSecrets, existingLabels map[string]bool
 		errSecrets, errLabels           error
 		promptedKey                     string
@@ -395,8 +443,7 @@ func runInit(args []string) int {
 		say(doctor.NoToken(1, "the repository, its issues, its Actions policy, its secrets and its labels"))
 	} else {
 		client = github.New(github.APIURLFromEnv(), token)
-		var r github.Repository
-		header, err := client.Request("GET", "/repos/"+owner+"/"+name, nil, &r)
+		header, err := client.Request("GET", "/repos/"+owner+"/"+name, nil, &repository)
 		if header != nil {
 			if note, has := doctor.ClassicToken(header.Get("X-OAuth-Scopes")); has {
 				say(note)
@@ -409,7 +456,7 @@ func runInit(args []string) int {
 			}
 			return 1
 		}
-		say(doctor.Issues(&r))
+		say(doctor.Issues(&repository))
 		if last := report[len(report)-1]; last.Status == doctor.Missing {
 			left.add(leftFix, setup.LeftFix(last))
 		}
@@ -639,9 +686,12 @@ func runInit(args []string) int {
 				return rc
 			}
 		}
-		// Step 3: by hand, from the flags, until #12 makes the App by
-		// manifest. sealApp is the seam: #12's flow produces the same two
-		// values and hands them here.
+		// Step 3: the App. By hand from the flags when they were given — a
+		// person who registered one has the credential, and the flags win;
+		// else, when the two secrets are absent (or --replace-secrets), by
+		// manifest from a browser (init_app.go), unless --no-app leaves the
+		// step for a person. sealApp is the seam both paths share: an ID
+		// and a PEM, sealed into the two secrets.
 		sealApp := func(appID string, privateKey []byte) int {
 			if rc := store(3, "FALCONET_APP_ID", []byte(appID)); rc != 0 {
 				return rc
@@ -657,12 +707,17 @@ func runInit(args []string) int {
 			if rc := sealApp(f.appID, appKey); rc != 0 {
 				return rc
 			}
-		case hasApp:
+		case hasApp && (!f.replace || f.noApp):
 			exists(3, "FALCONET_APP_ID")
 			exists(3, "FALCONET_APP_PRIVATE_KEY")
-		default:
-			say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (no --app-id and --app-key; #12 will create the App by manifest)"})
+		case f.noApp:
+			say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (--no-app)"})
 			left.add(leftApp, setup.LeftApp)
+		default:
+			if rc := registerApp(appStep{client: client, token: token, repo: &repository, owner: owner, name: name,
+				flags: f, say: say, left: &left, sealApp: sealApp}); rc != 0 {
+				return rc
+			}
 		}
 	}
 

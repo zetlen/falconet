@@ -2,7 +2,10 @@
 #
 # init.test.sh — README "Install it in your repository" steps 2–8, done by
 # the second setup verb: the local files committed and never pushed (#10),
-# the labels first and the secrets in sealed boxes (#11).
+# the labels first and the secrets in sealed boxes (#11). Step 3's App by
+# manifest (#12) has a browser half, and init-app.test.sh drives that; every
+# run here passes --no-app, so step 3 is the by-hand path — the flags — or
+# left for a person.
 #
 # init has no bash predecessor (ADR-0006 D3 step 1), so nothing here is a
 # ported assertion: each README step is the specification of a write, the
@@ -81,7 +84,7 @@ i() { # checkout stdin-file [args...] -> sets OUT ERR RC
   local c="$1" in="$2"; shift 2
   : >"$FAKE_GITHUB/requests.log"
   : >"$FAKE_GITHUB/requests.jsonl"
-  OUT="$( cd "$c/repo" && "$FALCONET" init "$@" <"$in" 2>"$WORK/err" )"
+  OUT="$( cd "$c/repo" && "$FALCONET" init --no-app "$@" <"$in" 2>"$WORK/err" )"
   RC=$?
   ERR="$(cat "$WORK/err")"
   return 0
@@ -369,9 +372,9 @@ assert_line "$OUT" "ok           1. the repository has issues enabled"
 assert_line "$OUT" "ok           1. allowed_actions is all"
 assert_line "$OUT" "note         1. default_workflow_permissions is read (fine: the caller workflow grants what it needs)"
 
-it "the plan env without --plan-env-file is skipped, and the App without its flags"
+it "the plan env without --plan-env-file is skipped, and the App under --no-app"
 assert_line "$OUT" "skipped      5. secret FALCONET_PLAN_ENV (no --plan-env-file)"
-assert_line "$OUT" "skipped      3. secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (no --app-id and --app-key; #12 will create the App by manifest)"
+assert_line "$OUT" "skipped      3. secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (--no-app)"
 
 it "and the local files and the commit still happen"
 assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
@@ -568,7 +571,7 @@ it "an unreachable GITHUB_API_URL with a token is exit 1, not a crash and not a 
 assert_eq 1 "$(cat "$WORK/rc")" "exit code"
 assert_contains "$(cat "$WORK/err2")" "did not answer" "stderr"
 
-# --- the App, by hand, until #12 -----------------------------------------------------------
+# --- the App, by hand: the flags win over the manifest flow --------------------------------
 
 c="$(new_checkout app)"
 printf -- '-----BEGIN RSA PRIVATE KEY-----\nbm90IHJlYWxseSBhIGtleSBQRU0tUExBSU5URVhULU1BUktFUg==\n-----END RSA PRIVATE KEY-----\n' >"$c/app.pem"

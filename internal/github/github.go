@@ -344,10 +344,12 @@ type PullRequest struct {
 	} `json:"head"`
 }
 
-// Repository is the repository object: the fields README step 1 checks.
+// Repository is the repository object: the fields README step 1 checks, and
+// html_url, which the App manifest names as the App's homepage (step 3).
 type Repository struct {
 	Name          string `json:"name"`
 	FullName      string `json:"full_name"`
+	HTMLURL       string `json:"html_url"`
 	Owner         User   `json:"owner"`
 	Private       bool   `json:"private"`
 	Visibility    string `json:"visibility"`
