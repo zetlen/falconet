@@ -403,6 +403,93 @@ it "and named in the report"
 assert_contains "$(cat "$c/repo/ci(handoff)/validation-failure.txt" 2>/dev/null)" \
   "ci(handoff)/plan.txt" "report"
 
+# --- the guard is a prefix, and the evidence is what git wrote ---------------
+#
+# Written against the bash before the Go port (#16), for what the script did
+# and the cases above did not hold: the edges of the prefix test, git's quoted
+# form, the order and colour of diff.patch, the plan in the run log, and more
+# than one planned stack.
+
+c="$(new_checkout prefix_only)"; b="$(base_of "$c")"; with_change "$c"
+mkdir -p "$c/repo/.falconetx"; printf 'note\n' >"$c/repo/.falconetx/note.txt"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "a neighbour of the handoff directory"
+v "$c" "$b"
+
+it "a path that merely begins with the handoff directory's name is not inside it"
+assert_eq 0 "$RC" "exit code"
+
+c="$(new_checkout quoted)"; b="$(base_of "$c")"; with_change "$c"
+printf 'secret\n' >"$c/repo/.falconet/a\"b.txt"
+git -C "$c/repo" add -f ".falconet/a\"b.txt"
+git -C "$c/repo" commit -qm "smuggle, quoted"
+v "$c" "$b"
+
+it "a smuggled path git has to quote is still refused"
+assert_eq 1 "$RC" "exit code"
+
+it "and named in the report as git printed it"
+assert_contains "$(report "$c")" '".falconet/a\"b.txt"' "report"
+
+c="$(new_checkout basehead)"; b="$(base_of "$c")"; with_change "$c"
+v "$c" HEAD
+
+it "a --base of HEAD is refused: nothing is on top of it"
+assert_eq 1 "$RC" "exit code"
+assert_contains "$(report "$c")" "No commit on the working branch" "report"
+
+c="$(new_checkout twocommits)"; b="$(base_of "$c")"
+with_change "$c" "First change"
+printf 'locals {\n  b = 1\n}\n' >"$c/repo/dns/records-second.tf"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "Second change"
+git -C "$c/repo" config color.ui always
+v "$c" "$b"
+
+it "diff.patch reads oldest commit first, the order the work happened in"
+assert_eq "First change" \
+  "$(grep -E -o 'First change|Second change' "$c/repo/.falconet/diff.patch" | head -1)" \
+  "first subject in diff.patch"
+
+it "and carries no escape codes even when color.ui is always"
+assert_not_contains "$(cat "$c/repo/.falconet/diff.patch")" $'\e[' "diff.patch"
+
+it "the run log carries the whole plan between its markers"
+assert_contains "$OUT" "----- begin tofu plan (dns/) -----" "stdout"
+assert_contains "$OUT" "Plan: 1 to add" "stdout"
+
+c="$(new_checkout noplan)"; b="$(base_of "$c")"
+printf '{"stacks":{"plan":[],"validate_only":["dns"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+with_change "$c"
+v "$c" "$b"
+
+it "with no planned stack nothing is planned, and the run still passes"
+assert_eq 0 "$RC" "exit code"
+assert_not_contains "$(calls "$c")" " plan " "tofu calls"
+
+c="$(new_checkout twoplanned)"; b="$(base_of "$c")"
+printf '{"stacks":{"plan":["dns","workspace"],"validate_only":[]}}\n' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+with_change "$c"
+v "$c" "$b"
+
+it "with more than one planned stack, each plan is headed by its stack's name"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## workspace" "plan.txt"
+
+c="$(new_checkout secondfails)"; b="$(base_of "$c")"
+printf '{"stacks":{"plan":["dns","workspace"],"validate_only":[]}}\n' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+with_change "$c"
+FAIL_PLAN="workspace" v "$c" "$b"; reset_fail
+
+it "a plan that fails on the second stack leaves no plan.txt at all"
+assert_file_missing "$c/repo/.falconet/plan.txt"
+
+it "and the report names the stack that failed"
+assert_contains "$(report "$c")" "## tofu plan failed (workspace/)" "report"
+
 # --- usage ------------------------------------------------------------------
 
 it "a missing --base is a usage error"
