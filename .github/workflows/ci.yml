@@ -1,15 +1,11 @@
 # falconet's own tests, on every pull request and every push to main.
 #
-# The suite stubs gh, gitleaks and tofu, serves a fake GitHub API on loopback
-# for the verbs that have moved off gh, pushes only into bare repositories
-# under a temp directory, and never touches the network, GitHub, OpenTofu or
-# any credential — which is why it can run here with no secrets and no
-# permissions at all.
-#
-# Mid-port (ADR-0006 D3), the suite runs ONCE, through the Go binary: the
-# verbs the binary implements answer natively, and every other verb falls
-# through to its bash script because FALCONET_HOME names this checkout. One
-# pass covers both implementations. Nothing runs twice.
+# The suite serves a fake GitHub API on loopback, stubs tofu and gitleaks with
+# bash scripts handed in through $TOFU and $GITLEAKS, pushes only into bare
+# repositories under a temp directory, and never touches the network, GitHub,
+# OpenTofu or any credential — which is why it can run here with no secrets
+# and no permissions at all. It runs once, through the binary this job builds:
+# since #19 there is nothing else in the tree that can answer it.
 name: ci
 
 on:
@@ -26,10 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The shell that is left: the suite and its fixtures.
       - name: Check the shell parses before running any of it
         run: |
           set -euo pipefail
-          for f in bin/falconet lib/*.sh libexec/falconet/*.sh tests/*.sh; do
+          for f in tests/*.sh tests/fixtures/*.sh; do
+            [ -e "$f" ] || continue
             bash -n "$f"
           done
 
@@ -71,4 +69,4 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -o dist/falconet ./cmd/falconet
 
       - name: Run the suite through the binary
-        run: FALCONET="$PWD/dist/falconet" FALCONET_HOME="$PWD" bash tests/run.sh
+        run: FALCONET="$PWD/dist/falconet" bash tests/run.sh

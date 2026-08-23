@@ -49,65 +49,74 @@ thing.
   reference verdict protocol. Any future review harness must clear the bar the
   original set: an independent, uncontaminated read of diff, commit message
   and plan before a human is asked to look.
-- **The language is Go, and the port has an order.** Decided in
+- **The language is Go, and the port is done.** Decided in
   [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md), which supersedes the
   Bun strangler ADR-0002 D1 chose and ADR-0004 reaffirmed. Bun and Rust were
-  both weighed there, with reasons; do not re-propose either. The port begins
-  with the test suite and with setup, not with a verb.
+  both weighed there, with reasons; do not re-propose either. Every verb is
+  native, the bash it replaced was deleted in the cutover (#19, ADR-0006 D3
+  step 3), and the suite runs once, through the binary `make build` leaves
+  at `dist/falconet`: `make test`.
 
 ## Tests
 
-`bash tests/run.sh` must be green before a commit and after it. No exceptions,
-no "I'll fix it in the next task."
+`make test` must be green before a commit and after it. No exceptions, no
+"I'll fix it in the next task." It is two things:
 
-**No test may reach inside its subject.** Every assertion crosses a process
-boundary: spawn the thing, then check stdout, exit code, and files on disk.
-Nothing sources the verb under test; nothing asserts on bash internals; every
-test spawns its subject through `$FALCONET` (default `bin/falconet`), so
-`FALCONET=/other/binary bash tests/run.sh` runs the whole suite against
-another implementation. This is what lets the Go port answer to the same
-suite, and a test that couples to bash spends that option
-([ADR-0004](docs/adr/0004-the-strangler-reaffirmed.md);
-[ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md) step 0 is where the suite
-stopped naming `.sh` paths).
+- **`go test ./...`** — unit and property tests beside the guard logic
+  (`testing`, `testing/quick`), for what the bash suite cannot see from
+  outside a process: truncation never splits a line and never exceeds its
+  budget, the fence outruns every backtick run, the denylist matches in
+  config order, the config merge (objects recurse, arrays and scalars
+  replace), the handoff directory, the repository root, the dispatcher's
+  lists in step with what it implements. `go vet`, `staticcheck`,
+  `errcheck` and `govulncheck` are part of green: an ignored error is a red
+  build (ADR-0006 D1).
+- **`bash tests/run.sh`** — the acceptance suite and the incident record,
+  run through the binary. It is not rewritten for Go and it reaches inside
+  nothing: **no test may reach inside its subject.** Every assertion crosses
+  a process boundary: spawn `$FALCONET <verb>`, then check stdout, exit
+  code, and files on disk. `FALCONET` defaults to `dist/falconet` and
+  `tests/lib.sh` refuses to start without it (`build it first: make build`);
+  `FALCONET=/other/binary bash tests/run.sh` runs the same suite against
+  another build. There is no fallback to anything else: green means green
+  through the binary.
 
-Tests stub `gh` for the verbs that still use it and serve a fake GitHub API
-on loopback — `tests/fixtures/fake-github.py`, started by `fake_github` in
-`tests/lib.sh` — for the verbs that have moved off it (ADR-0006 D2). They
-push only into bare repositories under a temp directory, and never touch the
-network, GitHub, OpenTofu, or any credential. They need bash, git, jq, awk
-and python3 stdlib. Adding a dependency to run the tests is a decision, not
-a convenience.
+GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
+`fake_github` in `tests/lib.sh` that answers from fixtures and records what
+it was asked, with `GITHUB_API_URL` pointing at it (ADR-0006 D2). No test
+file stubs `gh`; the files that once did put a tripwire on `PATH` instead,
+so a verb that shelled out to `gh` would fail loudly before the real one
+could carry a test token anywhere. `tofu` and `gitleaks` are bash stubs
+handed in through `$TOFU` and `$GITLEAKS`, and their argv is part of the
+contract. Pushes land only in bare repositories under a temp directory;
+nothing touches the network, GitHub, OpenTofu, or any credential. The suite
+needs bash, git, jq, awk and python3 stdlib. Adding a dependency to run the
+tests is a decision, not a convenience.
 
-The Go binary answers the same suite, and since #15 it is the only subject
-that can: `pause.test.sh` serves the fake API instead of stubbing `gh`, and
-`pause` (`park` until #5's rename; no alias) has no bash behind it —
-`park.sh` was deleted with the rename, ahead of the cutover — so "green"
-means green through the binary.
-Build it out of tree — `CGO_ENABLED=0 go build -trimpath -o dist/falconet
-./cmd/falconet` — then
-`FALCONET=$PWD/dist/falconet FALCONET_HOME=$PWD bash tests/run.sh`
-(`make test` does both).
-`FALCONET_HOME` is what lets a verb the binary does not implement yet fall
-through to its bash script, silently; unset it to prove a verb is native.
-`go test ./...` covers what the suite cannot see from outside a process — the
-config merge (objects recurse, arrays and scalars replace), resolution order,
-the handoff directory, the repository root — and `go vet`, `staticcheck` and
-`errcheck` are part of green: an ignored error is a red build.
+`contract.test.sh` is the wiring's test: it reads `action.yml`,
+`.github/workflows/falconet.yml`, `release.yml`, the Makefile and the
+README's caller template (between its `<!-- caller-workflow-template -->`
+markers) and holds their shape — no checkout in the agent job, the install
+before the first verb in every job, every `uses: zetlen/falconet@` ref equal
+to `release/VERSION`. A new case is proved red on the break it exists for
+before it is made green.
 
-## Shell traps this repository has already hit
+## Two facts about tofu
 
-- **Never pipe `tofu plan` into `head` or `tail`.** SIGPIPE kills tofu before
-  it releases its state lock. Redirect to a file, and always pass `-no-color`
-  when you do — without it, ANSI escapes land in the file and whoever reads it
-  next has to strip them.
-- **Never `gh ... | grep -q`.** `grep -q` exits at the first match and can
-  SIGPIPE `gh`, which under `set -o pipefail` turns a *found* match into a
-  non-zero pipeline — the exact opposite of the answer just computed. Capture
-  the whole result, then inspect it.
-- **A subprocess with something to say will say it into your contract.** Verbs
-  print exactly one outcome word on stdout; anything a helper emits must be
-  captured, not allowed through.
+Not about shell — the binary speaks `os/exec`, and the shell traps the bash
+used to carry went with it — but true in any language:
+
+- **Never end a plan early.** A reader that stops early — `head`, `tail`, a
+  closed pipe — kills tofu before it releases its state lock. The plan goes
+  to a file, whole.
+- **Always pass `-no-color`** when the output lands in a file. Without it,
+  ANSI escapes are in the plan and whoever reads it next has to strip them.
+
+And one shell trap that survives, because one `run:` step in the workflow
+still uses `gh`: **never `gh ... | grep -q`.** `grep -q` exits at the first
+match and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found*
+match into a non-zero pipeline — the exact opposite of the answer just
+computed. Capture the whole result, then inspect it.
 
 ## Reading the provenance
 
@@ -125,20 +134,23 @@ scan is the worked example of something that stayed internal.
 
 ## Two roots, never one variable
 
-`FALCONET_HOME` is where the tool lives; `REPO_ROOT` is the repository being
-worked on. The origin's scripts lived inside the repo they operated on, so
-one answer served both — and a verb that keeps that assumption operates on
-falconet instead of on the consumer's repository, silently, reporting an
-outcome about the wrong tree. `lib/repo.sh` is the whole of the fix. Never
-derive the working tree from `$BASH_SOURCE`.
+The binary lives wherever it was installed; `REPO_ROOT` is the repository
+being worked on, and `internal/repo` finds it from the working directory
+(or `$FALCONET_REPO`). The origin's scripts lived inside the repo they
+operated on, so one answer served both — and a verb that keeps that
+assumption operates on wherever the tool sits instead of on the consumer's
+repository, silently, reporting an outcome about the wrong tree. Never
+derive the working tree from the binary's own location.
 
-## The tool lives inside the tree it works on
+## The handoff lives inside the tree it describes
 
-In CI the workflow checks falconet out at `.falconet-tool/` *inside* the
-consumer's checkout — a composite action can only run from under the
-workspace — and the handoff directory is written there too. Both are
-untracked, and two verbs read `git status`: `prepare` refuses a dirty tree,
-`commit` refuses any changed path outside the allowlist. Every job that runs
-either of them excludes both paths in `.git/info/exclude` first, and
-`contract.test.sh` fails if a step reorders that. A verb that starts reading
-the working tree joins that invariant; the invariant does not bend to it.
+The verbs never call each other; they leave files for each other in the
+handoff directory (`handoff_dir`, default `.falconet/`), which is written
+*inside* the consumer's checkout. It is untracked, and two verbs read
+`git status`: `prepare` refuses a dirty tree, `commit` refuses any changed
+path outside the allowlist. So every job in `falconet.yml` that runs either
+of them writes `.falconet/` into `.git/info/exclude` first — per clone,
+never into a file the commit verb could see, and never relying on the
+consumer's `.gitignore` — and `contract.test.sh` fails if a step reorders
+that. A verb that starts reading the working tree joins that invariant; the
+invariant does not bend to it.

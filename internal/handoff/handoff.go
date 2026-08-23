@@ -106,3 +106,54 @@ func checkLine(line string) error {
 	}
 	return nil
 }
+
+// MultilineDelimiter closes a value written to $GITHUB_ENV in the delimiter
+// form. One fixed word, so the workflow's reader and this writer cannot
+// disagree about where a value ends.
+const MultilineDelimiter = "FALCONET_PLAN_ENV_EOF"
+
+// CheckMultiline is whether name and value can travel in the delimiter form:
+// the name is a variable name, and the value does not contain the delimiter.
+// Actions ends the value at the first line equal to the delimiter, and
+// whatever follows becomes further variables in every later step — the same
+// hole GitHubEnvAppend refuses a line break for, one level up. Exported so a
+// caller with several values can refuse all of them before writing any.
+func CheckMultiline(name, value string) error {
+	if !envKey.MatchString(name) {
+		return fmt.Errorf("refusing to write to $GITHUB_ENV: %q is not a variable name", name)
+	}
+	if strings.Contains(value, MultilineDelimiter) {
+		return fmt.Errorf("refusing to write to $GITHUB_ENV: the value of %s contains the delimiter %s", name, MultilineDelimiter)
+	}
+	return nil
+}
+
+// GitHubEnvAppendMultiline appends one variable in the delimiter form —
+//
+//	NAME<<FALCONET_PLAN_ENV_EOF
+//	<value>
+//	FALCONET_PLAN_ENV_EOF
+//
+// — which is legal whatever the value holds, a PEM's many lines included;
+// that is what the planning credentials travel as (plan-env), where
+// GitHubEnvAppend's one-line form would refuse them. The same rule as
+// GitHubEnvAppend otherwise: refused before anything is written when the
+// pair cannot travel (CheckMultiline), and a silent no-op without a
+// $GITHUB_ENV or with one that cannot be opened, because a verb that made a
+// decision must not fail for running on a laptop.
+func GitHubEnvAppendMultiline(name, value string) error {
+	if err := CheckMultiline(name, value); err != nil {
+		return err
+	}
+	path := os.Getenv("GITHUB_ENV")
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(name + "<<" + MultilineDelimiter + "\n" + value + "\n" + MultilineDelimiter + "\n")
+	return nil
+}

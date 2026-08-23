@@ -156,3 +156,52 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+func TestMasks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{"one line", "AKIA", []string{"::add-mask::AKIA"}},
+		{"a PEM, one mask per line", "-----BEGIN\nabc\n-----END", []string{"::add-mask::-----BEGIN", "::add-mask::abc", "::add-mask::-----END"}},
+		{"an empty line is not a secret", "a\n\nb", []string{"::add-mask::a", "::add-mask::b"}},
+		{"a trailing newline adds no mask", "a\n", []string{"::add-mask::a"}},
+		{"an empty value masks nothing", "", nil},
+		{"only newlines mask nothing", "\n\n", nil},
+		{"a carriage return stays on its line", "a\r\nb", []string{"::add-mask::a\r", "::add-mask::b"}},
+	} {
+		got := Masks(tc.value)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// For any value: there is exactly one mask per non-empty line, each is the
+// prefix followed by that line, in order, and no mask spans a line — a mask
+// with a newline in it would be two workflow commands, the second of them
+// garbage.
+func TestEveryNonEmptyLineIsMaskedOnceAndNothingElse(t *testing.T) {
+	f := func(value string) bool {
+		got := Masks(value)
+		var want []string
+		for _, line := range strings.Split(value, "\n") {
+			if line != "" {
+				want = append(want, MaskPrefix+line)
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			return false
+		}
+		for _, m := range got {
+			if strings.Contains(m, "\n") || m == MaskPrefix {
+				return false
+			}
+		}
+		return true
+	}
+	if err := quick.Check(f, &quick.Config{MaxCount: maxCount}); err != nil {
+		t.Error(err)
+	}
+}

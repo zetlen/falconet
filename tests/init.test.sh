@@ -184,8 +184,8 @@ assert_eq "    uses: $reusable@$ref" "$(grep -E '^ *uses: ' "$c/repo/.github/wor
 it "and has no falconet-ref input: post-cutover, the binary is the one coordinate"
 assert_not_contains "$(cat "$c/repo/.github/workflows/infra-requests.yml")" "falconet-ref" "workflow"
 
-it "and its permissions block is README step 8's, read the way contract.test.sh reads it"
-readme_perms="$(awk '/^### 8\./ { s = 1 } s && /^### 9\./ { exit } s' "$REPO_ROOT/README.md" \
+it "and its permissions block is the README's caller template's, read the way contract.test.sh reads it"
+readme_perms="$(awk '/<!-- caller-workflow-template -->/ { s = 1; next } s && /<!-- \/caller-workflow-template -->/ { exit } s' "$REPO_ROOT/README.md" \
   | awk '/^permissions:/ { p = 1; next } p && /^[^[:space:]]/ { p = 0 } p')"
 wf_perms="$(awk '/^permissions:/ { p = 1; next } p && /^[^[:space:]]/ { p = 0 } p' "$c/repo/.github/workflows/infra-requests.yml")"
 assert_eq "$readme_perms" "$wf_perms" "permissions block"

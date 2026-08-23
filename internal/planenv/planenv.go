@@ -1,8 +1,9 @@
 // Package planenv is the shape FALCONET_PLAN_ENV must have, checked once,
 // here, by everything that handles the secret: `init`, which seals it, and
-// the cutover's `plan-env` subcommand (#19), which replaces the workflow's
-// jq-driven "Credentials for the stacks that plan" step and validates the
-// same secret with the same code before anything is exported from it.
+// the `plan-env` subcommand, which replaced the workflow's jq-driven
+// "Credentials for the stacks that plan" step (#19) and validates the same
+// secret with the same code before anything is exported from it. Masks is
+// the other half of that step: what the runner must be told to redact.
 //
 // FALCONET_PLAN_ENV is one JSON object of environment variables — whatever
 // the operator exports before `tofu init && tofu plan` in the stacks named
@@ -34,6 +35,7 @@ import (
 	"io"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // Entry is one variable the secret sets.
@@ -109,4 +111,24 @@ func kind(v any) string {
 		return "an object"
 	}
 	return "not a string"
+}
+
+// MaskPrefix is the workflow command that tells the runner to redact a
+// string from every log line after it.
+const MaskPrefix = "::add-mask::"
+
+// Masks is the ::add-mask:: command for every non-empty line of value, in
+// order. add-mask is per line, and a PEM is many lines: the runner masks
+// exact strings, so a multi-line value masked as one string would mask
+// nothing, and each line has to be named on its own. An empty line is not a
+// secret, and the runner refuses to mask one anyway. Printed by plan-env
+// BEFORE the value is written anywhere.
+func Masks(value string) []string {
+	var out []string
+	for _, line := range strings.Split(value, "\n") {
+		if line != "" {
+			out = append(out, MaskPrefix+line)
+		}
+	}
+	return out
 }

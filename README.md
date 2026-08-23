@@ -285,6 +285,7 @@ naming the key, the file it came from, and what belongs there.
 
 One file, `.github/workflows/infra-requests.yml`, and this is the whole of it:
 
+<!-- caller-workflow-template -->
 ```yaml
 name: infra requests
 
@@ -327,6 +328,7 @@ jobs:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       plan-env: ${{ secrets.FALCONET_PLAN_ENV }}
 ```
+<!-- /caller-workflow-template -->
 
 | Input | Required | Default | What it is |
 | --- | --- | --- | --- |

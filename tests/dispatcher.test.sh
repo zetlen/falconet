@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# dispatcher.test.sh — bin/falconet resolves a verb and gets out of the way.
+# dispatcher.test.sh — `falconet <verb>` resolves a verb and gets out of the way.
 #
 # The dispatcher's whole contract is exit discipline and silence: usage errors
-# are 2, an unimplemented verb is 1, and a verb that runs owns its own stdout.
-# Everything here is asserted across a process boundary, which is the only way
-# these tests will still mean something after the port to Go (ADR-0006).
+# are 2, and a verb that runs owns its own stdout. Everything here is asserted
+# across a process boundary, which is what let these tests keep meaning
+# something through the port to Go (ADR-0006) and after it.
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -58,6 +58,9 @@ assert_contains "$ERR" "assemble"
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
 
+it "and plan-env the same way: invoked by the workflow, not vocabulary"
+assert_not_contains "$ERR" "plan-env"
+
 it "park is gone, not aliased or listed"
 assert_not_contains "$ERR" "  park "
 run park --issue 1 --label needs-info --preamble x
@@ -73,9 +76,11 @@ assert_eq "2" "$?" "scan --help exit code"
 
 # --- mid-port: a verb with no file behind it --------------------------------
 #
-# Gone. The case that lived here copied bin/falconet beside an empty verb
-# directory — the one test that knew its subject was a shell script, and the
-# one ADR-0004 named as the test to watch. ADR-0006 D3 step 0 retired it.
+# Gone. The case that lived here copied the bash dispatcher beside an empty
+# verb directory — the one test that knew its subject was a shell script, and
+# the one ADR-0004 named as the test to watch. ADR-0006 D3 step 0 retired it,
+# and #19 deleted the fallback it was about: a verb the binary knows is a
+# verb the binary implements, and `go test ./cmd/falconet` holds that.
 
 # --- a verb that exists really is exec'd ------------------------------------
 #
@@ -93,10 +98,10 @@ assert_contains "$ERR" "unknown argument"
 #
 # The origin's scripts lived INSIDE the repository they operated on, so "one
 # directory above scripts/" answered both questions at once. falconet is a
-# separate tool: in CI the composite action checks it out somewhere of its
-# own, and in the strangler's endgame it is a binary on $PATH. A verb that
-# still used its own location to find the working tree would operate on
-# falconet — silently, reporting an outcome about the wrong repository.
+# separate tool — a binary on $PATH, in CI and on a workstation — and a verb
+# that used its own location to find the working tree would operate on
+# wherever the binary sits, silently, reporting an outcome about the wrong
+# repository.
 #
 # Every other test in this suite now runs the verb from here and the fixture
 # from a temp directory, so they all cover this incidentally. This one says it

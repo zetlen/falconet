@@ -493,15 +493,13 @@ jobs:
     uses: zetlen/falconet/.github/workflows/falconet.yml@a3ed1b3fcb49f4bf91792f3191790e95bd47a102
     with:
       issue: ${{ github.event.issue.number }}
-      falconet-ref: a3ed1b3fcb49f4bf91792f3191790e95bd47a102
     secrets:
       app-id: ${{ secrets.FALCONET_APP_ID }}
 `
 
 func TestParseCaller(t *testing.T) {
 	c := ParseCaller([]byte(canonicalCaller))
-	want := Caller{HasUses: true, Ref: "a3ed1b3fcb49f4bf91792f3191790e95bd47a102",
-		FalconetRef: "a3ed1b3fcb49f4bf91792f3191790e95bd47a102", HasPermissions: true,
+	want := Caller{HasUses: true, Ref: "a3ed1b3fcb49f4bf91792f3191790e95bd47a102", HasPermissions: true,
 		Grants: []Permission{{"contents", "write"}, {"issues", "write"}, {"pull-requests", "write"}}}
 	if !reflect.DeepEqual(c, want) {
 		t.Errorf("\n got %+v\nwant %+v", c, want)
@@ -624,23 +622,22 @@ func TestWorkflowLines(t *testing.T) {
 			strings.ReplaceAll(canonicalCaller, "a3ed1b3fcb49f4bf91792f3191790e95bd47a102", "main"), true, []string{exists,
 				"ok           8. it uses zetlen/falconet/.github/workflows/falconet.yml@main",
 				"note         8. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request", grants}},
-		{"falconet-ref out of step with uses:",
-			sub("falconet-ref: a3ed1b3fcb49f4bf91792f3191790e95bd47a102", "falconet-ref: main"), true, []string{exists, usesLine,
-				"note         8. falconet-ref is main while uses: pins a3ed1b3fcb49f4bf91792f3191790e95bd47a102; put the same ref in both places or you will debug a version you are not running", grants}},
-		{"falconet-ref absent while uses: is pinned",
-			sub("      falconet-ref: a3ed1b3fcb49f4bf91792f3191790e95bd47a102\n", ""), true, []string{exists, usesLine,
-				"note         8. falconet-ref is not set (so it is main) while uses: pins a3ed1b3fcb49f4bf91792f3191790e95bd47a102; put the same ref in both places or you will debug a version you are not running", grants}},
+		// falconet-ref is no input since #19, and a reusable workflow rejects
+		// an input it does not declare at load: MISSING, whatever the value.
+		{"falconet-ref still passed, in step with uses:",
+			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref: a3ed1b3fcb49f4bf91792f3191790e95bd47a102\n"), true, []string{exists, usesLine,
+				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
+		{"falconet-ref still passed, as main",
+			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref: main\n"), true, []string{exists, usesLine,
+				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
+		{"falconet-ref still passed, empty",
+			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref:\n"), true, []string{exists, usesLine,
+				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
 		{"no uses: line",
 			sub("uses: zetlen/falconet/.github/workflows/falconet.yml@a3ed1b3fcb49f4bf91792f3191790e95bd47a102", "uses: someone/else@v1"), true, []string{exists,
-				"MISSING      8. no uses: line names zetlen/falconet/.github/workflows/falconet.yml\n             jobs.falconet.uses: zetlen/falconet/.github/workflows/falconet.yml@<sha or tag>",
-				"note         8. falconet-ref is a3ed1b3fcb49f4bf91792f3191790e95bd47a102 while uses: pins ; put the same ref in both places or you will debug a version you are not running", grants}},
+				"MISSING      8. no uses: line names zetlen/falconet/.github/workflows/falconet.yml\n             jobs.falconet.uses: zetlen/falconet/.github/workflows/falconet.yml@<sha or tag>", grants}},
 	} {
 		got := strs(WorkflowLines([]byte(tc.text), tc.exists))
-		// A missing uses: line makes the falconet-ref note moot; drop it from
-		// the expectation where the case is about the uses: line itself.
-		if tc.name == "no uses: line" {
-			tc.want = []string{tc.want[0], tc.want[1], tc.want[3]}
-		}
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
 		}

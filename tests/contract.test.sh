@@ -6,8 +6,15 @@
 # Both bugs from run 32093607680 were WIRING, not logic: every piece was
 # correct and one of them was in the wrong place. These cases guard the
 # wiring. A new hand-over path that forgets to name its branch, a push that
-# creeps back behind a condition, a tool grant that quietly widens — each
-# fails here, where a unit test would see nothing wrong.
+# creeps back behind a condition, a tool grant that quietly widens, a job
+# that grows a checkout it must not have — each fails here, where a unit
+# test would see nothing wrong.
+#
+# Since #19 the wrappers install a release asset instead of checking falconet
+# out into the consumer's tree. The cases that held the checkout's
+# invariants — the tool path in the exclude and in the tar, the jq check,
+# the falconet-ref input, the one permitted checkout in the agent job — are
+# retired below, each where it stood, with what replaced it.
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -16,17 +23,32 @@ ACTION="$REPO_ROOT/action.yml"
 
 wf="$(cat "$WF")"
 action="$(cat "$ACTION")"
+# Comments stripped, for the cases about what a file DOES rather than what it
+# says: the prose above a step often names the very thing it explains not to
+# do.
+wf_code="$(grep -v '^[[:space:]]*#' "$WF")"
+action_code="$(grep -v '^[[:space:]]*#' "$ACTION")"
 
-# Every pause invocation, with backslash and YAML folded continuations pulled
-# into one line, so a check can see the whole argument list.
+# One job's text, comments stripped, from its key to the next job's.
+job() { # name
+  awk -v j="$1" '$0 == "  " j ":" { f = 1; next } f && /^  [a-z][a-z-]*:$/ { exit } f' <<<"$wf_code"
+}
+gate_job="$(job gate)"
+implement_job="$(job implement)"
+publish_job="$(job publish)"
+contain_job="$(job contain)"
+
+# Every pause invocation, with its backslash continuations pulled into one
+# line, so a check can see the whole argument list. pause is a `run:` step —
+# its preamble is a sentence, and the action splits args on whitespace — so
+# a call runs from `falconet pause` to the first line without a backslash.
 pause_calls="$(awk '
-  /verb: pause/ { inpark = 1; buf = ""; next }
-  inpark {
+  /falconet pause/ { inpause = 1; buf = "" }
+  inpause {
     buf = buf " " $0
-    if ($0 ~ /^[ \t]*- name:/ || $0 ~ /^[ \t]*- uses:/) { print buf; inpark = 0 }
+    if ($0 !~ /\\$/) { print buf; inpause = 0 }
   }
-  END { if (inpark) print buf }
-' "$WF")"
+' <<<"$wf_code")"
 
 # --- the agent holds nothing it could publish with -------------------------
 
@@ -41,29 +63,29 @@ assert_contains "$wf" "permissions: {}" "workflow"
 
 it "and the workflow's default is the same, so a new job must opt in"
 # Comment lines excluded: the header explains the rule and would be counted.
-assert_eq 2 "$(grep -v '^[[:space:]]*#' "$WF" | grep -c 'permissions: {}')" \
-  "permissions: {} declarations"
+assert_eq 2 "$(grep -c 'permissions: {}' <<<"$wf_code")" "permissions: {} declarations"
 
-it "the agent job checks out without persisting credentials"
-assert_contains "$wf" "persist-credentials: false" "workflow"
+# "the agent job checks out without persisting credentials" lived here until
+# #19. The checkout it was about — falconet's own, the one ADR-0005 allowed —
+# is gone, and a job with no checkout has nothing to persist. The stronger
+# form is the two cases under "the agent job is handed its source".
 
 it "and no step in the agent job is handed a token"
-implement_job="$(awk '/^  implement:/{f=1} /^  publish:/{f=0} f' "$WF")"
 assert_not_contains "$implement_job" "steps.token.outputs.token" "implement job"
 
 # --- exactly one of each thing that must happen once -----------------------
 
 it "there is exactly one validate step"
-assert_eq 1 "$(grep -c 'verb: validate' "$WF")" "validate steps"
+assert_eq 1 "$(grep -c 'verb: validate' <<<"$wf_code")" "validate steps"
 
 it "the branch is pushed exactly once"
-assert_eq 1 "$(grep -c 'verb: push' "$WF")" "push steps"
+assert_eq 1 "$(grep -c 'verb: push' <<<"$wf_code")" "push steps"
 
 it "and only by the push verb — nothing else runs git push"
 assert_not_contains "$wf" "git push" "workflow"
 
 it "there is no repair loop: commit happens once"
-assert_eq 1 "$(grep -c 'verb: commit' "$WF")" "commit steps"
+assert_eq 1 "$(grep -c 'verb: commit' <<<"$wf_code")" "commit steps"
 
 # --- the push is unconditional and comes first -----------------------------
 #
@@ -71,7 +93,7 @@ assert_eq 1 "$(grep -c 'verb: commit' "$WF")" "commit steps"
 # work on a runner that was destroyed minutes later.
 
 it "the push step carries no condition"
-push_step="$(awk '/name: Push/{f=1} f && /verb: push/{print; exit} f' "$WF")"
+push_step="$(awk '/name: Push/{f=1} f && /verb: push/{print; exit} f' <<<"$wf_code")"
 assert_not_contains "$push_step" "if:" "push step"
 
 it "and nothing that publishes runs before it"
@@ -81,21 +103,57 @@ pr_line="$(grep -n 'gh pr create' "$WF" | cut -d: -f1)"
   && assert_eq "before" "before" "push at $push_line, pr create at $pr_line" \
   || assert_eq "push before pr create" "push=$push_line pr=$pr_line" "order"
 
+# The push needs the binary and the binary is a download, so one step stands
+# between the restored branch and the remote, and it is that one.
+it "and only the install stands between restoring the branch and the push"
+publish_steps="$(sed -n 's/^      - name: //p' <<<"$publish_job")"
+assert_eq "Restore the branch
+Install falconet, tofu and gitleaks
+Push" "$(grep -A2 '^Restore the branch$' <<<"$publish_steps")" "the three steps in order"
+
 it "the work is bundled before the agent job ends, so it outlives the runner"
 assert_contains "$wf" "git bundle create" "workflow"
 
 # --- every hand-over names its branch --------------------------------------
 
 it "every pause call passes --branch"
-missing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
-total="$(grep -c 'verb: pause' "$WF")"
-assert_eq "$total" "$missing" "pause calls passing --branch"
+passing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
+total="$(grep -c 'falconet pause' <<<"$wf_code")"
+assert_eq "$total" "$passing" "pause calls passing --branch"
 
-it "and reads PUSHED_BRANCH rather than the branch prepare intended"
-assert_contains "$wf" 'env.PUSHED_BRANCH' "workflow"
+it "and there are four of them: three endings in publish and the containment"
+assert_eq 4 "$total" "pause calls"
+
+it "and the ones in publish read PUSHED_BRANCH rather than the branch prepare intended"
+# The branch that IS on the remote, set by the push verb; empty when nothing
+# was pushed, which pause takes as "no branch".
+publish_pauses="$(awk '/falconet pause/ { p = 1; buf = "" } p { buf = buf " " $0; if ($0 !~ /\\$/) { print buf; p = 0 } }' <<<"$publish_job")"
+assert_eq 3 "$(grep -c -- '--branch "$PUSHED_BRANCH"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+
+it "and the containment's passes the empty string, because it does not know"
+assert_contains "$(grep 'falconet pause' <<<"$pause_calls" | tail -1)" '--branch ""' "contain's pause"
 
 it "there is a containment job that runs whatever happened"
 assert_contains "$wf" "if: always() && needs.gate.outputs.outcome == 'ready'" "workflow"
+
+# Terminal or not is decided in one step and acted on in the next, so the
+# decision is an output a reader can see, and the pause cannot run on a
+# guess.
+it "the containment job decides first, and its pause is conditioned on the decision"
+assert_contains "$contain_job" "id: check" "contain job"
+assert_contains "$contain_job" "if: steps.check.outputs.terminal != 'true'" "contain job"
+assert_eq 1 "$(grep -c "if: steps.check.outputs.terminal != 'true'" <<<"$contain_job")" "conditioned pauses"
+
+# AGENTS.md's trap, still true for the one run: step that uses gh: `grep -q`
+# exits at the first match and can SIGPIPE gh, which under pipefail turns a
+# FOUND match into a failed pipeline. Every answer is captured into a
+# variable, then inspected.
+it "and captures every gh answer before inspecting it — never gh … | grep"
+assert_eq 0 "$(grep -cE 'gh [^|]*\|' <<<"$wf_code")" "gh commands piped anywhere"
+assert_eq 3 "$(grep -cE '^ *[a-z]+="\$\(gh ' <<<"$contain_job")" "captured gh answers in contain"
+
+it "and reads gh's JSON with gh's own template, because jq is no longer a dependency"
+assert_eq 3 "$(grep -c -- '--template' <<<"$contain_job")" "gh --template uses in contain"
 
 # --- the review protocol stays unwired -------------------------------------
 
@@ -116,6 +174,10 @@ assert_not_contains "$wf" "github.event.issue.title" "workflow"
 it "the whole plan goes in the body, assembled rather than quoted"
 assert_contains "$wf" "verb: assemble" "workflow"
 
+it "and the label comes from the config every verb reads, through the binary"
+assert_contains "$wf_code" 'label="$(falconet config $FALCONET_CONFIG_FLAG get .labels.pr)"' "workflow"
+assert_contains "$wf_code" '--label "$label"' "workflow"
+
 # --- pinned binaries, installed before anything depends on them ------------
 
 it "gitleaks is pinned by version"
@@ -128,29 +190,75 @@ it "and proves it runs before anything depends on it"
 assert_contains "$action" "gitleaks version" "action"
 
 it "the digest is checked before the tarball is unpacked"
-sha_line="$(grep -n 'sha256sum -c -' "$ACTION" | cut -d: -f1)"
+sha_line="$(grep -n 'sha256sum -c -' "$ACTION" | head -1 | cut -d: -f1)"
 tar_line="$(grep -n 'tar -xzf' "$ACTION" | cut -d: -f1)"
 [[ "$sha_line" -lt "$tar_line" ]] \
   && assert_eq "before" "before" "sha at $sha_line, tar at $tar_line" \
   || assert_eq "sha before tar" "sha=$sha_line tar=$tar_line" "order"
 
+# falconet itself, the same shape (ADR-0006 D6): the version and the digest
+# are read from the action's own tree — release/VERSION and the file
+# `make release-prep` writes beside it — so the action at a tag installs the
+# asset release.yml refused to publish unless those bytes reproduced.
+falconet_install="$(awk '/name: Install falconet/{f=1} /name: Run$/{f=0} f' "$ACTION")"
+
+it "falconet is pinned by the version in the tree"
+assert_contains "$falconet_install" 'version="$(cat "$GITHUB_ACTION_PATH/release/VERSION")"' "action"
+
+it "and by the digest release-prep wrote beside it"
+assert_contains "$falconet_install" '"$GITHUB_ACTION_PATH/release/falconet_linux_amd64.sha256"' "action"
+
+it "and fetches the bare-named asset from the release of that version"
+assert_contains "$falconet_install" 'releases/download/${version}/falconet_linux_amd64' "action"
+
+it "the digest is checked before the binary is installed"
+sha2_line="$(grep -n 'sha256sum -c -' "$ACTION" | sed -n 2p | cut -d: -f1)"
+install_line="$(grep -n 'install -m 0755 "$file"' "$ACTION" | cut -d: -f1)"
+[[ -n "$sha2_line" && -n "$install_line" && "$sha2_line" -lt "$install_line" ]] \
+  && assert_eq "before" "before" "sha at $sha2_line, install at $install_line" \
+  || assert_eq "sha before install" "sha=$sha2_line install=$install_line" "order"
+
+it "and the installed binary is proved to run and to be that version, last"
+proof_line="$(grep -n '"$dest/falconet" version' "$ACTION" | cut -d: -f1)"
+[[ -n "$proof_line" && "$install_line" -lt "$proof_line" ]] \
+  && assert_eq "after" "after" "install at $install_line, proof at $proof_line" \
+  || assert_eq "proof after install" "install=$install_line proof=$proof_line" "order"
+assert_eq 2 "$(grep -c '"falconet $version "\*' <<<"$falconet_install")" "version-prefix checks"
+
+it "a falconet already on PATH is taken only if it is that version, unlike gitleaks"
+# The short-circuit's exit 0 comes after the version check, never before it.
+check_at="$(grep -n '"falconet $version "\*' <<<"$falconet_install" | head -1 | cut -d: -f1)"
+exit_at="$(grep -n 'exit 0' <<<"$falconet_install" | head -1 | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$check_at" && -n "$exit_at" && "$check_at" -lt "$exit_at" ]] && echo true || echo false)" \
+  "the version check ($check_at) precedes the exit 0 ($exit_at)"
+
+it "the action with no verb is an install and nothing else"
+verb_decl="$(awk '/^  verb:/{f=1} f && /^  [a-z]/ && !/^  verb:/{exit} f' "$ACTION")"
+assert_contains "$verb_decl" "required: false" "verb input"
+assert_contains "$verb_decl" "default: ''" "verb input"
+assert_contains "$action_code" "if: inputs.verb != ''" "the Run step"
+
+# "Check jq" lived here. The runner is asked for git, tofu, gitleaks and the
+# binary, and for nothing else (ADR-0006 D2); the case below that greps both
+# files for jq is what replaced it.
+
 # `setup: false` says "an earlier step in THIS job already installed them",
 # and a job is a fresh runner, so the claim is about the job and never about
-# the workflow. A step that needs the binaries and is the first falconet step
-# in its job has nothing behind that claim, and the secret scan fails closed,
-# so the run dies on a missing scanner rather than on anything real.
+# the workflow. Since #19 every verb needs the install — the binary IS the
+# install — so the rule is simply: in every job, the action with no verb
+# (the install) comes before any step that runs falconet, through the action
+# with setup: false or from PATH in a run: block.
 #
-# Dependency-shaped rather than positional: push, pause and assemble need none
-# of the pinned binaries and are free to skip the install.
-it "no verb that needs the pinned binaries runs before an install in its job"
+# Dependency-shaped rather than positional, as before.
+it "no step that runs falconet comes before the install in its job"
 unmet="$(awk '
-  function flush(   verb, installs) {
-    if (buf ~ /uses: \.\/\.falconet-tool/) {
-      verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
-      installs = (buf !~ /setup: .false./)
-      if (verb ~ /^(prepare|commit|validate)$/ && !installed[job] && !installs)
-        print job "/" verb
-      if (installs) installed[job] = 1
+  function flush(   what) {
+    if (buf ~ /uses: zetlen\/falconet@/ && buf !~ /setup: .false./) installed[job] = 1
+    else {
+      what = ""
+      if (buf ~ /uses: zetlen\/falconet@/ && buf ~ /setup: .false./) { what = buf; sub(/.*verb: /, "", what); sub(/[^a-z-].*/, "", what) }
+      else if (buf ~ /[ (]falconet [a-z-]+/) { what = buf; sub(/.*[ (]falconet /, "", what); sub(/[^a-z-].*/, "", what) }
+      if (what != "" && !installed[job]) print job "/" what
     }
     buf = ""
   }
@@ -158,26 +266,30 @@ unmet="$(awk '
   /^      - / { flush() }
   { buf = buf " " $0 }
   END { flush() }
-' "$WF")"
-assert_eq "" "$unmet" "steps needing an install that never got one"
+' <<<"$wf_code")"
+assert_eq "" "$unmet" "steps running falconet before their job installed it"
+
+it "and every job installs exactly once"
+assert_eq 4 "$(grep -c 'name: Install falconet, tofu and gitleaks' <<<"$wf_code")" "install steps"
 
 # Two verbs read `git status`: prepare refuses a dirty tree, and commit
 # refuses every changed path outside the allowlist, untracked included. The
-# tool's own checkout sits INSIDE the consumer's tree -- a composite action
-# can only run from under the workspace -- and the handoff directory is
-# written there too. Neither is the agent's, and neither is anything a
-# consumer's .gitignore can be relied on to know about. Without an exclude,
-# every run died in prepare on `?? .falconet-tool/`, before the
-# acknowledgment -- the one failure the requester never hears about.
+# handoff directory is written INSIDE the consumer's tree, it is not the
+# agent's, and it is not anything a consumer's .gitignore can be relied on
+# to know about. The tool's own checkout used to sit beside it — a composite
+# action could only run from under the workspace — and without an exclude
+# every run died in prepare on the checkout showing up as `??`, before the
+# acknowledgment, the one failure the requester never hears about. The
+# checkout is gone (#19); the handoff is not, and neither is the rule.
 #
 # Dependency-shaped, like the install check: the verbs that read git status
-# must be preceded in their own job by the step that excludes both paths.
-it "the tool checkout and the handoff are excluded before any verb reads git status"
+# must be preceded in their own job by the step that excludes the path.
+it "the handoff is excluded before any verb reads git status"
 unexcluded="$(awk '
   function flush(   verb) {
-    if (buf ~ /name: Keep the tool and the handoff out of the working tree/)
+    if (buf ~ /name: Keep the handoff out of the working tree/)
       excluded[job] = 1
-    if (buf ~ /uses: \.\/\.falconet-tool/) {
+    if (buf ~ /uses: zetlen\/falconet@/) {
       verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
       if (verb ~ /^(prepare|commit)$/ && !excluded[job]) print job "/" verb
     }
@@ -187,11 +299,13 @@ unexcluded="$(awk '
   /^      - / { flush() }
   { buf = buf " " $0 }
   END { flush() }
-' "$WF")"
-assert_eq "" "$unexcluded" "verbs reading git status with the tool still in the tree"
+' <<<"$wf_code")"
+assert_eq "" "$unexcluded" "verbs reading git status with the handoff still visible"
 
-it "and the exclude names both the tool path and the handoff directory"
-assert_contains "$wf" ".falconet-tool/ .falconet/" "workflow"
+it "and the exclude names the handoff directory and nothing else"
+# ".falconet-tool/ .falconet/" until #19; the tool is on PATH now.
+assert_eq 3 "$(grep -c "printf '%s\\\\n' .falconet/ >> .git/info/exclude" <<<"$wf_code")" "exclude lines"
+assert_not_contains "$wf" ".falconet-tool" "workflow"
 
 it "and writes it per clone, never into a file the commit verb could see"
 assert_contains "$wf" ".git/info/exclude" "workflow"
@@ -204,8 +318,13 @@ assert_not_contains "$wf" ">> .gitignore" "workflow"
 # consumer's business.
 
 it "the jobs that run tofu load the planning credentials"
-assert_eq 2 "$(grep -c 'name: Credentials for the stacks that plan' "$WF")" \
+assert_eq 2 "$(grep -c 'name: Credentials for the stacks that plan' <<<"$wf_code")" \
   "credential-loading steps"
+
+it "through the binary, as a run step, so the masks reach the runner's stdout"
+# The action captures stdout into a step output, where ::add-mask:: would
+# mask nothing.
+assert_eq 2 "$(grep -c '^ *run: falconet plan-env$' <<<"$wf_code")" "plan-env run steps"
 
 it "and the agent's job is not one of them, which is the whole boundary"
 assert_not_contains "$implement_job" "plan-env" "implement job"
@@ -215,11 +334,22 @@ plan_env_decl="$(awk '/^      plan-env:/{f=1} f && /required:/{print; exit}' "$W
 assert_contains "$plan_env_decl" "required: false" "plan-env declaration"
 
 it "the value travels by environment, never by template expression"
-assert_eq 2 "$(grep -c 'FALCONET_PLAN_ENV: ${{ secrets.plan-env }}' "$WF")" \
+assert_eq 2 "$(grep -c 'FALCONET_PLAN_ENV: ${{ secrets.plan-env }}' <<<"$wf_code")" \
   "env-passed references"
 
-it "and every line of it is masked before it can reach a log"
-assert_contains "$wf" "::add-mask::" "workflow"
+it "and into the env of the step that runs plan-env, each time"
+# Per step: the block that runs plan-env is the block that carries the env.
+assert_eq 2 "$(awk '
+  /^      - / { if (runs && has) n++; runs = 0; has = 0 }
+  /run: falconet plan-env/ { runs = 1 }
+  /FALCONET_PLAN_ENV: \$\{\{ secrets.plan-env \}\}/ { has = 1 }
+  END { if (runs && has) n++; print n + 0 }
+' <<<"$wf_code")" "plan-env steps carrying the secret in their env"
+
+# "and every line of it is masked before it can reach a log" lived here as a
+# grep of the workflow for ::add-mask:: while the step was bash in YAML. The
+# step is `falconet plan-env` now, and plan-env.test.sh holds the masks by
+# running it: one per non-empty line, before the value is written anywhere.
 
 # --- attacker-controlled text never reaches a shell ------------------------
 
@@ -228,6 +358,9 @@ assert_contains "$action" 'FALCONET_VERB: ${{ inputs.verb }}' "action"
 
 it "and its arguments the same way"
 assert_contains "$action" 'FALCONET_ARGS: ${{ inputs.args }}' "action"
+
+it "and runs the binary from PATH, where the install put it"
+assert_contains "$action_code" 'outcome="$(falconet "$FALCONET_VERB" $FALCONET_ARGS)"' "action"
 
 it "no run block interpolates an issue body"
 assert_not_contains "$wf" "github.event.issue.body" "workflow"
@@ -250,19 +383,23 @@ assert_not_contains "$wf" "allow-empty" "workflow"
 # the requester is acknowledged.
 #
 # So the install instructions are a contract too. Every permission the widest
-# job declares must be the permission step 8 tells people to grant, and the
-# two drift the moment a job's needs change — silently, into somebody else's
-# repository, where it costs them a failure that says nothing.
+# job declares must be the permission the README's caller tells people to
+# grant, and the two drift the moment a job's needs change — silently, into
+# somebody else's repository, where it costs them a failure that says
+# nothing.
+#
+# The template is found by its markers, not by its heading, so it can move
+# (to an appendix, say) without this file noticing.
 
-caller="$(awk '/^### 8\./ { s = 1 } s && /^### 9\./ { exit } s' "$REPO_ROOT/README.md")"
+caller="$(awk '/<!-- caller-workflow-template -->/ { s = 1; next } s && /<!-- \/caller-workflow-template -->/ { exit } s' "$REPO_ROOT/README.md")"
 caller_perms="$(awk '/^permissions:/ { p = 1; next } p && /^[^[:space:]]/ { p = 0 } p' <<<"$caller")"
 
-it "the README's step 8 actually contains a caller with a permissions block"
+it "the README's caller template actually contains a caller with a permissions block"
 # Everything below reads that block. Empty, and every case passes vacuously.
-assert_contains "$caller" "uses: zetlen/falconet/.github/workflows/falconet.yml@" "README step 8"
+assert_contains "$caller" "uses: zetlen/falconet/.github/workflows/falconet.yml@" "README caller template"
 
 it "and the block is not empty, which would pass every case below on nothing"
-assert_eq "true" "$([[ -n "$caller_perms" ]] && echo true || echo false)" "step 8's permissions block"
+assert_eq "true" "$([[ -n "$caller_perms" ]] && echo true || echo false)" "the template's permissions block"
 
 # `write` anywhere in the file at job-permission indentation is the widest a
 # job asks for; otherwise `read`.
@@ -274,12 +411,17 @@ for perm in contents issues pull-requests; do
   want="$(widest_declared "$perm")"
   got="$(grep -E "^  $perm:" <<<"$caller_perms" | awk '{ print $2 }')"
 
-  it "step 8 grants $perm: $want, which is what the widest job declares"
+  it "the README's caller grants $perm: $want, which is what the widest job declares"
   # assert_eq both ways round: granting LESS is the startup failure above,
   # granting MORE hands a consumer's repository an authority nothing here
   # needs, which is exactly the kind of over-grant nobody audits afterwards.
-  assert_eq "$want" "$got" "step 8's $perm grant"
+  assert_eq "$want" "$got" "the template's $perm grant"
 done
+
+it "and passes no falconet-ref, which the workflow no longer declares"
+# A reusable workflow rejects an input it does not declare, at load: the
+# same startup_failure, for a caller copied from an older README.
+assert_not_contains "$caller" "falconet-ref" "README caller template"
 
 # --- the agent job is handed its source, because it cannot fetch it ---------
 #
@@ -289,18 +431,20 @@ done
 # "Repository not found". A public consumer would never have shown it.
 #
 # The fix keeps the boundary and moves the fetch: gate, which already holds a
-# token, ships its checkout as an artifact. So these cases guard the two
-# halves that make that safe — the agent still clones nothing of the
-# consumer's, and what it receives cannot authenticate as anybody.
+# token, ships its checkout as an artifact. ADR-0005 then allowed the agent
+# job exactly one checkout, falconet's own, because a composite action had to
+# run from under the workspace; #19 retired that too — the action lives in
+# the runner's action cache and what it fetches is a public release asset,
+# with no token. So these cases guard the halves that make that safe: the
+# agent job clones NOTHING, and what it receives cannot authenticate as
+# anybody.
 
-gate_job="$(awk '/^  gate:/ { f = 1 } /^  implement:/ { f = 0 } f' "$WF")"
+it "the agent job has no checkout at all — not of the consumer, not of falconet"
+# "exactly one repository, and it is falconet" until #19.
+assert_eq 0 "$(grep -c 'actions/checkout' <<<"$implement_job")" "checkouts in the implement job"
 
-it "the agent job clones exactly one repository"
-assert_eq 1 "$(grep -c 'uses: actions/checkout' <<<"$implement_job")" \
-  "checkouts in the implement job"
-
-it "and it is falconet, which is public, never the repository being worked on"
-assert_contains "$implement_job" "repository: zetlen/falconet" "the implement job's checkout"
+it "and no step anywhere names another repository to check out"
+assert_eq 0 "$(grep -c '^ *repository:' <<<"$wf_code")" "repository: keys in the workflow"
 
 it "the agent job takes the working tree from the gate's artifact"
 assert_contains "$implement_job" "name: source-gate" "the implement job"
@@ -326,17 +470,17 @@ assert_eq "true" "$([[ -n "$unset_at" && -n "$tar_at" && "$unset_at" -lt "$tar_a
 it "and fails closed if anything in .git still authenticates"
 assert_contains "$gate_job" "refusing to ship a checkout that still authenticates" "the gate job"
 
-it "the archive carries neither the tool nor the handoff"
-assert_contains "$gate_job" "--exclude=./.falconet-tool --exclude=./.falconet" "the gate's tar"
+it "the archive leaves out the handoff, and has nothing else to leave out"
+# "--exclude=./.falconet-tool --exclude=./.falconet" until #19.
+tar_cmd="$(grep 'tar -czf' <<<"$gate_job")"
+assert_contains "$tar_cmd" "--exclude=./.falconet " "the gate's tar"
+assert_eq 1 "$(grep -o -- '--exclude=' <<<"$tar_cmd" | wc -l | tr -d ' ')" "exclusions in the gate's tar"
 
 it "nothing bundles a whole history, which from a shallow clone is a broken bundle"
 # `git bundle create <shallow> HEAD` exits 0 and `git bundle verify` calls it
 # "a complete history"; the clone then dies on the first traversal, because
 # the tip's parent was never fetched and nothing marks the result shallow.
 # The one bundle here is a RANGE, whose prerequisite both ends already hold.
-# Comments stripped first: the prose above this file's tar step says
-# "git bundle create" while explaining why it is not used.
-wf_code="$(grep -v '^[[:space:]]*#' "$WF")"
 assert_eq 1 "$(grep -c 'git bundle create' <<<"$wf_code")" "git bundle create calls"
 
 it "and the one bundle there is names a range, whose base both ends hold"
@@ -391,7 +535,7 @@ it "and every hand-off between jobs fails rather than upload nothing"
 # gate, and the handoff out of implement. Not the plan artifact — a run that
 # parked before it planned has no plan, and that is not a failure.
 # Comments stripped: the prose above the first upload names the setting.
-assert_eq 3 "$(grep -v '^[[:space:]]*#' "$WF" | grep -c 'if-no-files-found: error')" \
+assert_eq 3 "$(grep -c 'if-no-files-found: error' <<<"$wf_code")" \
   "uploads that fail on an empty result"
 
 # --- a verb's stdout cannot break the step that ran it ----------------------
@@ -412,6 +556,54 @@ assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
 # push's silence on stdout is asserted in push.test.sh, by running it. The grep
 # of push.sh's source that used to sit here went with ADR-0006 D3 step 0.
 
+# --- the binary is pinned to the tag the workflow runs at --------------------
+#
+# `uses:` cannot take an expression, so every verb step names a literal tag,
+# and the action at that tag installs the asset whose digest its tree holds.
+# The tag must be release/VERSION — the same three things `make release-prep`
+# writes in the same second — or the workflow runs one falconet and vouches
+# for another. At a commit between releases the refs name the LAST release
+# (the action there is the last release's), and they move together with
+# release/VERSION when release-prep runs for the next.
+
+tree_version="$(cat "$REPO_ROOT/release/VERSION")"
+
+it "every uses: zetlen/falconet@ ref in the workflow is exactly the version in the tree"
+assert_eq "uses: zetlen/falconet@$tree_version" \
+  "$(grep -o 'uses: zetlen/falconet@[^ ]*' <<<"$wf_code" | sort -u)" "distinct refs"
+
+it "and every job pins one, so no job runs an unpinned falconet"
+unpinned=""
+for j in gate implement publish contain; do
+  grep -q 'uses: zetlen/falconet@' <<<"$(job "$j")" || unpinned="$unpinned $j"
+done
+assert_eq "" "$unpinned" "jobs with no uses: zetlen/falconet@ step"
+
+it "and none of the old shapes survives in either file"
+# #19's Done-when, widened: the local action path, the tool checkout, the
+# input that chose it, the jq dependency, the bash dispatcher's path.
+assert_eq 0 "$(grep -c 'jq\|libexec\|falconet-tool\|falconet-ref\|bin/falconet' "$WF" "$ACTION" | awk -F: '{ n += $2 } END { print n + 0 }')" \
+  "matches for the old shapes"
+assert_not_contains "$wf" "uses: ./" "workflow"
+
+MK="$REPO_ROOT/Makefile"
+mk="$(cat "$MK")"
+
+it "the Makefile knows the workflow and the ref shape by name"
+assert_eq "true" "$(grep -Eq '^WORKFLOW +:= \.github/workflows/falconet\.yml$' "$MK" && echo true || echo false)" "WORKFLOW"
+assert_eq "true" "$(grep -Eq '^USES_REF +:= uses: zetlen/falconet@$' "$MK" && echo true || echo false)" "USES_REF"
+
+it "release-prep rewrites the refs in the same breath as release/VERSION"
+prep="$(awk '/^release-prep:/{f=1} f && /^[a-z-]+:/ && !/^release-prep:/{f=0} f' "$MK")"
+assert_contains "$prep" '$(USES_REF)$(VERSION)' "release-prep's recipe"
+assert_contains "$prep" 'mv $(WORKFLOW).release-prep.tmp $(WORKFLOW)' "release-prep's rewrite, through a temp file"
+assert_contains "$prep" 'git add $(VERSION_FILE) $(DIGEST_FILE) $(WORKFLOW)' "release-prep's git add"
+
+it "and release-verify refuses a tree where they disagree"
+verify="$(awk '/^release-verify:/{f=1} f && /^[a-z-]+:/ && !/^release-verify:/{f=0} f' "$MK")"
+assert_contains "$verify" '$(USES_REF)$(VERSION)' "release-verify's recipe"
+assert_contains "$verify" 'pins falconet at a ref that is not $(VERSION)' "release-verify's refusal"
+
 # --- the release refuses to publish bytes it cannot reproduce ---------------
 #
 # ADR-0006 D6 asks a consumer's pinned SHA to vouch for a binary that did not
@@ -431,9 +623,7 @@ assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
 # it off; without -buildid= the link stamps an id.
 
 REL="$REPO_ROOT/.github/workflows/release.yml"
-MK="$REPO_ROOT/Makefile"
 rel="$(cat "$REL")"
-mk="$(cat "$MK")"
 # Comments stripped where a case is about what the file DOES: the prose above
 # each step names the thing it is explaining not to do.
 rel_code="$(grep -v '^[[:space:]]*#' "$REL")"

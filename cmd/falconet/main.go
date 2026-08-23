@@ -11,12 +11,14 @@
 // The six verbs are the stages of the pipeline (docs/adr/0003-the-cli-surface.md).
 // They never call each other; they pass files through the handoff directory.
 //
-// `prompt`, `scan`, `config` and `review-verdict` are unlisted on purpose:
-// public in the sense that they work, not in the sense that they are
-// vocabulary. The first two are internal plumbing, `config` is what the
-// config file resolves to, and `review-verdict` ships unwired (ADR-0003, as
-// amended 2026-08-22). Each is reachable here so that the test suite spawns
-// it through the same door as every verb.
+// `prompt`, `plan-env`, `scan`, `config` and `review-verdict` are unlisted
+// on purpose: public in the sense that they work, not in the sense that they
+// are vocabulary. The first two are the workflow's plumbing — a prompt
+// resolved without heredocs in YAML, and one secret turned into masked
+// environment — `scan` is the commit verb's secret scan, `config` is what
+// the config file resolves to, and `review-verdict` ships unwired (ADR-0003,
+// as amended 2026-08-22). Each is reachable here so that the test suite
+// spawns it through the same door as every verb.
 //
 // Exit codes, uniform across every verb:
 //
@@ -28,11 +30,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
-	"syscall"
 
 	"github.com/zetlen/falconet/internal/config"
 	"github.com/zetlen/falconet/internal/handoff"
@@ -60,16 +60,20 @@ const usageText = `Usage: falconet <verb> [args]
 Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 `
 
-// The verbs, and the unlisted doors. Both lists are the dispatcher's whole
-// knowledge of what exists; a name in neither is a usage error.
+// The verbs usage lists, and the unlisted doors. The two lists are the
+// dispatcher's whole knowledge of what exists; a name in neither is a usage
+// error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "pause", "validate", "assemble"}
-	unlisted = []string{"prompt", "scan", "config", "review-verdict"}
+	verbs    = []string{"prepare", "commit", "push", "pause", "validate", "assemble", "doctor", "init", "version"}
+	unlisted = []string{"prompt", "plan-env", "scan", "config", "review-verdict"}
 )
 
-// native is what this binary implements itself. Every other known verb is
-// handed to its bash script by fallback until its port lands (ADR-0006 D3
-// step 2); the map grows one entry per port, and fallback is deleted in #19.
+// native is what this binary answers for: one entry per name in the two
+// lists above, and main_test.go holds the three in step. Through the port
+// (ADR-0006 D3 step 2) a known verb without an entry here was handed to its
+// bash script by a fallback; #19 deleted the scripts and the fallback with
+// them, so a verb that is known and not implemented is a build defect the
+// test refuses, never a runtime path.
 var native = map[string]func(args []string) int{
 	"version":        runVersion,
 	"prepare":        runPrepare,
@@ -81,6 +85,7 @@ var native = map[string]func(args []string) int{
 	"pause":          runPause,
 	"validate":       runValidate,
 	"prompt":         runPrompt,
+	"plan-env":       runPlanEnv,
 	"review-verdict": runReviewVerdict,
 	"doctor":         runDoctor,
 	"init":           runInit,
@@ -102,16 +107,18 @@ func run(args []string) int {
 	if !known(verb) {
 		return usage(fmt.Sprintf("unknown verb '%s'", verb))
 	}
-	if fn, ok := native[verb]; ok {
-		return fn(rest)
+	fn, ok := native[verb]
+	if !ok {
+		// Unreachable while main_test.go passes. Said out loud rather than
+		// panicked, because a dispatcher's stdout belongs to the verb's
+		// outcome word and a stack trace is not one.
+		fmt.Fprintf(os.Stderr, "falconet: verb '%s' is known and not implemented: a build defect\n", verb)
+		return 1
 	}
-	return fallback(verb, rest)
+	return fn(rest)
 }
 
 func known(verb string) bool {
-	if _, ok := native[verb]; ok {
-		return true
-	}
 	for _, v := range verbs {
 		if v == verb {
 			return true
@@ -133,40 +140,6 @@ func usage(complaint string) int {
 	}
 	fmt.Fprint(os.Stderr, usageText)
 	return 2
-}
-
-// fallback hands a verb this binary has not implemented yet to its bash
-// script, and is the mechanism that keeps every commit of the port green
-// against the whole suite (ADR-0006 D3). It is deliberately SILENT: the
-// script gets stdin, stdout, stderr and the exit code untouched, exactly as
-// bin/falconet's exec gave them — review-verdict.test.sh asserts an empty
-// stderr on a run that comes through here, and prepare.test.sh reads stderr
-// in ten places. The scripts locate lib/ from their own $BASH_SOURCE, so the
-// path is all they need from us.
-//
-// Deleted in #19, along with the scripts.
-func fallback(verb string, args []string) int {
-	home := os.Getenv("FALCONET_HOME")
-	if home == "" {
-		fmt.Fprintf(os.Stderr, "falconet: verb '%s' is not implemented in this binary yet "+
-			"(set FALCONET_HOME to a falconet checkout to run its bash implementation)\n", verb)
-		return 1
-	}
-	target := filepath.Join(home, "libexec", "falconet", verb+".sh")
-	info, err := os.Stat(target)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "falconet: verb '%s' is not implemented yet (no %s)\n", verb, target)
-		return 1
-	}
-	if info.Mode()&0o111 == 0 {
-		fmt.Fprintf(os.Stderr, "falconet: verb '%s' is not executable (%s)\n", verb, target)
-		return 1
-	}
-	argv := append([]string{target}, args...)
-	err = syscall.Exec(target, argv, os.Environ())
-	// Exec replaces this process; it only returns when it could not.
-	fmt.Fprintf(os.Stderr, "falconet: cannot exec %s: %v\n", target, err)
-	return 1
 }
 
 func runVersion(args []string) int {
@@ -210,8 +183,8 @@ func resolvedVersion() string {
 //
 // Print what internal/config and internal/handoff would tell a verb. Unlisted
 // on purpose: the libraries have no process to spawn at, and the suite's rule
-// is that no test reaches inside its subject. This is that process, and the
-// bash libexec/falconet/config.sh answers the same tests.
+// is that no test reaches inside its subject. This is that process, and
+// config.test.sh is what it answers to.
 
 const configUsageText = `config — print what the config file resolves to, and where the handoff goes.
 

@@ -637,8 +637,11 @@ type Caller struct {
 	// when no line does (HasUses says which).
 	HasUses bool
 	Ref     string
-	// FalconetRef is the `falconet-ref:` input, or empty.
-	FalconetRef string
+	// HasFalconetRef is whether the caller still passes a `falconet-ref:`
+	// input. There is no such input since #19 — it chose which falconet the
+	// jobs checked out into the consumer's tree, and the checkout is gone —
+	// and a reusable workflow rejects an input it does not declare, at load.
+	HasFalconetRef bool
 	// HasPermissions is whether a top-level `permissions:` key exists at all.
 	HasPermissions bool
 	// Inline is a scalar value on that key — `write-all`, `read-all` — or
@@ -651,8 +654,8 @@ type Caller struct {
 // ParseCaller reads the caller the way contract.test.sh reads the README's:
 // by lines and indentation, no YAML library. Comments are dropped, quotes
 // around a value are removed, and a top-level key is one at column 0. It
-// reads the `uses:` line naming Reusable wherever it is, `falconet-ref:`
-// wherever it is, and the `permissions:` key at the top level only — a
+// reads the `uses:` line naming Reusable wherever it is, a `falconet-ref:`
+// key wherever it is, and the `permissions:` key at the top level only — a
 // job-level block is the job's own business and GitHub checks it against
 // the top-level one, not the other way round.
 func ParseCaller(text []byte) Caller {
@@ -679,7 +682,7 @@ func ParseCaller(text []byte) Caller {
 			c.HasUses = true
 			c.Ref = strings.TrimPrefix(value, Reusable+"@")
 		case key == "falconet-ref":
-			c.FalconetRef = value
+			c.HasFalconetRef = true
 		case key == "permissions" && indent == 0:
 			c.HasPermissions = true
 			switch {
@@ -752,8 +755,9 @@ func level(s string) int {
 }
 
 // WorkflowLines is step 8: the caller exists; a `uses:` line names the
-// reusable workflow at some ref; the top-level permissions: block grants at
-// least RequiredPermissions. Granting less is MISSING naming the permission;
+// reusable workflow at some ref; it passes no input the workflow does not
+// declare; the top-level permissions: block grants at least
+// RequiredPermissions. Granting less is MISSING naming the permission;
 // granting more is a note; a `main` ref is a note, not MISSING — the README
 // says to pin once a canary has reached a pull request, and a canary needs
 // the file to exist first.
@@ -778,14 +782,20 @@ func WorkflowLines(text []byte, exists bool) []Line {
 		if c.Ref == "main" {
 			lines = append(lines, Line{Status: Note, Step: 8, Text: "the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"})
 		}
-		switch {
-		case c.FalconetRef == "" && c.Ref != "main":
-			lines = append(lines, Line{Status: Note, Step: 8,
-				Text: "falconet-ref is not set (so it is main) while uses: pins " + c.Ref + "; put the same ref in both places or you will debug a version you are not running"})
-		case c.FalconetRef != "" && c.FalconetRef != c.Ref:
-			lines = append(lines, Line{Status: Note, Step: 8,
-				Text: "falconet-ref is " + c.FalconetRef + " while uses: pins " + c.Ref + "; put the same ref in both places or you will debug a version you are not running"})
-		}
+	}
+
+	// `falconet-ref` was an input until #19: it chose which falconet the
+	// jobs checked out into the consumer's tree, and it went with that
+	// checkout — the action at the tag the workflow is pinned to installs
+	// the binary from that same tag, so the uses: ref is the one coordinate.
+	// A reusable workflow REJECTS an input it does not declare, when the
+	// caller's file is loaded: no jobs, no logs, nothing on the issue — the
+	// row the README's troubleshooting opens with. So a caller still passing
+	// it is MISSING and not a note, whatever the value; the note that used to
+	// ask for the two refs to agree retired with the input.
+	if c.HasFalconetRef {
+		lines = append(lines, Line{Status: Missing, Step: 8, Text: "falconet-ref is no longer an input; remove it",
+			Hint: "the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded"})
 	}
 
 	// The permissions: block.

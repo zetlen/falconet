@@ -7,20 +7,24 @@
 #
 # These cover the falconet verbs and the wiring of action.yml and
 # .github/workflows/falconet.yml. Every test spawns its subject through
-# $FALCONET, which defaults to bin/falconet:
+# $FALCONET, which defaults to the binary built out of tree at dist/falconet
+# (`make build`; lib.sh refuses to start without it):
 #
 #   FALCONET=/path/to/another/falconet tests/run.sh
 #
-# runs the same suite against another implementation of the same contract.
-# They need bash, git, jq, awk and python3 (stdlib only); they stub `gh` for
-# the verbs that still use it and serve a fake GitHub API on loopback for the
-# verbs that have moved off it, push only into bare repositories under a temp
-# directory, and never touch the network, GitHub, OpenTofu or any credential
-# — which is why .github/workflows/ci.yml can run the whole suite on every
-# pull request from a GitHub-hosted runner. Run it locally too, before
-# changing anything under bin/, lib/, libexec/, cmd/ or internal/: CI
-# reports, and only the `protecc main` ruleset decides whether a red report
-# can be merged past.
+# runs the same suite against another build of the same contract. The suite
+# is the acceptance bar and the incident record (ADR-0006 D3); `go test
+# ./...` covers what it cannot see from outside a process, and `make test`
+# runs both. They need bash, git, jq, awk and python3 (stdlib only). GitHub
+# is tests/fixtures/fake-github.py, served on loopback with GITHUB_API_URL
+# pointing at it — no test file stubs `gh`; the files that once did put a
+# tripwire on PATH instead — tofu and gitleaks are bash stubs handed in
+# through $TOFU and $GITLEAKS, pushes land only in bare repositories under a
+# temp directory, and nothing touches the network, GitHub, OpenTofu or any
+# credential — which is why .github/workflows/ci.yml can run the whole suite
+# on every pull request from a GitHub-hosted runner. Run it locally too,
+# before changing anything under cmd/ or internal/: CI reports, and only the
+# `protecc main` ruleset decides whether a red report can be merged past.
 
 set -uo pipefail
 

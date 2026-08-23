@@ -2,13 +2,19 @@ name: falconet
 description: >-
   Turn a plain-language infrastructure request into a pull request carrying a
   real plan, and stop there. This action is setup plus pass-through: it pins
-  the binaries the verbs need and then runs one verb.
+  the binaries the verbs need — OpenTofu, gitleaks, and falconet itself — and
+  then runs one verb, or runs nothing and leaves them on PATH.
 author: zetlen
 
 inputs:
   verb:
-    description: 'One of prepare, commit, push, validate, pause, assemble (or the unlisted prompt).'
-    required: true
+    description: >-
+      One of prepare, commit, push, validate, pause, assemble; the unlisted
+      prompt and plan-env; or doctor and init. Empty means setup only: the
+      pinned binaries are installed and no verb runs, which is how a job puts
+      falconet on PATH before its first verb.
+    required: false
+    default: ''
   args:
     description: >-
       Arguments for the verb, split on whitespace. NEVER pass issue text
@@ -85,14 +91,58 @@ runs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/gitleaks" version
 
-    - name: Check jq
+    # falconet itself, the way gitleaks is installed: a version, a URL, and a
+    # digest. All three come out of this action's own checkout — GitHub
+    # fetched it into the runner's action cache at the ref the caller's
+    # `uses:` named — so release/VERSION is the tag `make release-prep` wrote
+    # and release/falconet_linux_amd64.sha256 is the digest it computed of the
+    # bytes release.yml refused to publish unless they reproduced (ADR-0006
+    # D6). The asset is bare-named because the version is already in the
+    # URL's path. No token: the release is public.
+    #
+    # Unlike gitleaks, a falconet already on PATH is NOT taken on sight. The
+    # gitleaks short-circuit saves a download of a scanner this action does
+    # not otherwise reason about; this binary is the one the whole workflow
+    # is pinned to, and a runner image or an earlier step that left a
+    # different falconet on PATH would have every verb run a version the
+    # consumer's pin never named, silently. The same version: say so and
+    # skip. Anything else: install the pinned one in front of it.
+    #
+    # The digest is checked BEFORE install, and `falconet version` runs LAST
+    # and must begin with the pinned version: a tag is a mutable pointer and
+    # a release asset can be replaced, and what came off the network has to
+    # both hash right and actually run, on this runner, before anything
+    # depends on it. A binary that reports any other version is not the one
+    # the tree describes, whatever its bytes hashed to.
+    - name: Install falconet (pinned)
       if: inputs.setup == 'true'
       shell: bash
       run: |
         set -euo pipefail
-        command -v jq >/dev/null 2>&1 || {
-          echo "falconet needs jq and this runner has none" >&2; exit 1; }
-        jq --version
+        version="$(cat "$GITHUB_ACTION_PATH/release/VERSION")"
+        sha="$(awk '{print $1}' "$GITHUB_ACTION_PATH/release/falconet_linux_amd64.sha256")"
+        if command -v falconet >/dev/null 2>&1; then
+          have="$(falconet version 2>/dev/null || true)"
+          case "$have" in
+            "falconet $version "*)
+              echo "falconet $version is already on PATH at $(command -v falconet)"
+              exit 0 ;;
+          esac
+          echo "a different falconet is on PATH at $(command -v falconet) (${have:-no version}); installing $version in front of it"
+        fi
+        file="$RUNNER_TEMP/falconet_linux_amd64"
+        url="https://github.com/zetlen/falconet/releases/download/${version}/falconet_linux_amd64"
+        curl -fsSL --retry 3 -o "$file" "$url"
+        echo "$sha  $file" | sha256sum -c -
+        dest="$HOME/.local/bin"
+        mkdir -p "$dest"
+        install -m 0755 "$file" "$dest/falconet"
+        echo "$dest" >> "$GITHUB_PATH"
+        have="$("$dest/falconet" version)"
+        case "$have" in
+          "falconet $version "*) echo "$have" ;;
+          *) echo "the installed falconet reports '$have', not $version" >&2; exit 1 ;;
+        esac
 
     # The verb and its arguments reach the shell through the ENVIRONMENT, not
     # through a template expression. That is not style: an issue title, body
@@ -102,8 +152,12 @@ runs:
     # way. $FALCONET_ARGS is deliberately unquoted so a caller can pass
     # several arguments — which is exactly why a caller must never put issue
     # text in it.
+    #
+    # Skipped when no verb was asked for: a call with an empty `verb` is an
+    # install and nothing else, and `outcome` is then empty.
     - name: Run
       id: run
+      if: inputs.verb != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -112,7 +166,7 @@ runs:
       run: |
         set -uo pipefail
         # shellcheck disable=SC2086
-        outcome="$("$GITHUB_ACTION_PATH/bin/falconet" "$FALCONET_VERB" $FALCONET_ARGS)"
+        outcome="$(falconet "$FALCONET_VERB" $FALCONET_ARGS)"
         rc=$?
         printf '%s\n' "$outcome"
         # Written with a delimiter, not `name=value`. The verbs that decide

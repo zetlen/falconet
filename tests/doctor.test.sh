@@ -39,7 +39,7 @@ export PATH
 # --- fixtures -----------------------------------------------------------------
 
 # The caller workflow README step 8 prescribes, minimal and correct, with the
-# ref pinned (and falconet-ref in step) so that nothing in it is a note.
+# ref pinned so that nothing in it is a note.
 caller() { # [contents-level]
   cat <<EOF
 name: infra requests
@@ -61,7 +61,6 @@ jobs:
     uses: zetlen/falconet/.github/workflows/falconet.yml@0123abcd
     with:
       issue: \${{ github.event.issue.number }}
-      falconet-ref: 0123abcd
     secrets:
       app-id: \${{ secrets.FALCONET_APP_ID }}
 EOF
@@ -420,7 +419,7 @@ assert_line "$OUT" "MISSING      8. permissions grants contents: read, and falco
 assert_contains "$OUT" "startup_failure" "stdout"
 assert_eq 1 "$RC" "exit code"
 
-sed -e 's/@0123abcd/@main/' -e 's/falconet-ref: 0123abcd/falconet-ref: main/' \
+sed -e 's/@0123abcd/@main/' \
   "$WORK/ok/repo/.github/workflows/infra-requests.yml" >"$c/repo/.github/workflows/infra-requests.yml"
 d "$c"
 
@@ -429,12 +428,20 @@ assert_line "$OUT" "ok           8. it uses zetlen/falconet/.github/workflows/fa
 assert_line "$OUT" "note         8. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"
 assert_eq 0 "$RC" "exit code"
 
-sed -e 's/falconet-ref: 0123abcd/falconet-ref: main/' \
+# falconet-ref was an input until #19 chose which falconet the jobs checked
+# out; the checkout is gone and so is the input, and a reusable workflow
+# rejects an input it does not declare when the caller's file is LOADED —
+# the silent startup_failure the README's troubleshooting opens with.
+awk '{ print } /^      issue: /{ print "      falconet-ref: 0123abcd" }' \
   "$WORK/ok/repo/.github/workflows/infra-requests.yml" >"$c/repo/.github/workflows/infra-requests.yml"
 d "$c"
 
-it "falconet-ref out of step with uses: is a note"
-assert_contains "$OUT" "note         8. falconet-ref is main while uses: pins 0123abcd" "stdout"
+it "a caller still passing falconet-ref is MISSING, because the workflow would not even load"
+assert_line "$OUT" "MISSING      8. falconet-ref is no longer an input; remove it"
+assert_contains "$OUT" "startup_failure" "stdout"
+
+it "and that alone makes the report red, in step with uses: or not"
+assert_eq 1 "$RC" "exit code"
 
 rm "$c/repo/.github/workflows/infra-requests.yml"
 d "$c"

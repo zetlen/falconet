@@ -26,7 +26,7 @@ package main
 // locally.
 //
 // The shipped copy is the prompts package, embedded in this binary: the bash
-// read it from under FALCONET_HOME, and its default config pointed every
+// read it from the tool's own checkout, and its default config pointed every
 // consumer at a path in their own repository instead (issue #3). There is no
 // default to point anywhere now; the config key is an override or it is
 // absent.

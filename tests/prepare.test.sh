@@ -12,9 +12,8 @@
 # pointing at it (ADR-0006 D2): a case scripts the issue, its comment thread,
 # the open pull-request list and any failure in responses.json, and reads
 # back what the verb asked for from requests.log. This file stubbed `gh`
-# until #17 moved the verb to the API; libexec/falconet/prepare.sh still
-# shells out to gh, so it cannot pass this file any more — as pause.test.sh
-# has been red against the bash since #15. Green means through the binary.
+# until #17 moved the verb to the API, and the bash it used to answer for
+# went in #19. Green means through the binary.
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"

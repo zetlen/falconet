@@ -38,8 +38,8 @@ import (
 	"strings"
 )
 
-// Defaults is the schema with every default, as the JSON document lib/config.sh
-// carried. Every key in docs/adr/0003-the-cli-surface.md is here but one, so
+// Defaults is the schema with every default, as the JSON document the bash
+// config library carried. Every key in docs/adr/0003-the-cli-surface.md is here but one, so
 // a verb never has to ask whether a key is set. The one is prompts: its
 // default was issue #3 — a path relative to the consumer's repository, which
 // made the default an override and the shipped prompt unreachable — and the

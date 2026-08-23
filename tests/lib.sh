@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# lib.sh — four assertions and a scratch directory. Sourced by every
-# tests/*.test.sh.
+# lib.sh — four assertions, a scratch directory, and a fake GitHub. Sourced
+# by every tests/*.test.sh.
 #
-# Deliberately not a framework. The things under test are shell scripts that
-# read files and write files, and the interesting question about each of them
+# Deliberately not a framework. The thing under test is one binary that
+# reads files and writes files, and the interesting question about each verb
 # is "given exactly this input, what came out?" — which needs a temp dir, a
 # comparison, and a non-zero exit code, and nothing else.
 
@@ -18,11 +18,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_ROOT
 
 # The subject. Every test spawns verbs through this and nothing else, so the
-# suite can be pointed at another implementation of the same contract:
+# suite can be pointed at another build of the same contract:
 #
 #   FALCONET=/path/to/binary bash tests/run.sh
 #
-FALCONET="${FALCONET:-$REPO_ROOT/bin/falconet}"
+# The default is the binary `make build` leaves at dist/falconet, and there
+# is no other answer: since #19 nothing in this tree runs a verb but the
+# binary, so a suite that started without one would fail every case for one
+# reason, slowly. Said once, here, before any file runs anything.
+FALCONET="${FALCONET:-$REPO_ROOT/dist/falconet}"
+if [[ ! -f "$FALCONET" || ! -x "$FALCONET" ]]; then
+  echo "tests: no falconet binary at $FALCONET — build it first: make build" >&2
+  exit 1
+fi
 export FALCONET
 
 WORK="$(mktemp -d)"

@@ -43,6 +43,18 @@
 # older and silently uses a newer local Go otherwise. The ubuntu runner image
 # ships a Go newer than go.mod's, so under `auto` the runner would build with
 # a different compiler than the laptop and say nothing.
+#
+# The third thing a release writes is the workflow's own refs. Every verb step
+# in .github/workflows/falconet.yml is `uses: zetlen/falconet@vX.Y.Z` — the
+# composite action at a tag, which installs the asset whose digest that tag's
+# tree holds — and `uses:` cannot take an expression, so the tag is a literal
+# in the file and nothing at run time can derive it. It lives there because
+# that is the only place GitHub will read it from; it is rewritten HERE, by
+# release-prep, so that release/VERSION, the digest and the refs are written
+# by one command in one second and cannot be bumped separately. release-verify
+# refuses a tree where they disagree, for the same reason it refuses a digest
+# prepared for another version: a workflow that runs one falconet and vouches
+# for another is the drift the whole release discipline exists to prevent.
 
 SHELL := /bin/bash
 
@@ -65,6 +77,13 @@ RELEASE_BINS := $(addprefix $(DIST)/falconet_,$(TARGETS))
 DIGEST_TARGET := linux_amd64
 DIGEST_FILE   := release/falconet_$(DIGEST_TARGET).sha256
 VERSION_FILE  := release/VERSION
+
+# The reusable workflow, whose `uses: zetlen/falconet@<tag>` refs are the
+# third thing release-prep writes and release-verify checks (see the header).
+# Only lines that ARE a uses: key count — anchored on `^ *` below — so the
+# prose above a step can name the shape without being rewritten or refused.
+WORKFLOW      := .github/workflows/falconet.yml
+USES_REF      := uses: zetlen/falconet@
 
 # sha256sum is GNU coreutils and is on the runner; macOS ships shasum. Both
 # print "<hex>  <name>", which is the format `sha256sum -c` reads back.
@@ -94,7 +113,7 @@ build:
 
 test: build
 	$(GO) test ./...
-	FALCONET="$(CURDIR)/$(DIST)/falconet" FALCONET_HOME="$(CURDIR)" bash tests/run.sh
+	FALCONET="$(CURDIR)/$(DIST)/falconet" bash tests/run.sh
 
 clean:
 	rm -rf $(DIST)
@@ -132,20 +151,28 @@ release-build: require-version go-toolchain $(RELEASE_BINS)
 	( cd $(DIST) && $(SHA256) $(notdir $(RELEASE_BINS)) > checksums.txt ); \
 	cat $(DIST)/checksums.txt
 
-# What a person runs before tagging. It writes two files and stops: it does
+# What a person runs before tagging. It writes three files and stops: it does
 # not commit, it does not tag, and it does not push. The last step of a
 # release stays in a person's hands, as every other last step here does.
+#
+# The workflow's refs are rewritten through a temporary file and a mv, not
+# `sed -i`: GNU and BSD sed disagree about -i's argument, and macOS ships
+# the BSD one.
 release-prep: require-version go-toolchain $(DIST)/falconet_$(DIGEST_TARGET)
 	@set -euo pipefail; \
 	mkdir -p $(dir $(DIGEST_FILE)); \
 	( cd $(DIST) && $(SHA256) falconet_$(DIGEST_TARGET) ) > $(DIGEST_FILE); \
 	printf '%s\n' '$(VERSION)' > $(VERSION_FILE); \
+	grep -q '^ *$(USES_REF)' $(WORKFLOW) || { echo "release-prep: $(WORKFLOW) has no '$(USES_REF)' line to rewrite" >&2; exit 1; }; \
+	sed -e 's#^\( *\)$(USES_REF)[^ ]*$$#\1$(USES_REF)$(VERSION)#' $(WORKFLOW) > $(WORKFLOW).release-prep.tmp; \
+	mv $(WORKFLOW).release-prep.tmp $(WORKFLOW); \
 	echo; \
 	echo "wrote $(VERSION_FILE):     $$(cat $(VERSION_FILE))"; \
 	echo "wrote $(DIGEST_FILE): $$(cat $(DIGEST_FILE))"; \
+	echo "wrote $(WORKFLOW): $$(grep -c '^ *$(USES_REF)$(VERSION)$$' $(WORKFLOW)) lines now read '$(USES_REF)$(VERSION)'"; \
 	echo; \
 	echo "Next, by hand:"; \
-	echo "  git add $(VERSION_FILE) $(DIGEST_FILE)"; \
+	echo "  git add $(VERSION_FILE) $(DIGEST_FILE) $(WORKFLOW)"; \
 	echo "  git commit -m 'Release $(VERSION)'"; \
 	echo "  git tag $(VERSION)"; \
 	echo "  git push origin main && git push origin $(VERSION)"; \
@@ -153,7 +180,8 @@ release-prep: require-version go-toolchain $(DIST)/falconet_$(DIGEST_TARGET)
 	echo "The tag push runs release.yml, which rebuilds these bytes and"; \
 	echo "refuses to publish anything if they differ. So run this LAST: a"; \
 	echo "digest describes one build of one tree, and any later commit that"; \
-	echo "touches cmd/, internal/ or go.mod makes it stale."
+	echo "touches cmd/, internal/ or go.mod makes it stale. The workflow's"; \
+	echo "refs now name a tag that does not exist until you push it."
 
 # The guarantee, and the reason the two files above are worth committing.
 # release.yml runs this BEFORE it creates a release or uploads an asset, so a
@@ -166,6 +194,14 @@ release-verify: require-version $(DIST)/falconet_$(DIGEST_TARGET)
 	if [[ "$$recorded_version" != "$(VERSION)" ]]; then \
 	  echo "release-verify: the digest in the tree was prepared for $$recorded_version, and this is $(VERSION)." >&2; \
 	  echo "  A digest is only a claim about one build of one commit. Re-run release-prep." >&2; \
+	  exit 1; \
+	fi; \
+	grep -q '^ *$(USES_REF)' $(WORKFLOW) || { echo "release-verify: $(WORKFLOW) pins no falconet at all: no '$(USES_REF)' line" >&2; exit 1; }; \
+	stray="$$(grep -n '^ *$(USES_REF)' $(WORKFLOW) | grep -v '$(USES_REF)$(VERSION)$$' || true)"; \
+	if [[ -n "$$stray" ]]; then \
+	  echo "release-verify: $(WORKFLOW) pins falconet at a ref that is not $(VERSION):" >&2; \
+	  printf '  %s\n' "$$stray" >&2; \
+	  echo "  The workflow at this tag would install one falconet and vouch for another. Re-run release-prep." >&2; \
 	  exit 1; \
 	fi; \
 	recorded="$$(awk '{ print $$1 }' $(DIGEST_FILE))"; \

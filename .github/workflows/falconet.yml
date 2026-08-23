@@ -15,6 +15,25 @@
 #   should be able to skip, improvise, or be argued out of.
 #
 # ---------------------------------------------------------------------------
+# Where falconet comes from
+# ---------------------------------------------------------------------------
+# Every job installs falconet as a release asset, through this repository's
+# composite action at a tag: `uses: zetlen/falconet@vX.Y.Z`, the same literal
+# on every line, equal to release/VERSION at that tag. `uses:` cannot take an
+# expression, so the ref is written by `make release-prep` together with
+# release/VERSION and the digest — three things, one command, one second —
+# and `make release-verify` and contract.test.sh refuse a tree where they
+# disagree. GitHub fetches the action's repository into the runner's action
+# cache, outside the workspace and with no token (it is public), and the
+# action installs the asset whose digest that tree holds (ADR-0006 D6).
+#
+# So nothing checks falconet out into the consumer's tree any more, and the
+# input that chose which falconet to check out is gone with the checkout: the
+# tag on the `uses:` line is the one coordinate, and a caller still passing
+# that input is rejected when its file is loaded (doctor says so). ADR-0005's
+# "one checkout in the agent job, and it is falconet's" becomes none.
+#
+# ---------------------------------------------------------------------------
 # The cost of that boundary, stated plainly
 # ---------------------------------------------------------------------------
 # Run 32093607680 taught this pipeline to push the moment a commit exists,
@@ -29,7 +48,7 @@
 #   1. `implement` uploads a git BUNDLE of the branch before it ends. The
 #      bundle outlives the runner, so the work is durable the instant it
 #      exists, which is what the incident was actually about.
-#   2. `publish`'s first step is the push. Nothing is validated, assembled or
+#   2. `publish`'s first verb is the push. Nothing is validated, assembled or
 #      posted before the branch is on the remote.
 #
 # So the work is never lost; there is a window of one job hand-off in which it
@@ -54,11 +73,6 @@ on:
         required: false
         type: string
         default: ''
-      falconet-ref:
-        description: 'Which falconet to run.'
-        required: false
-        type: string
-        default: main
       runs-on:
         required: false
         type: string
@@ -118,26 +132,33 @@ jobs:
           fetch-depth: 1
           token: ${{ steps.token.outputs.token }}
 
-      - uses: actions/checkout@v4
-        with:
-          repository: zetlen/falconet
-          ref: ${{ inputs.falconet-ref }}
-          path: .falconet-tool
-
-      # The tool is checked out INSIDE the repository it works on -- a
-      # composite action can only run from under the workspace -- and the
-      # handoff directory is written there too. Both are untracked paths in
-      # the consumer's tree, and two verbs read `git status`: prepare refuses
-      # a dirty tree, commit refuses any changed path outside the allowlist.
-      # Without this step every run died right here, on `?? .falconet-tool/`,
-      # before the acknowledgment, so the requester heard nothing at all.
+      # The handoff directory is written INSIDE the consumer's tree — it is
+      # where the verbs leave files for each other — and it is an untracked
+      # path that two verbs will see: prepare refuses a dirty tree, and
+      # commit, in the implement job, reads `git status --untracked-files=all`
+      # on a tree that carries the downloaded handoff and refuses any changed
+      # path outside the allowlist. A run in CI must not depend on the
+      # consumer's .gitignore knowing the directory's name, so it is excluded
+      # per clone, here, before any verb reads git status; contract.test.sh
+      # fails if a step reorders that. The tool's own checkout used to sit
+      # beside it as a second untracked path, and every run once died right
+      # there, on the checkout showing up as `??`, before the acknowledgment;
+      # the tool is a binary on PATH now, and the exclude names the one path
+      # that is left.
       #
       # Per clone and never committed. A consumer still gitignores the
       # handoff directory for runs by hand; a run in CI must not depend on it.
-      - name: Keep the tool and the handoff out of the working tree
+      - name: Keep the handoff out of the working tree
         run: |
           mkdir -p .git/info
-          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
+          printf '%s\n' .falconet/ >> .git/info/exclude
+
+      # No verb: this call installs falconet, tofu and gitleaks and stops. See
+      # the header for where the binary comes from. The action's own checkout
+      # is in the runner's action cache, not in this workspace, so nothing
+      # here is a path the verbs could trip over.
+      - name: Install falconet, tofu and gitleaks
+        uses: zetlen/falconet@v0.1.0
 
       # Eligibility is decided here and not in a job-level `if:`, because an
       # `if:` evaluates before checkout and can therefore never read the
@@ -153,42 +174,25 @@ jobs:
       # environment would undo that, because the boundary is that judgment
       # runs where publishing cannot. It sits as late in the job as it can,
       # so the steps that do not need it do not have it.
+      #
+      # A `run:` step and not the action, on purpose: `falconet plan-env`
+      # prints `::add-mask::` for every line of every value, and the runner
+      # reads those commands off the step's own stdout. The action captures
+      # stdout into a step output, where a mask would mask nothing.
       - name: Credentials for the stacks that plan
         env:
           FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
-        run: |
-          set -euo pipefail
-          if [ -z "${FALCONET_PLAN_ENV:-}" ]; then
-            echo "no plan-env secret: the stacks must init and plan without one"
-            exit 0
-          fi
-          printf '%s' "$FALCONET_PLAN_ENV" | jq -e 'type == "object"' >/dev/null 2>&1 \
-            || { echo "plan-env must be a JSON object of NAME: value" >&2; exit 1; }
-          while IFS= read -r name; do
-            [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
-              || { echo "plan-env: '$name' is not an environment variable name" >&2; exit 1; }
-            value="$(printf '%s' "$FALCONET_PLAN_ENV" | jq -r --arg k "$name" '.[$k]')"
-            case "$value" in
-              *FALCONET_PLAN_ENV_EOF*)
-                echo "plan-env: the value of $name contains the delimiter" >&2; exit 1 ;;
-            esac
-            # add-mask is per line, and a PEM is many lines.
-            while IFS= read -r line; do
-              [ -n "$line" ] && echo "::add-mask::$line"
-            done <<<"$value"
-            printf '%s<<FALCONET_PLAN_ENV_EOF\n%s\nFALCONET_PLAN_ENV_EOF\n' \
-              "$name" "$value" >>"$GITHUB_ENV"
-            echo "plan-env: set $name"
-          done < <(printf '%s' "$FALCONET_PLAN_ENV" | jq -r 'keys_unsorted[]')
+        run: falconet plan-env
 
       - name: Prepare
         id: prepare
-        uses: ./.falconet-tool
+        uses: zetlen/falconet@v0.1.0
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           FALCONET_EVENT_PATH: ${{ github.event_path }}
         with:
           verb: prepare
+          setup: 'false'
           args: --issue ${{ inputs.issue }} ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
 
       - name: Read the handoff
@@ -242,6 +246,10 @@ jobs:
       # which is the one thing this whole job graph is built to prevent. The
       # grep is the fail-closed half: if a future checkout writes the
       # credential somewhere else in .git, nothing ships at all.
+      #
+      # The handoff is excluded from the tar: it travels as its own artifact,
+      # and the only other thing that ever needed excluding — the tool's
+      # checkout — is no longer in the tree.
       - name: Hand the checkout to the agent job, without the credential
         id: source
         if: steps.prepare.outputs.outcome == 'ready'
@@ -253,8 +261,7 @@ jobs:
             echo "refusing to ship a checkout that still authenticates" >&2
             exit 1
           fi
-          tar -czf "$RUNNER_TEMP/source.tgz" \
-            --exclude=./.falconet-tool --exclude=./.falconet -C . .
+          tar -czf "$RUNNER_TEMP/source.tgz" --exclude=./.falconet -C . .
           echo "bytes=$(wc -c <"$RUNNER_TEMP/source.tgz")" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -288,15 +295,16 @@ jobs:
     outputs:
       outcome: ${{ steps.commit.outputs.outcome }}
     steps:
-      # falconet itself is public, so this clone needs no permission. The
-      # repository being worked on is the one that cannot be cloned from here
-      # — see gate's hand-over step.
-      - uses: actions/checkout@v4
-        with:
-          repository: zetlen/falconet
-          ref: ${{ inputs.falconet-ref }}
-          path: .falconet-tool
-          persist-credentials: false
+      # NO checkout in this job — not of the repository being worked on, which
+      # it cannot clone (see gate's hand-over step), and since #19 not of
+      # falconet either. ADR-0005 allowed this job one checkout, falconet's,
+      # because a composite action had to run from under the workspace; the
+      # action now lives in the runner's action cache and what it fetches is
+      # a public release asset, with no token. That is the stronger form of
+      # ADR-0005's sentence, and contract.test.sh holds it: zero
+      # actions/checkout steps here, ever.
+      - name: Install falconet, tofu and gitleaks
+        uses: zetlen/falconet@v0.1.0
 
       - uses: actions/download-artifact@v4
         with:
@@ -322,14 +330,14 @@ jobs:
           BASE_SHA: ${{ needs.gate.outputs.base_sha }}
 
       # As in gate: commit reads `git status --untracked-files=all`, and the
-      # tool and the handoff it is about to download are the two untracked
-      # paths that are not the agent's. The shipped .git already carries these
-      # lines; written again because a checkout that stops being tarred with
-      # its .git would otherwise take the exclusion with it silently.
-      - name: Keep the tool and the handoff out of the working tree
+      # handoff it is about to download is the one untracked path that is not
+      # the agent's. The shipped .git already carries this line; written again
+      # because a checkout that stops being tarred with its .git would
+      # otherwise take the exclusion with it silently.
+      - name: Keep the handoff out of the working tree
         run: |
           mkdir -p .git/info
-          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
+          printf '%s\n' .falconet/ >> .git/info/exclude
 
       - uses: actions/download-artifact@v4
         with:
@@ -354,7 +362,7 @@ jobs:
           set -euo pipefail
           {
             echo 'text<<FALCONET_PROMPT_EOF'
-            ./.falconet-tool/bin/falconet prompt implement
+            falconet prompt implement
             echo FALCONET_PROMPT_EOF
           } >> "$GITHUB_OUTPUT"
 
@@ -386,14 +394,15 @@ jobs:
       # a question: a denied run commits nothing, so there is no committed
       # work for needs-info's ordering to protect.
       # `setup: false` claims an earlier step in THIS job installed the
-      # binaries, and a job is a fresh runner. commit needs `tofu fmt` and
-      # gitleaks, and the secret scan fails closed on a missing scanner, so
-      # this is the step that installs them.
+      # binaries, and a job is a fresh runner: the install is this job's
+      # first step. commit needs `tofu fmt` and gitleaks, and the secret scan
+      # fails closed on a missing scanner.
       - name: Commit
         id: commit
-        uses: ./.falconet-tool
+        uses: zetlen/falconet@v0.1.0
         with:
           verb: commit
+          setup: 'false'
           args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
 
       # Before this job ends, so the work outlives the runner. See the header.
@@ -448,18 +457,12 @@ jobs:
           fetch-depth: 1
           token: ${{ steps.token.outputs.token }}
 
-      - uses: actions/checkout@v4
-        with:
-          repository: zetlen/falconet
-          ref: ${{ inputs.falconet-ref }}
-          path: .falconet-tool
-
       # As in gate. No verb here reads `git status` today; kept uniform so
       # that the next one that does is not the next incident.
-      - name: Keep the tool and the handoff out of the working tree
+      - name: Keep the handoff out of the working tree
         run: |
           mkdir -p .git/info
-          printf '%s\n' .falconet-tool/ .falconet/ >> .git/info/exclude
+          printf '%s\n' .falconet/ >> .git/info/exclude
 
       - uses: actions/download-artifact@v4
         with:
@@ -483,11 +486,18 @@ jobs:
         env:
           BRANCH: ${{ needs.gate.outputs.branch }}
 
-      # Unconditional, and first. Every run leaves its branch on the remote,
-      # so a stale branch is ordinary and the collision rename does the
-      # bookkeeping. Nothing below runs before the work is somewhere durable.
+      # The one step between the branch and the remote: the push needs the
+      # binary, and the binary is a download. It is the only thing that runs
+      # before the push, and the work is durable as an artifact throughout.
+      - name: Install falconet, tofu and gitleaks
+        uses: zetlen/falconet@v0.1.0
+
+      # Unconditional, and the first verb. Every run leaves its branch on the
+      # remote, so a stale branch is ordinary and the collision rename does
+      # the bookkeeping. Nothing below runs before the work is somewhere
+      # durable.
       - name: Push
-        uses: ./.falconet-tool
+        uses: zetlen/falconet@v0.1.0
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
@@ -497,42 +507,21 @@ jobs:
 
       # As in gate, and after the push for the same reason it is late there:
       # the branch is already on the remote before this job holds a cloud
-      # credential at all.
+      # credential at all. A `run:` step for gate's reason too: the masks
+      # must reach the runner's stdout, not a step output.
       - name: Credentials for the stacks that plan
         env:
           FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
-        run: |
-          set -euo pipefail
-          if [ -z "${FALCONET_PLAN_ENV:-}" ]; then
-            echo "no plan-env secret: the stacks must init and plan without one"
-            exit 0
-          fi
-          printf '%s' "$FALCONET_PLAN_ENV" | jq -e 'type == "object"' >/dev/null 2>&1 \
-            || { echo "plan-env must be a JSON object of NAME: value" >&2; exit 1; }
-          while IFS= read -r name; do
-            [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
-              || { echo "plan-env: '$name' is not an environment variable name" >&2; exit 1; }
-            value="$(printf '%s' "$FALCONET_PLAN_ENV" | jq -r --arg k "$name" '.[$k]')"
-            case "$value" in
-              *FALCONET_PLAN_ENV_EOF*)
-                echo "plan-env: the value of $name contains the delimiter" >&2; exit 1 ;;
-            esac
-            # add-mask is per line, and a PEM is many lines.
-            while IFS= read -r line; do
-              [ -n "$line" ] && echo "::add-mask::$line"
-            done <<<"$value"
-            printf '%s<<FALCONET_PLAN_ENV_EOF\n%s\nFALCONET_PLAN_ENV_EOF\n' \
-              "$name" "$value" >>"$GITHUB_ENV"
-            echo "plan-env: set $name"
-          done < <(printf '%s' "$FALCONET_PLAN_ENV" | jq -r 'keys_unsorted[]')
+        run: falconet plan-env
 
       - name: Validate
         id: validate
         if: needs.implement.outputs.outcome == 'success'
         continue-on-error: true
-        uses: ./.falconet-tool
+        uses: zetlen/falconet@v0.1.0
         with:
           verb: validate
+          setup: 'false'
           args: --base ${{ needs.gate.outputs.base_sha }} ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
 
       - uses: actions/upload-artifact@v4
@@ -548,7 +537,7 @@ jobs:
 
       - name: Assemble the pull-request body
         if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
-        uses: ./.falconet-tool
+        uses: zetlen/falconet@v0.1.0
         with:
           verb: assemble
           setup: 'false'
@@ -562,69 +551,89 @@ jobs:
       # The title comes from the commit subject the agent wrote, never from
       # the issue title. The agent's account of its own change is the thing a
       # human reviews it against.
+      #
+      # The label comes from the same config every verb reads, through the
+      # binary, so this step cannot drift from what prepare and validate
+      # resolved. $FALCONET_CONFIG_FLAG is the `--config FILE` the verb steps
+      # build from inputs.config, or nothing; unquoted so that nothing is no
+      # argument. Captured in its own assignment, so a config the binary
+      # refuses fails this step here and loudly, not inside gh's argument
+      # list.
       - name: Open the pull request
         if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          FALCONET_CONFIG_FLAG: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2086
+          label="$(falconet config $FALCONET_CONFIG_FLAG get .labels.pr)"
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$PUSHED_BRANCH" \
             --title "$(cat .falconet/commit-subject.txt)" \
             --body-file .falconet/pr.md \
-            --label "$(jq -r '.labels.pr // "needs-plan-review"' \
-                       "${FALCONET_CONFIG:-.github/falconet.json}" 2>/dev/null \
-                       || echo needs-plan-review)"
+            --label "$label"
 
+      # The three hand-overs are `run:` steps, not calls through the action,
+      # because the action splits `args` on whitespace — by design, and its
+      # own comment says why — and a preamble is a sentence. Through the
+      # action, `--preamble "Before I can …"` arrives as `--preamble`,
+      # `"Before`, `I`, … and pause refuses the second word as an unknown
+      # argument. The shell's own quoting is what a sentence needs, and the
+      # binary is on PATH. Every argument that is not a literal comes through
+      # `env:`, never a template expression inside the block; the branch is
+      # $PUSHED_BRANCH, which the push verb set — the branch that IS on the
+      # remote, not the one prepare intended — and is empty when nothing was
+      # pushed, which pause accepts as "no branch".
       - name: Hand over — the agent asked a question
         if: needs.implement.outputs.outcome == 'needs-info'
-        uses: ./.falconet-tool
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
-          verb: pause
-          setup: 'false'
-          args: >-
-            --issue ${{ inputs.issue }}
-            --label needs-info
-            --branch ${{ env.PUSHED_BRANCH }}
-            --body .falconet/needs-info.md
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          falconet pause \
+            --issue "$ISSUE" \
+            --label needs-info \
+            --branch "$PUSHED_BRANCH" \
+            --body .falconet/needs-info.md \
+            --run-url "$RUN_URL" \
             --preamble "Before I can prepare this change I need a bit more from you:"
 
       - name: Hand over — the run could not prepare a change
         if: needs.implement.outputs.outcome == 'failure'
-        uses: ./.falconet-tool
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
-          verb: pause
-          setup: 'false'
-          args: >-
-            --issue ${{ inputs.issue }}
-            --label ready-for-human
-            --branch ${{ env.PUSHED_BRANCH }}
-            --body .falconet/failure-reason.txt
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          falconet pause \
+            --issue "$ISSUE" \
+            --label ready-for-human \
+            --branch "$PUSHED_BRANCH" \
+            --body .falconet/failure-reason.txt \
+            --run-url "$RUN_URL" \
             --preamble "I wasn't able to prepare this change automatically. This one needs a person."
 
       - name: Hand over — validation failed
         if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'failure'
-        uses: ./.falconet-tool
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        with:
-          verb: pause
-          setup: 'false'
-          args: >-
-            --issue ${{ inputs.issue }}
-            --label ready-for-human
-            --branch ${{ env.PUSHED_BRANCH }}
-            --body .falconet/validation-failure.txt
-            --body-title "validation output"
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          falconet pause \
+            --issue "$ISSUE" \
+            --label ready-for-human \
+            --branch "$PUSHED_BRANCH" \
+            --body .falconet/validation-failure.txt \
+            --body-title "validation output" \
+            --run-url "$RUN_URL" \
             --preamble "I prepared this change, but it did not validate. This one needs a person."
 
   # =========================================================================
@@ -649,37 +658,64 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 1 }
 
-      - uses: actions/checkout@v4
-        with:
-          repository: zetlen/falconet
-          ref: ${{ inputs.falconet-ref }}
-          path: .falconet-tool
+      - name: Install falconet, tofu and gitleaks
+        uses: zetlen/falconet@v0.1.0
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a
       # comment with a link to this run, because a request that vanishes into
       # an empty green run is the failure this pipeline cares about most.
+      #
+      # Every answer is CAPTURED into a variable and then inspected — never
+      # `gh … | grep -q` (AGENTS.md): grep -q exits at the first match and
+      # can SIGPIPE gh, which under pipefail turns a FOUND match into a failed
+      # pipeline, the exact opposite of the answer just computed. And gh's
+      # own --template does the reading: falconet no longer asks the runner
+      # for a JSON tool of its own. A gh that fails is a red step here, not
+      # "closed — terminal": an answer nobody got is not an answer.
       - name: Ensure a terminal state
+        id: check
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          set -euo pipefail
+          state="$(gh issue view "$ISSUE" --json state --template '{{.state}}')"
+          if [ "$state" != OPEN ]; then
+            echo "issue #$ISSUE is closed — terminal"
+            echo "terminal=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          labels="$(gh issue view "$ISSUE" --json labels \
+            --template '{{range .labels}}{{.name}}{{"\n"}}{{end}}')"
+          if grep -qxE 'needs-info|ready-for-human' <<<"$labels"; then
+            echo "issue #$ISSUE is already paused — terminal"
+            echo "terminal=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          heads="$(gh pr list --state open --json number,headRefName \
+            --template '{{range .}}{{.headRefName}}{{"\n"}}{{end}}')"
+          if grep -qE "^(claude/)?issue-${ISSUE}-" <<<"$heads"; then
+            echo "issue #$ISSUE has an open PR — terminal"
+            echo "terminal=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "issue #$ISSUE is open, unpaused and has no pull request — pausing it"
+          echo "terminal=false" >> "$GITHUB_OUTPUT"
+
+      # A `run:` step for the publish job's reason: the preamble is a
+      # sentence, and the action splits args on whitespace. No branch — this
+      # job does not know whether one was pushed, and a wrong link is worse
+      # than none — so --branch is the empty string, which pause accepts.
+      - name: Pause the issue, so this run is not its last word
+        if: steps.check.outputs.terminal != 'true'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE: ${{ inputs.issue }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -uo pipefail
-          state="$(gh issue view "$ISSUE" --json state,labels)"
-          if [ "$(jq -r .state <<<"$state")" != OPEN ]; then
-            echo "issue #$ISSUE is closed — terminal"; exit 0
-          fi
-          if jq -r '.labels[].name' <<<"$state" \
-               | grep -qxE 'needs-info|ready-for-human'; then
-            echo "issue #$ISSUE is already paused — terminal"; exit 0
-          fi
-          heads="$(gh pr list --state open --json number,headRefName \
-            --jq '.[] | select(.headRefName | test("^(claude/)?issue-" + env.ISSUE + "-")) | .number')"
-          if [ -n "$heads" ]; then
-            echo "issue #$ISSUE has an open PR — terminal"; exit 0
-          fi
-          ./.falconet-tool/bin/falconet pause \
+          set -euo pipefail
+          falconet pause \
             --issue "$ISSUE" \
             --label ready-for-human \
             --branch "" \
