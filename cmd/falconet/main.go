@@ -54,6 +54,7 @@ const usageText = `Usage: falconet <verb> [args]
   pause     put an issue into a terminal state and say so where it will be read
   assemble  build a pull-request body carrying the whole plan
   doctor    check a repository against the install steps, and say which are missing
+  init      do the install steps: the labels, the secrets, the files, one commit
   version   print the version and the toolchain this binary was built with
 
 Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
@@ -82,6 +83,7 @@ var native = map[string]func(args []string) int{
 	"prompt":         runPrompt,
 	"review-verdict": runReviewVerdict,
 	"doctor":         runDoctor,
+	"init":           runInit,
 }
 
 func main() {
@@ -172,17 +174,27 @@ func runVersion(args []string) int {
 		fmt.Fprintln(os.Stderr, "falconet: version takes no arguments")
 		return 2
 	}
-	// `go install github.com/zetlen/falconet/cmd/falconet@v0.1.0` is the
-	// second install path ADR-0006 D6 names, and it accepts no ldflags: the
-	// module proxy hands the go command a source zip, so nothing can stamp
-	// `version` on the way through and every binary installed that way would
-	// have said "dev" — for the one audience, people on laptops, whose only
-	// way to know what they are running is this line. The go command records
-	// the module version it resolved, so ask for it.
-	//
-	// Only when the stamp is absent, so a release asset always reports the
-	// tag it was built for and never something a proxy computed. "(devel)" is
-	// what a local `go build` puts there, which is what "dev" already says.
+	fmt.Printf("falconet %s (%s %s/%s)\n", resolvedVersion(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	return 0
+}
+
+// resolvedVersion is what this binary calls itself: the build-time stamp,
+// else the module version the go command recorded, else "dev". version
+// prints it; init pins the caller workflow's `uses:` to it (ADR-0006 D6:
+// one coordinate).
+//
+// `go install github.com/zetlen/falconet/cmd/falconet@v0.1.0` is the
+// second install path ADR-0006 D6 names, and it accepts no ldflags: the
+// module proxy hands the go command a source zip, so nothing can stamp
+// `version` on the way through and every binary installed that way would
+// have said "dev" — for the one audience, people on laptops, whose only
+// way to know what they are running is this line. The go command records
+// the module version it resolved, so ask for it.
+//
+// Only when the stamp is absent, so a release asset always reports the
+// tag it was built for and never something a proxy computed. "(devel)" is
+// what a local `go build` puts there, which is what "dev" already says.
+func resolvedVersion() string {
 	v := version
 	if v == "dev" {
 		if info, ok := debug.ReadBuildInfo(); ok {
@@ -191,8 +203,7 @@ func runVersion(args []string) int {
 			}
 		}
 	}
-	fmt.Printf("falconet %s (%s %s/%s)\n", v, runtime.Version(), runtime.GOOS, runtime.GOARCH)
-	return 0
+	return v
 }
 
 // --- config -----------------------------------------------------------------

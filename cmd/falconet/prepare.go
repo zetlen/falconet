@@ -676,7 +676,7 @@ func runPrepare(args []string) int {
 			return die("prepare: %s", cfg.StackMissing("plan", s, root))
 		}
 		if initFirst {
-			ok, err := runInit(runner, s, scratch)
+			ok, err := runBaselineInit(runner, s, scratch)
 			if err != nil {
 				return die("falconet: %v", err)
 			}
@@ -732,11 +732,11 @@ func runPrepare(args []string) int {
 	return 0
 }
 
-// runInit runs `tofu init` in the stack with both streams into the scratch
+// runBaselineInit runs `tofu init` in the stack with both streams into the scratch
 // file — truncated first — and returns whether it succeeded. A tofu that
 // could not be started at all has that written into the file as well, so the
 // failure names its cause; the error return is for the scratch file itself.
-func runInit(r stacks.Runner, stack, scratch string) (bool, error) {
+func runBaselineInit(r stacks.Runner, stack, scratch string) (bool, error) {
 	f, err := os.OpenFile(scratch, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("cannot write %s: %v", scratch, err)

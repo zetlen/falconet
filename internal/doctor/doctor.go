@@ -61,6 +61,11 @@ const (
 	Missing
 	CannotTell
 	Note
+	// Done and Skipped are init's: a step this run did, and a step it did
+	// not attempt and lists under "Left for you:". doctor, which writes
+	// nothing, prints neither; the column fits both.
+	Done
+	Skipped
 )
 
 func (s Status) String() string {
@@ -73,6 +78,10 @@ func (s Status) String() string {
 		return "cannot tell"
 	case Note:
 		return "note"
+	case Done:
+		return "done"
+	case Skipped:
+		return "skipped"
 	}
 	return fmt.Sprintf("status(%d)", int(s))
 }
@@ -126,6 +135,18 @@ func (r Report) Counts() (ok, missing, cannotTell int) {
 		}
 	}
 	return
+}
+
+// Count is how many lines carry one status — init's summary counts more
+// statuses than doctor's three.
+func (r Report) Count(s Status) int {
+	n := 0
+	for _, l := range r {
+		if l.Status == s {
+			n++
+		}
+	}
+	return n
 }
 
 // Summary is the last line: `doctor: N ok, M missing, K cannot tell`.
@@ -197,10 +218,19 @@ func ClassicToken(scopes string) (Line, bool) {
 	return Line{Status: Note, Text: fmt.Sprintf("the token is classic and its scopes (%s) do not include repo, which a classic token needs", scopes)}, true
 }
 
-// TokenHint is what the verb prints on stderr, once, when there is no
-// token: ADR-0006 D4's table, as it applies to doctor, and the README's
-// advice on minting.
-const TokenHint = `doctor: no FALCONET_SETUP_TOKEN in the environment, so the remote checks cannot run.
+// TokenHint is what doctor prints on stderr, once, when there is no token:
+// ADR-0006 D4's table, as it applies to both setup verbs, and the README's
+// advice on minting. init prints the same table under its own first line,
+// through TokenHintFor.
+var TokenHint = TokenHintFor("doctor", "the remote checks cannot run")
+
+// TokenHintFor is TokenHint for a verb, with what the missing token costs
+// it.
+func TokenHintFor(verb, consequence string) string {
+	return fmt.Sprintf(tokenHint, verb, consequence)
+}
+
+const tokenHint = `%s: no FALCONET_SETUP_TOKEN in the environment, so %s.
 
 Mint a fine-grained personal access token scoped to this one repository, with a
 seven-day expiry, and export it as FALCONET_SETUP_TOKEN. doctor reads; init
