@@ -4,65 +4,103 @@ package main
 // 2–8, each idempotent, each reported one line in doctor's format, then one
 // commit and never a push. What each step decides and writes is
 // internal/setup, which carries the record; doctor's checks run through
-// internal/doctor so the two verbs are the same code. This file is the
-// flags, the repository, the prompts, git, and the exit code.
+// internal/doctor so the two verbs are the same code; the plan-env shape is
+// internal/planenv and the sealed box is internal/secrets. This file is the
+// flags, the repository, the prompts, git, the API calls, and the exit code.
 //
 // The second setup verb (ADR-0006 D4, D5): a person invokes it, on a laptop,
-// in a clone of the repository they are installing falconet into. This is
-// the part that needs no token (#10): the .gitignore line, the config, the
-// workflow file, and one commit. The labels and the secrets (#11) are
-// skipped and listed under "Left for you:" — the run degrades to the
+// in a clone of the repository they are installing falconet into. Its order
+// is the record's: every read before any write, and the first write is the
+// idempotent one — the labels — so a token short of a permission fails
+// there, before anything harder to undo, with the permission named.
+//
+// Without a token it still does the local steps — the .gitignore line, the
+// config, the workflow file — and prints what is left. It degrades to the
 // README, never to nothing.
 
 import (
 	"bufio"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/zetlen/falconet/internal/config"
 	"github.com/zetlen/falconet/internal/doctor"
+	"github.com/zetlen/falconet/internal/github"
+	"github.com/zetlen/falconet/internal/planenv"
 	"github.com/zetlen/falconet/internal/repo"
+	"github.com/zetlen/falconet/internal/secrets"
 	"github.com/zetlen/falconet/internal/setup"
 	"github.com/zetlen/falconet/prompts"
 )
 
-const initUsageText = `init — install falconet into this repository: README steps 2, 7 and 8,
-each idempotent and reported one line, then one commit, never a push.
+const initUsageText = `init — install falconet into this repository: README steps 2–8, each
+idempotent and reported one line, then one commit, never a push.
 
 Modes:
-  falconet init [--config FILE]
+  falconet init [--repo owner/name] [--config FILE]
                 [--plan a,b] [--validate-only c,d]
+                [--plan-env-file FILE]
+                [--app-id N --app-key FILE]
+                [--replace-secrets]
                 [--no-commit]
 
+    --repo             the GitHub repository, instead of $GITHUB_REPOSITORY
+                       or the origin remote of the clone this runs in
     --config           the config file, instead of .github/falconet.json
     --plan             the stacks a human will apply from the pull request
     --validate-only    every other directory with .tf in it. Both are
                        comma-separated, and every discovered stack must be
                        named in one of them — unless stdin is a terminal,
                        where init asks per stack
+    --plan-env-file    a JSON object of the variables the planned stacks
+                       need, kept OUTSIDE the repository; sealed as
+                       FALCONET_PLAN_ENV (step 5)
+    --app-id N         with --app-key, the App README step 3 registers,
+    --app-key FILE     sealed as FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY
+                       (#12 will create the App by manifest; these go then)
+    --replace-secrets  seal a new value over a secret that already exists;
+                       without it an existing secret is left as it is
     --no-commit        leave what was written staged, and say so
 
 Runs from the root of the repository it is standing in, which must have a
 clean working tree: the commit this makes carries only what it wrote.
 
-Steps 3–6 — the App's two secrets, the API key, the planning environment
-and the four labels — need FALCONET_SETUP_TOKEN and land with #11; until
-then they are skipped and listed under "Left for you:" in the README's
-words.
+Order (ADR-0006 D4): every read before any write, and the first write is
+the idempotent one. The labels (6), then the secrets (4, 5, then 3), then
+the local files (2, 7, 8), then one commit. A token short of a permission
+fails at the labels, before anything harder to undo; a 403 names it.
+
+ANTHROPIC_API_KEY is read from a no-echo prompt when stdin is a terminal,
+and from stdin otherwise — never from an argument, which would be in shell
+history. Empty is skipped. FALCONET_PLAN_ENV comes from --plan-env-file,
+and is refused unless it parses as a JSON object whose values are all
+strings and whose keys are variable names; the value is never echoed.
+
+With FALCONET_SETUP_TOKEN — a fine-grained personal access token scoped to
+the one repository, with Administration and Actions read, Secrets and
+Issues write (a classic token needs repo) — the remote steps run; without
+it they are skipped and listed under "Left for you:" in the README's
+words. GITHUB_TOKEN and GH_TOKEN are deliberately not read. GITHUB_API_URL
+overrides the API endpoint.
 
 Prints one line per step on stdout, in doctor's format — a fixed-width
 status word, the step number and the step:
 
   ok           already done; nothing written
-  done         written by this run
+  done         written, created or stored by this run
   skipped      not attempted, and listed under "Left for you:"
   MISSING      a check doctor makes that init cannot fix
+  cannot tell  a check that could not run, and why
   note         not a step: something the README says in a sentence
 
 then a summary line, then "Left for you:" — what remains, in order, ending
@@ -70,8 +108,8 @@ with the canary and the check (falconet doctor).
 
 Exit codes: 0 = everything attempted succeeded (skipped steps are not
                 failures; neither is a MISSING init cannot fix)
-            1 = a dirty tree, a refused write, a repository that does not
-                qualify
+            1 = a dirty tree, a refused write, a refused plan-env, a
+                repository that does not qualify or cannot be reached
             2 = usage error (including --help)
 `
 
@@ -82,8 +120,8 @@ func initUsage() int {
 
 // initFlags is the command line, read.
 type initFlags struct {
-	explicit, plan, validateOnly       string
-	planGiven, validateGiven, noCommit bool
+	repo, explicit, plan, validateOnly, planEnvFile, appID, appKey string
+	planGiven, validateGiven, replace, noCommit                    bool
 }
 
 func runInit(args []string) int {
@@ -101,6 +139,9 @@ func runInit(args []string) int {
 		ok := true
 		takes := true
 		switch flag {
+		case "--repo":
+			v, ok = value("owner/name")
+			f.repo = v
 		case "--config":
 			v, ok = value("a file")
 			f.explicit = v
@@ -110,6 +151,17 @@ func runInit(args []string) int {
 		case "--validate-only":
 			v, ok = value("stack names, comma-separated")
 			f.validateOnly, f.validateGiven = v, true
+		case "--plan-env-file":
+			v, ok = value("a file")
+			f.planEnvFile = v
+		case "--app-id":
+			v, ok = value("the App ID")
+			f.appID = v
+		case "--app-key":
+			v, ok = value("the App's private key, a .pem file")
+			f.appKey = v
+		case "--replace-secrets":
+			f.replace, takes = true, false
 		case "--no-commit":
 			f.noCommit, takes = true, false
 		case "-h", "--help":
@@ -127,6 +179,15 @@ func runInit(args []string) int {
 			args = args[1:]
 		}
 	}
+	if (f.appID == "") != (f.appKey == "") {
+		fmt.Fprintln(os.Stderr, "--app-id and --app-key go together: the App's ID and its private key are two halves of one credential")
+		return 2
+	}
+	if f.appID != "" && !digits.MatchString(f.appID) {
+		fmt.Fprintln(os.Stderr, "--app-id must be a number (the App ID near the top of the App's page)")
+		return 2
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "falconet: cannot determine the working directory: %v\n", err)
@@ -134,8 +195,10 @@ func runInit(args []string) int {
 	}
 	// Every file the caller names resolves against where the caller stands,
 	// before the cd to the root; config resolves at the root after it.
-	if f.explicit != "" && !filepath.IsAbs(f.explicit) {
-		f.explicit = filepath.Join(cwd, f.explicit)
+	for _, p := range []*string{&f.explicit, &f.planEnvFile, &f.appKey} {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(cwd, *p)
+		}
 	}
 	root, err := repo.Root(cwd)
 	if err != nil {
@@ -198,10 +261,44 @@ func runInit(args []string) int {
 		return 1
 	}
 
+	// --- preflight: the inputs that are files ---------------------------------
+	//
+	// Validated before any write, so a malformed file costs nothing. The
+	// plan-env value is a credential: the error names the shape and never the
+	// value (internal/planenv), and nothing here prints the bytes.
+	var planEnv []byte
+	if f.planEnvFile != "" {
+		planEnv, err = os.ReadFile(f.planEnvFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: cannot read --plan-env-file: %v\n", err)
+			return 1
+		}
+		if _, err := planenv.Parse(planEnv); err != nil {
+			fmt.Fprintf(os.Stderr, "init: validation: %v\n", err)
+			return 1
+		}
+	}
+	var appKey []byte
+	if f.appKey != "" {
+		appKey, err = os.ReadFile(f.appKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: cannot read --app-key: %v\n", err)
+			return 1
+		}
+		// The whole PEM, header and footer lines included (README step 3):
+		// a file that is not a PEM private key is the wrong file, and is
+		// refused before it is sealed into a secret a run would then fail on.
+		block, _ := pem.Decode(appKey)
+		if block == nil || !strings.HasSuffix(block.Type, "PRIVATE KEY") {
+			fmt.Fprintln(os.Stderr, "init: --app-key is not a PEM private key (the .pem GitHub downloads when you generate one)")
+			return 1
+		}
+	}
+
 	// --- preflight: the stacks -----------------------------------------------
 	//
-	// Decided now, before any write, because step 7 needs the lists and step
-	// 5's note needs to know whether any stack is planned. A config that exists is
+	// Decided now, before any write, because step 5 needs to know whether any
+	// stack is planned and step 7 needs the lists. A config that exists is
 	// the answer and is kept; otherwise the stacks are discovered and the
 	// flags sort them, or the prompt does.
 	terminal := isTerminal()
@@ -243,25 +340,318 @@ func runInit(args []string) int {
 	}
 	planned := len(stacks.Plan)
 
-	// --- steps 3–6: the remote steps, which are #11 ----------------------------
+	// --- which repository ----------------------------------------------------
 	//
-	// The labels, the API key, the planning environment and the App's two
-	// secrets need FALCONET_SETUP_TOKEN and the sealed box, and land with
-	// #11. Until then every one is skipped and listed under "Left for you:"
-	// in the README's words, in the order #11 will do them: the run degrades
-	// to the README, never to nothing (ADR-0006 D4).
-	say(doctor.Line{Status: doctor.Skipped, Step: 6, Text: "the four labels (#11)"})
-	left.add(leftLabels, setup.LeftLabels)
-	say(doctor.Line{Status: doctor.Skipped, Step: 4, Text: "secret ANTHROPIC_API_KEY (#11)"})
-	left.add(leftAnthropic, setup.LeftAnthropic)
-	if planned == 0 {
-		say(doctor.SecretLine(doctor.Secret{Name: "FALCONET_PLAN_ENV", Step: 5}, nil, planned, true))
+	// --repo, else $GITHUB_REPOSITORY, else the origin remote, as doctor
+	// decides it. Needed for every call; without a token there are no calls,
+	// and the local steps do not need to know.
+	token := github.SetupTokenFromEnv()
+	var owner, name string
+	if f.repo != "" {
+		owner, name, err = github.SplitRepository(f.repo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--repo %v\n", err)
+			return 2
+		}
 	} else {
-		say(doctor.Line{Status: doctor.Skipped, Step: 5, Text: "secret FALCONET_PLAN_ENV (#11)"})
-		left.add(leftPlanEnv, setup.LeftPlanEnv)
+		owner, name, err = repo.Repository(root)
+		if err != nil && token != "" {
+			fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
+			return 1
+		}
 	}
-	say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (#11)"})
-	left.add(leftApp, setup.LeftApp)
+
+	// --- the remote reads, doctor's, every one before any write ------------
+	//
+	// The repository must answer: a 404 is "not found, or no access", and
+	// nothing can be written to a repository the token cannot see. has_issues
+	// and the Actions policy are reported in doctor's words and do not stop
+	// the run — init cannot change either, so they land under "Left for
+	// you:". The secrets and labels lists are what the writes below are
+	// decided against; a refusal of either is a refusal of its step, after
+	// the step before it.
+	var (
+		client                          *github.Client
+		existingSecrets, existingLabels map[string]bool
+		errSecrets, errLabels           error
+		promptedKey                     string
+		anthropicFrom                   string
+	)
+	if token == "" {
+		fmt.Fprint(os.Stderr, doctor.TokenHintFor("init", "steps 3–6 are left for you"))
+		say(doctor.NoToken(1, "the repository, its issues, its Actions policy, its secrets and its labels"))
+	} else {
+		client = github.New(github.APIURLFromEnv(), token)
+		var r github.Repository
+		header, err := client.Request("GET", "/repos/"+owner+"/"+name, nil, &r)
+		if header != nil {
+			if note, has := doctor.ClassicToken(header.Get("X-OAuth-Scopes")); has {
+				say(note)
+			}
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: the repository %s/%s did not answer: %v\n", owner, name, err)
+			if isHTTP(err) {
+				fmt.Fprintln(os.Stderr, "nothing can be installed into a repository the token cannot see; check the name and the token's repository access")
+			}
+			return 1
+		}
+		say(doctor.Issues(&r))
+		if last := report[len(report)-1]; last.Status == doctor.Missing {
+			left.add(leftFix, setup.LeftFix(last))
+		}
+
+		permissions, errPerm := client.GetActionsPermissions(owner, name)
+		if unreachable(errPerm) {
+			return unreachableExit(errPerm)
+		}
+		var selected *github.SelectedActions
+		var errSel error
+		if errPerm == nil && permissions.AllowedActions == "selected" {
+			selected, errSel = client.GetSelectedActions(owner, name)
+			if unreachable(errSel) {
+				return unreachableExit(errSel)
+			}
+		}
+		switch {
+		case errPerm != nil:
+			say(doctor.Refused(1, "allowed_actions", errPerm, doctor.NeedsAdministration))
+		case errSel != nil:
+			say(doctor.Refused(1, "allowed_actions is selected", errSel, doctor.NeedsAdministration))
+		default:
+			say(doctor.ActionsPolicy(permissions, selected))
+		}
+		if last := report[len(report)-1]; last.Status == doctor.Missing {
+			left.add(leftFix, setup.LeftFix(last))
+		}
+		workflowPerm, errWorkflow := client.GetWorkflowPermissions(owner, name)
+		if unreachable(errWorkflow) {
+			return unreachableExit(errWorkflow)
+		}
+		if errWorkflow == nil {
+			say(doctor.WorkflowPermissionsNote(workflowPerm))
+		}
+
+		secretList, err := client.ListSecrets(owner, name)
+		if unreachable(err) {
+			return unreachableExit(err)
+		}
+		errSecrets = err
+		existingSecrets = map[string]bool{}
+		for _, s := range secretList {
+			existingSecrets[s.Name] = true
+		}
+		labelList, err := client.ListLabels(owner, name)
+		if unreachable(err) {
+			return unreachableExit(err)
+		}
+		errLabels = err
+		existingLabels = map[string]bool{}
+		for _, l := range labelList {
+			existingLabels[l.Name] = true
+		}
+
+		// --- the inputs that are prompts: after the reads, before the writes
+		//
+		// The API key is asked for only when it will be stored — an existing
+		// secret is not replaced without --replace-secrets — and never from
+		// an argument. On a terminal, with echo off; otherwise from stdin,
+		// which is how a key is piped in. One trailing newline is dropped:
+		// the Enter that ended the prompt, or the one `echo` adds.
+		if errSecrets == nil && (!existingSecrets["ANTHROPIC_API_KEY"] || f.replace) {
+			if terminal {
+				anthropicFrom = "nothing entered"
+				promptedKey, err = readHidden(stdin, "ANTHROPIC_API_KEY (an API key from the Anthropic console; input hidden; empty to skip): ")
+			} else {
+				anthropicFrom = "nothing on stdin"
+				var raw []byte
+				raw, err = io.ReadAll(stdin)
+				promptedKey = string(raw)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "init: reading ANTHROPIC_API_KEY: %v\n", err)
+				return 1
+			}
+			promptedKey = strings.TrimSuffix(strings.TrimSuffix(promptedKey, "\n"), "\r")
+		}
+		// The plan-env path, asked for once on a terminal when the flag did
+		// not name it and a stack is planned; an empty answer skips.
+		if errSecrets == nil && terminal && f.planEnvFile == "" && planned > 0 && (!existingSecrets["FALCONET_PLAN_ENV"] || f.replace) {
+			fmt.Fprint(os.Stderr, "FALCONET_PLAN_ENV: path to a JSON object of the variables the planned stacks need (kept outside the repository; empty to skip): ")
+			line, err := stdin.ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				fmt.Fprintf(os.Stderr, "init: reading the path: %v\n", err)
+				return 1
+			}
+			if path := strings.TrimSpace(line); path != "" {
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(cwd, path)
+				}
+				planEnv, err = os.ReadFile(path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "init: cannot read %s: %v\n", path, err)
+					return 1
+				}
+				if _, err := planenv.Parse(planEnv); err != nil {
+					fmt.Fprintf(os.Stderr, "init: validation: %v\n", err)
+					return 1
+				}
+				f.planEnvFile = path
+			}
+		}
+	}
+
+	// --- step 6: the labels, the first write ----------------------------------
+	//
+	// Deliberately first: idempotent and harmless, so a token short of a
+	// permission fails here, before anything harder to undo. A 403 names the
+	// permission and stops. A 422 is GitHub saying the label exists — one
+	// the list did not carry, or a race — which is the state wanted.
+	want := doctor.Labels{
+		Queue:     cfg.Schema.Issue.QueueLabel,
+		NeedsInfo: cfg.Schema.Labels.NeedsInfo,
+		Human:     cfg.Schema.Labels.Human,
+		PR:        cfg.Schema.Labels.PR,
+	}
+	switch {
+	case token == "":
+		say(doctor.Line{Status: doctor.Skipped, Step: 6, Text: "the four labels (no FALCONET_SETUP_TOKEN)"})
+		left.add(leftLabels, setup.LeftLabels)
+	case errLabels != nil:
+		say(doctor.Refused(6, "the four labels", errLabels, needsIssuesWrite))
+		fmt.Fprintf(os.Stderr, "init: cannot read the labels, so cannot create them: %v\n", errLabels)
+		return 1
+	default:
+		for _, step := range setup.Labels(want, sortedKeys(existingLabels)) {
+			if step.Create == nil {
+				say(doctor.Line{Status: doctor.OK, Step: 6, Text: "label " + step.Name + " exists"})
+				continue
+			}
+			err := client.CreateLabel(owner, name, *step.Create)
+			var e *github.Error
+			switch {
+			case err == nil:
+				say(doctor.Line{Status: doctor.Done, Step: 6, Text: "label " + step.Name + " created"})
+			case errors.As(err, &e) && e.Status == http.StatusUnprocessableEntity:
+				say(doctor.Line{Status: doctor.OK, Step: 6, Text: "label " + step.Name + " exists"})
+			default:
+				return refusedWrite(6, "could not create label "+step.Name, err, needsIssuesWrite)
+			}
+		}
+	}
+
+	// --- steps 4, 5 and 3: the secrets ------------------------------------------
+	//
+	// The public key is fetched once, when the first value is to be sealed,
+	// and a 403 on it or on a PUT names Secrets: write and stops — after the
+	// labels, before the local files. A secret that exists is left alone
+	// unless --replace-secrets; a value can never be read back, so the name
+	// is the check, as doctor says.
+	switch {
+	case token == "":
+		say(doctor.Line{Status: doctor.Skipped, Step: 4, Text: "secret ANTHROPIC_API_KEY (no FALCONET_SETUP_TOKEN)"})
+		left.add(leftAnthropic, setup.LeftAnthropic)
+		if planned == 0 {
+			say(doctor.SecretLine(doctor.Secret{Name: "FALCONET_PLAN_ENV", Step: 5}, nil, planned, true))
+		} else {
+			say(doctor.Line{Status: doctor.Skipped, Step: 5, Text: "secret FALCONET_PLAN_ENV (no FALCONET_SETUP_TOKEN)"})
+			left.add(leftPlanEnv, setup.LeftPlanEnv)
+		}
+		say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (no FALCONET_SETUP_TOKEN)"})
+		left.add(leftApp, setup.LeftApp)
+	case errSecrets != nil:
+		say(doctor.Refused(3, "the secrets", errSecrets, needsSecretsWrite))
+		fmt.Fprintf(os.Stderr, "init: cannot read the secrets, so cannot store them: %v\n", errSecrets)
+		return 1
+	default:
+		var publicKey []byte
+		var keyID string
+		// store seals value as the secret called secretName, fetching the
+		// public key on first use. rc is non-zero when the run must stop.
+		store := func(step int, secretName string, value []byte) (rc int) {
+			if publicKey == nil {
+				pk, err := client.GetSecretsPublicKey(owner, name)
+				if err != nil {
+					return refusedWrite(step, "could not read the repository's secrets public key", err, needsSecretsWrite)
+				}
+				publicKey, err = secrets.DecodeKey(pk.Key)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "init: %v\n", err)
+					return 1
+				}
+				keyID = pk.KeyID
+			}
+			sealed, err := secrets.Seal(publicKey, value)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "init: %v\n", err)
+				return 1
+			}
+			if err := client.PutSecret(owner, name, secretName, sealed, keyID); err != nil {
+				return refusedWrite(step, "could not store secret "+secretName, err, needsSecretsWrite)
+			}
+			what := "stored"
+			if existingSecrets[secretName] {
+				what = "replaced"
+			}
+			say(doctor.Line{Status: doctor.Done, Step: step, Text: "secret " + secretName + " " + what + " (sealed to key " + keyID + ")"})
+			return 0
+		}
+		exists := func(step int, secretName string) {
+			say(doctor.Line{Status: doctor.OK, Step: step, Text: "secret " + secretName + " exists (not replaced; --replace-secrets would)"})
+		}
+
+		// Step 4.
+		switch {
+		case existingSecrets["ANTHROPIC_API_KEY"] && !f.replace:
+			exists(4, "ANTHROPIC_API_KEY")
+		case promptedKey == "":
+			say(doctor.Line{Status: doctor.Skipped, Step: 4, Text: "secret ANTHROPIC_API_KEY (" + anthropicFrom + ")"})
+			left.add(leftAnthropic, setup.LeftAnthropic)
+		default:
+			if rc := store(4, "ANTHROPIC_API_KEY", []byte(promptedKey)); rc != 0 {
+				return rc
+			}
+		}
+		// Step 5.
+		switch {
+		case existingSecrets["FALCONET_PLAN_ENV"] && !f.replace:
+			exists(5, "FALCONET_PLAN_ENV")
+		case f.planEnvFile == "" && planned == 0:
+			say(doctor.SecretLine(doctor.Secret{Name: "FALCONET_PLAN_ENV", Step: 5}, nil, planned, true))
+		case f.planEnvFile == "":
+			say(doctor.Line{Status: doctor.Skipped, Step: 5, Text: "secret FALCONET_PLAN_ENV (no --plan-env-file)"})
+			left.add(leftPlanEnv, setup.LeftPlanEnv)
+		default:
+			if rc := store(5, "FALCONET_PLAN_ENV", planEnv); rc != 0 {
+				return rc
+			}
+		}
+		// Step 3: by hand, from the flags, until #12 makes the App by
+		// manifest. sealApp is the seam: #12's flow produces the same two
+		// values and hands them here.
+		sealApp := func(appID string, privateKey []byte) int {
+			if rc := store(3, "FALCONET_APP_ID", []byte(appID)); rc != 0 {
+				return rc
+			}
+			return store(3, "FALCONET_APP_PRIVATE_KEY", privateKey)
+		}
+		hasApp := existingSecrets["FALCONET_APP_ID"] && existingSecrets["FALCONET_APP_PRIVATE_KEY"]
+		switch {
+		case f.appID != "" && hasApp && !f.replace:
+			exists(3, "FALCONET_APP_ID")
+			exists(3, "FALCONET_APP_PRIVATE_KEY")
+		case f.appID != "":
+			if rc := sealApp(f.appID, appKey); rc != 0 {
+				return rc
+			}
+		case hasApp:
+			exists(3, "FALCONET_APP_ID")
+			exists(3, "FALCONET_APP_PRIVATE_KEY")
+		default:
+			say(doctor.Line{Status: doctor.Skipped, Step: 3, Text: "secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (no --app-id and --app-key; #12 will create the App by manifest)"})
+			left.add(leftApp, setup.LeftApp)
+		}
+	}
 
 	// --- the local files: steps 2, 7 and 8 -----------------------------------
 	//
@@ -490,10 +880,42 @@ func (l leftovers) inOrder() []string {
 	return out
 }
 
+// The fine-grained permission each write needs, named in a refusal. init
+// needs write where doctor needs read, and write includes read, so the
+// write level is what a refused read is told to add as well.
+const (
+	needsIssuesWrite  = "Issues: write"
+	needsSecretsWrite = "Secrets: write"
+)
+
+// refusedWrite is a write GitHub refused: the line, the error, and exit 1.
+// A 403 names the permission the token is short of.
+func refusedWrite(step int, what string, err error, needs string) int {
+	var e *github.Error
+	if errors.As(err, &e) && (e.Status == http.StatusForbidden || e.Status == http.StatusNotFound) {
+		fmt.Fprintf(os.Stderr, "init: %s: %v — the token needs %s\n", what, err, needs)
+	} else {
+		fmt.Fprintf(os.Stderr, "init: %s: %v\n", what, err)
+	}
+	fmt.Fprintf(os.Stderr, "stopped at step %d; what was done before it stands, and a second run carries on from here\n", step)
+	return 1
+}
+
+// unreachable is an error that is not GitHub answering: nothing to decide
+// against, and every later call would wait out the timeout to say the same.
+func unreachable(err error) bool {
+	return err != nil && !isHTTP(err)
+}
+
+func unreachableExit(err error) int {
+	fmt.Fprintf(os.Stderr, "init: %v\n", err)
+	return 1
+}
+
 // isTerminal is whether stdin is a terminal a person is typing at. `stty`
 // answers it exactly — it refuses anything that is not a terminal, /dev/null
-// included; without stty, a character device that is not /dev/null is the
-// best the standard library can say.
+// included — and is what turns echo off below; without stty, a character
+// device that is not /dev/null is the best the standard library can say.
 func isTerminal() bool {
 	if stty, err := exec.LookPath("stty"); err == nil {
 		probe := exec.Command(stty, "-g")
@@ -508,6 +930,55 @@ func isTerminal() bool {
 		return false
 	}
 	return true
+}
+
+// readHidden prompts on stderr and reads one line from the terminal with
+// echo off, restoring it whatever happens — on an error, and on an
+// interrupt, which would otherwise leave the shell silent. There is no
+// x/term (ADR-0006 D1 names one dependency, and this is not it): echo is
+// turned off with `stty -echo` on the terminal stdin names, as a
+// subprocess, and turned back on the same way. On a terminal where stty is
+// unavailable it says so and reads with echo.
+func readHidden(stdin *bufio.Reader, prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	restore := echoOff()
+	defer restore()
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupted)
+	go func() {
+		if _, ok := <-interrupted; ok {
+			restore()
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130)
+		}
+	}()
+	line, err := stdin.ReadString('\n')
+	fmt.Fprintln(os.Stderr) // the Enter that was not echoed
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return line, nil
+}
+
+// echoOff turns the terminal's echo off and returns what turns it back on.
+func echoOff() func() {
+	stty, err := exec.LookPath("stty")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\ninit: stty is not available, so the key will be visible as you type")
+		return func() {}
+	}
+	off := exec.Command(stty, "-echo")
+	off.Stdin = os.Stdin
+	if err := off.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "\ninit: stty -echo failed, so the key will be visible as you type")
+		return func() {}
+	}
+	return func() {
+		on := exec.Command(stty, "echo")
+		on.Stdin = os.Stdin
+		_ = on.Run()
+	}
 }
 
 // askStacks is the terminal's way of sorting the stacks the flags did not:
@@ -556,6 +1027,10 @@ func currentBranch() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func sortedKeys(m map[string]bool) []string {
+	return doctor.SortedKeys(m)
 }
 
 func orNone(names []string) string {

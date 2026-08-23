@@ -19,8 +19,16 @@
 // step's Check: line into a question with a mechanical answer; init turns
 // each step's write into one too. Steps 2, 7 and 8 need no token (#10);
 // steps 4, 5 and 6 need one, and step 3's two secrets can be sealed from
-// flags until #12 makes the App by manifest (#11). This is #10: the local
-// steps, and the words for what is left.
+// flags until #12 makes the App by manifest (#11).
+//
+// # Every read before any write, and the first write is the idempotent one
+//
+// ADR-0006 D4: classic tokens report their scopes in X-OAuth-Scopes, and
+// fine-grained ones report nothing, so the only way to learn what a token
+// can do is to try. init performs every read first, and its first write is
+// the labels — idempotent and harmless — so a token short of `Secrets:
+// write` fails there, before anything hard to undo has happened, with the
+// missing permission named.
 //
 // # Committed, never pushed
 //
@@ -44,7 +52,53 @@ import (
 	"strings"
 
 	"github.com/zetlen/falconet/internal/doctor"
+	"github.com/zetlen/falconet/internal/github"
 )
+
+// --- step 6: the labels ----------------------------------------------------
+
+// LabelStep is one of the four labels, in README order: what to call it,
+// and the label to create when it does not exist — nil when it does, or
+// when an earlier config key already named the same label (two keys naming
+// one label is one label).
+type LabelStep struct {
+	Name   string
+	Create *github.Label
+}
+
+// style is the colour and description each label is created with, keyed by
+// the config key that names it. The descriptions are README step 6's
+// "Applied by" column, so the label explains itself on the issue; the
+// colours are GitHub's own palette — blue for the queue a person feeds,
+// yellow for a question, red for a hand-over, purple for a pull request.
+var style = map[string]struct{ Color, Description string }{
+	"queue":      {"1d76db", "Queued for falconet: a person applies this to request a change"},
+	"needs_info": {"fbca04", "falconet paused with a question for the requester"},
+	"human":      {"d93f0b", "falconet paused: a person has to take this one over"},
+	"pr":         {"5319e7", "Opened by falconet: the plan in the body needs review"},
+}
+
+// Labels is step 6 as a plan: for each of the four, whether to create it,
+// given the labels ListLabels returned. A name that exists is not created;
+// a name that is created once is not created twice.
+func Labels(want doctor.Labels, existing []string) []LabelStep {
+	have := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		have[n] = true
+	}
+	keys := []string{"queue", "needs_info", "human", "pr"}
+	steps := make([]LabelStep, 0, 4)
+	for i, name := range want.Names() {
+		step := LabelStep{Name: name}
+		if !have[name] {
+			s := style[keys[i]]
+			step.Create = &github.Label{Name: name, Color: s.Color, Description: s.Description}
+			have[name] = true
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
 
 // --- step 7: the stacks and the config -------------------------------------
 
@@ -384,15 +438,14 @@ const (
 	LeftApp = "step 3 — the GitHub App: register one (Settings → Developer settings → GitHub Apps → New GitHub App; " +
 		"webhook off; repository permissions Contents, Issues and Pull requests: read and write; installable only on this account), " +
 		"note its App ID, generate a private key, Install App on this repository, then: " +
-		"gh secret set FALCONET_APP_ID --body '<the App ID>' and gh secret set FALCONET_APP_PRIVATE_KEY < <the .pem>, and delete the .pem   " +
-		"(#11 seals these from flags; #12 creates the App by manifest)"
+		"falconet init --app-id <App ID> --app-key <the .pem>   (#12 will create the App by manifest, and the flags will go)"
 	LeftAnthropic = "step 4 — store the Anthropic API key (an API key from the console, not a Claude Code subscription token): " +
-		"gh secret set ANTHROPIC_API_KEY   (#11 seals it from a no-echo prompt, or from stdin)"
+		"falconet init with FALCONET_SETUP_TOKEN set reads it from a no-echo prompt, or from stdin   (or: gh secret set ANTHROPIC_API_KEY)"
 	LeftPlanEnv = "step 5 — store the planning environment, one JSON object of the variables the planned stacks need " +
 		"(backend keys, provider tokens, TF_VAR_*; read-only credentials; contents, not paths), written to a file OUTSIDE the repository: " +
-		"jq -e 'type == \"object\"' < that-file && gh secret set FALCONET_PLAN_ENV < that-file, then delete it   (#11 validates and seals it from --plan-env-file)"
-	LeftLabels = "step 6 — create the four labels: " +
-		"for l in infra-request needs-info ready-for-human needs-plan-review; do gh label create \"$l\"; done   (#11 creates the missing ones)"
+		"falconet init --plan-env-file <that file>, then delete it   (or: gh secret set FALCONET_PLAN_ENV < that-file)"
+	LeftLabels = "step 6 — create the four labels: falconet init with FALCONET_SETUP_TOKEN set   " +
+		"(or: for l in infra-request needs-info ready-for-human needs-plan-review; do gh label create \"$l\"; done)"
 	LeftPrompt = "step 7 — edit the standing-facts block in " + PromptPath + ": it describes the repository falconet was extracted from " +
 		"(its registrar sandbox, its scratch tenant), and the agent will believe it of this one until it says what is true here"
 	LeftPromptUnset = "step 7 — prompts.implement is not set, so the shipped prompt is used, and its standing facts are the origin's: " +

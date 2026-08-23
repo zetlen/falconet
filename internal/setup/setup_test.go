@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -21,6 +22,64 @@ func check(t *testing.T, f any) {
 	t.Helper()
 	if err := quick.Check(f, &quick.Config{MaxCount: maxCount}); err != nil {
 		t.Error(err)
+	}
+}
+
+// --- step 6: the labels ----------------------------------------------------------
+
+func TestLabelsCreatesWhatIsMissingInReadmeOrder(t *testing.T) {
+	want := doctor.Labels{Queue: "infra-request", NeedsInfo: "needs-info", Human: "ready-for-human", PR: "needs-plan-review"}
+	for _, tc := range []struct {
+		existing []string
+		create   []string
+	}{
+		{nil, []string{"infra-request", "needs-info", "ready-for-human", "needs-plan-review"}},
+		{[]string{"infra-request", "needs-info", "ready-for-human", "needs-plan-review"}, nil},
+		{[]string{"infra-request", "ready-for-human", "needs-plan-review"}, []string{"needs-info"}},
+		{[]string{"bug", "needs-info"}, []string{"infra-request", "ready-for-human", "needs-plan-review"}},
+	} {
+		steps := Labels(want, tc.existing)
+		if len(steps) != 4 {
+			t.Fatalf("%v: %d steps", tc.existing, len(steps))
+		}
+		var got []string
+		for i, s := range steps {
+			if s.Name != want.Names()[i] {
+				t.Errorf("%v: step %d is %s, want %s", tc.existing, i, s.Name, want.Names()[i])
+			}
+			if s.Create != nil {
+				got = append(got, s.Create.Name)
+				if s.Create.Name != s.Name || s.Create.Color == "" || s.Create.Description == "" {
+					t.Errorf("%v: label %+v is not fully described", tc.existing, *s.Create)
+				}
+			}
+		}
+		if !reflect.DeepEqual(got, tc.create) {
+			t.Errorf("%v: creates %v, want %v", tc.existing, got, tc.create)
+		}
+	}
+}
+
+func TestTwoKeysNamingOneLabelCreateItOnce(t *testing.T) {
+	want := doctor.Labels{Queue: "same", NeedsInfo: "same", Human: "h", PR: "p"}
+	steps := Labels(want, nil)
+	created := 0
+	for _, s := range steps {
+		if s.Create != nil && s.Name == "same" {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("'same' created %d times", created)
+	}
+}
+
+func TestEveryLabelColourIsSixHexDigits(t *testing.T) {
+	hex := regexp.MustCompile(`^[0-9a-f]{6}$`)
+	for key, s := range style {
+		if !hex.MatchString(s.Color) {
+			t.Errorf("%s: colour %q is not what GitHub accepts", key, s.Color)
+		}
 	}
 }
 

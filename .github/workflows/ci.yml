@@ -49,15 +49,20 @@ jobs:
 
       # vet, staticcheck and errcheck are the fail-closed discipline ADR-0006
       # D1 chose instead of a type system: an ignored error is a red build.
-      # They are pinned dev tools, not module dependencies; go.mod has none.
+      # They are pinned dev tools, not module dependencies. govulncheck joined
+      # them with the one module dependency (#11): golang.org/x/crypto, for
+      # the sealed box, is the first thing in go.mod a vulnerability report
+      # could name, and a red build is how that report is read.
       - name: Vet, lint, and refuse ignored errors
         run: |
           set -euo pipefail
           go vet ./...
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
           go install github.com/kisielk/errcheck@v1.20.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           "$(go env GOPATH)/bin/staticcheck" ./...
           "$(go env GOPATH)/bin/errcheck" ./...
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
       - name: Unit tests
         run: go test ./...
