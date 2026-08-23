@@ -65,3 +65,100 @@ func TestRoot(t *testing.T) {
 		}
 	})
 }
+
+func TestRepository(t *testing.T) {
+	clone := func(t *testing.T, origin string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v: %s", err, out)
+		}
+		if origin != "" {
+			if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", origin).CombinedOutput(); err != nil {
+				t.Fatalf("git remote add: %v: %s", err, out)
+			}
+		}
+		return dir
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GITHUB_SERVER_URL", "")
+
+	t.Run("$GITHUB_REPOSITORY wins over any remote", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "zetlen/wayfinders-infra")
+		owner, name, err := Repository(clone(t, "https://gitlab.com/other/place.git"))
+		if err != nil || owner != "zetlen" || name != "wayfinders-infra" {
+			t.Errorf("got (%q, %q, %v)", owner, name, err)
+		}
+	})
+	t.Run("a malformed $GITHUB_REPOSITORY is an error, not a fall-through to the remote", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "noslash")
+		_, _, err := Repository(clone(t, "https://github.com/o/r.git"))
+		if err == nil || !strings.Contains(err.Error(), "GITHUB_REPOSITORY") {
+			t.Errorf("got %v", err)
+		}
+	})
+	t.Run("the origin remote, in each shape git writes", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "")
+		for _, origin := range []string{
+			"https://github.com/zetlen/wayfinders-infra",
+			"https://github.com/zetlen/wayfinders-infra.git",
+			"git@github.com:zetlen/wayfinders-infra.git",
+			"ssh://git@github.com/zetlen/wayfinders-infra.git",
+		} {
+			owner, name, err := Repository(clone(t, origin))
+			if err != nil || owner != "zetlen" || name != "wayfinders-infra" {
+				t.Errorf("%s: got (%q, %q, %v)", origin, owner, name, err)
+			}
+		}
+	})
+	t.Run("from a subdirectory of the clone too", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "")
+		dir := clone(t, "https://github.com/o/r")
+		sub := filepath.Join(dir, "dns")
+		if out, err := exec.Command("mkdir", "-p", sub).CombinedOutput(); err != nil {
+			t.Fatalf("mkdir: %v: %s", err, out)
+		}
+		owner, name, err := Repository(sub)
+		if err != nil || owner != "o" || name != "r" {
+			t.Errorf("got (%q, %q, %v)", owner, name, err)
+		}
+	})
+	t.Run("an enterprise host, through $GITHUB_SERVER_URL", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "")
+		t.Setenv("GITHUB_SERVER_URL", "https://github.example.com")
+		owner, name, err := Repository(clone(t, "git@github.example.com:o/r.git"))
+		if err != nil || owner != "o" || name != "r" {
+			t.Errorf("got (%q, %q, %v)", owner, name, err)
+		}
+		_, _, err = Repository(clone(t, "https://github.com/o/r"))
+		if err == nil || !strings.Contains(err.Error(), "github.example.com") {
+			t.Errorf("github.com is not the enterprise host: got %v", err)
+		}
+	})
+	for name, origin := range map[string]string{
+		"no remote":           "",
+		"a non-GitHub remote": "https://gitlab.com/o/r.git",
+		"a local path":        "/srv/git/r.git",
+	} {
+		t.Run(name+" is an error naming both sources", func(t *testing.T) {
+			t.Setenv("GITHUB_REPOSITORY", "")
+			_, _, err := Repository(clone(t, origin))
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			for _, want := range []string{"set GITHUB_REPOSITORY=owner/name", "origin is on github.com"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error does not name %q: %v", want, err)
+				}
+			}
+		})
+	}
+	t.Run("outside a repository entirely", func(t *testing.T) {
+		t.Setenv("GITHUB_REPOSITORY", "")
+		_, _, err := Repository(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "no origin remote") {
+			t.Errorf("got %v", err)
+		}
+	})
+}

@@ -30,11 +30,23 @@ What it answers:
       rather than in production.
     - DIR/responses.json, if present, is re-read on EVERY request: a list of
       {"method": "POST", "path": "/repos/o/r/issues/1/comments",
-       "status": 500, "body": {...}} objects, first match wins, either key
-      optional. A test writes it to make one call fail and removes it to let
-      the next one through.
-    - otherwise the routes below, with bodies shaped like GitHub's.
+       "status": 500, "body": {...}, "headers": {"X-OAuth-Scopes": "repo"}}
+      objects, first match wins on method+path, every key optional. A test
+      writes it to script a specific issue, pull-request list, label list,
+      secret list, permissions or a failure, and removes it to let the next
+      call through. "headers" are sent with the answer: that is how a test
+      makes the fake look like a classic token's GitHub.
+    - otherwise the routes below, with bodies shaped like GitHub's. The
+      defaults are a private repository with issues enabled, Actions
+      allowing every action, a read-only default token, NO secrets and NO
+      labels (a test scripts the ones it wants to exist), and an empty
+      pull-request and comment list. GET …/issues/N has NO default and is
+      404 on purpose: a test that forgot to script its issue fails loudly
+      rather than passing on an invented one.
     - anything else is 404 {"message": "Not Found"}.
+
+The query string is recorded (requests.jsonl's "query") and ignored for
+matching: "/labels?per_page=100" answers as "/labels".
 
 The server exits on its own when its parent process does (it watches
 getppid), so a test file that dies without reaching its trap leaks nothing;
@@ -42,6 +54,7 @@ tests/lib.sh kills it anyway.
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -51,9 +64,47 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+# The secrets public key is FIXED — 32 bytes, 1 through 32 — so a sealed
+# value a test records is reproducible, and the key id is the one GitHub's
+# own documentation uses as its example.
+PUBLIC_KEY = {
+    "key_id": "568250167242549743",
+    "key": base64.b64encode(bytes(range(1, 33))).decode("ascii"),
+}
+
 ROUTES = [
     # (method, path regex, handler) — the handler gets the match and the
     # parsed body and returns (status, body).
+    #
+    # --- reads -------------------------------------------------------------
+    ("GET", r"^/repos/([^/]+)/([^/]+)$",
+     lambda m, b: (200, {
+         "name": m[2], "full_name": f"{m[1]}/{m[2]}", "owner": {"login": m[1]},
+         "private": True, "visibility": "private", "has_issues": True,
+         "default_branch": "main",
+     })),
+    # GET …/issues/N: deliberately no route (404) — see the docstring.
+    ("GET", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
+     lambda m, b: (200, [])),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/pulls$",
+     lambda m, b: (200, [])),
+    ("GET", r"^/user$",
+     lambda m, b: (200, {"login": "fake-user", "type": "User"})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions$",
+     lambda m, b: (200, {"enabled": True, "allowed_actions": "all"})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions/selected-actions$",
+     lambda m, b: (200, {"github_owned_allowed": True, "verified_allowed": False,
+                         "patterns_allowed": []})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions/workflow$",
+     lambda m, b: (200, {"default_workflow_permissions": "read",
+                         "can_approve_pull_request_reviews": False})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/secrets$",
+     lambda m, b: (200, {"total_count": 0, "secrets": []})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/secrets/public-key$",
+     lambda m, b: (200, dict(PUBLIC_KEY))),
+    ("GET", r"^/repos/([^/]+)/([^/]+)/labels$",
+     lambda m, b: (200, [])),
+    # --- writes ------------------------------------------------------------
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
      lambda m, b: (201, {
          "id": 1,
@@ -65,6 +116,23 @@ ROUTES = [
                    if isinstance(b, dict) else [])),
     ("DELETE", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/assignees$",
      lambda m, b: (200, {"number": int(m[3]), "assignees": []})),
+    ("DELETE", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/labels/([^/]+)$",
+     lambda m, b: (200, [])),
+    ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/assignees$",
+     lambda m, b: (201, {
+         "number": int(m[3]),
+         "assignees": [{"login": login} for login in (b or {}).get("assignees", [])]
+         if isinstance(b, dict) else [],
+     })),
+    ("POST", r"^/repos/([^/]+)/([^/]+)/labels$",
+     lambda m, b: (201, {
+         "id": 1,
+         "name": (b or {}).get("name") if isinstance(b, dict) else None,
+         "color": (b or {}).get("color", "ededed") if isinstance(b, dict) else "ededed",
+         "description": (b or {}).get("description", "") if isinstance(b, dict) else "",
+     })),
+    ("PUT", r"^/repos/([^/]+)/([^/]+)/actions/secrets/([^/]+)$",
+     lambda m, b: (201, {})),
 ]
 
 
@@ -84,6 +152,7 @@ class State:
                 f.write(json.dumps(entry, sort_keys=True) + "\n")
 
     def scripted(self, method, path):
+        # -> (status, body, headers) or None
         try:
             with open(os.path.join(self.dir, "responses.json")) as f:
                 rules = json.load(f)
@@ -94,7 +163,8 @@ class State:
                 continue
             if "path" in rule and rule["path"] != path:
                 continue
-            return int(rule.get("status", 200)), rule.get("body", {})
+            return (int(rule.get("status", 200)), rule.get("body", {}),
+                    rule.get("headers") or {})
         return None
 
 
@@ -123,25 +193,31 @@ class Handler(BaseHTTPRequestHandler):
             "body": body,
         })
 
+        extra = {}
         if not self.headers.get("Authorization"):
             status, answer = 401, {"message": "Requires authentication"}
         else:
             found = self.state.scripted(method, path)
-            if found is None:
+            if found is not None:
+                status, answer, extra = found
+            else:
+                found = None
                 for m, pattern, handler in ROUTES:
                     match = re.match(pattern, path)
                     if m == method and match:
                         found = handler(match, body)
                         break
-            if found is None:
-                found = 404, {"message": "Not Found",
-                              "documentation_url": "https://docs.github.com/rest"}
-            status, answer = found
+                if found is None:
+                    found = 404, {"message": "Not Found",
+                                  "documentation_url": "https://docs.github.com/rest"}
+                status, answer = found
 
         payload = json.dumps(answer).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        for k, v in extra.items():
+            self.send_header(k, v)
         self.end_headers()
         if method != "HEAD":
             self.wfile.write(payload)
