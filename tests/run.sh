@@ -30,7 +30,9 @@ filter="${1:-}"
 failed=0
 ran=0
 for t in "$TEST_DIR"/*.test.sh; do
-  [[ -z "$filter" || "$t" == *"$filter"* ]] || continue
+  # The file's name, not its path: a checkout whose directory is named after
+  # a verb (a worktree called doctor/) would otherwise match every file.
+  [[ -z "$filter" || "$(basename "$t")" == *"$filter"* ]] || continue
   ran=$((ran + 1))
   echo "=== $(basename "$t")"
   bash "$t" || failed=$((failed + 1))

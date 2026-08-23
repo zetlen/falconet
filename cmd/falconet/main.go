@@ -53,6 +53,7 @@ const usageText = `Usage: falconet <verb> [args]
   validate  validate and plan every configured stack, collecting failures
   pause     put an issue into a terminal state and say so where it will be read
   assemble  build a pull-request body carrying the whole plan
+  doctor    check a repository against the install steps, and say which are missing
   version   print the version and the toolchain this binary was built with
 
 Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
@@ -69,17 +70,17 @@ var (
 // handed to its bash script by fallback until its port lands (ADR-0006 D3
 // step 2); the map grows one entry per port, and fallback is deleted in #19.
 var native = map[string]func(args []string) int{
-	"version":  runVersion,
-	"config":   runConfig,
-	"assemble": runAssemble,
-	"commit":   runCommit,
-	"scan":     runScan,
-	"push":     runPush,
-	"pause":    runPause,
-	"validate": runValidate,
-	"prompt":   runPrompt,
-
+	"version":        runVersion,
+	"config":         runConfig,
+	"assemble":       runAssemble,
+	"commit":         runCommit,
+	"scan":           runScan,
+	"push":           runPush,
+	"pause":          runPause,
+	"validate":       runValidate,
+	"prompt":         runPrompt,
 	"review-verdict": runReviewVerdict,
+	"doctor":         runDoctor,
 }
 
 func main() {
