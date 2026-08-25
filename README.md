@@ -542,6 +542,12 @@ numbering both verbs use. Every `gh` command here runs from inside the
 repository you are installing into; `gh` and `jq` are the manual path's
 tools, on your machine, not things falconet needs.
 
+It stays in this file on purpose, at its full length. It is the honest
+measure of what installing this thing costs a person, and shortening the
+document does not shorten the install — every step here is one `init` has to
+do correctly, and one `doctor` has to be able to check. Move it to its own
+file and the cost stops being visible; the length is the point.
+
 1. [Check the repository qualifies](#1-check-the-repository-qualifies)
 2. [Ignore the handoff directory](#2-ignore-the-handoff-directory)
 3. [Create the GitHub App and store its two secrets](#3-create-the-github-app-and-store-its-two-secrets)
