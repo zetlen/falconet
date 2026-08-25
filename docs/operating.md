@@ -85,9 +85,6 @@ ran the one live run so far on it (2026-08-21, issue #106 → PR #108, on the
 bash); it pins a tag now, and the canary after v0.2.0 is the binary's first
 live run.
 
-**The provenance** is [`docs/provenance/`](provenance/), extracted at
-`wayfinders-infra@97b5669` — the last commit where the pipeline was live.
-
 ## What deliberately stayed behind
 
 `ci-deploy-receipt.sh` reports on an apply. falconet never applies, so it

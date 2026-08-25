@@ -5,26 +5,12 @@ picked on purpose. This one turns a plain-language infrastructure request into
 a reviewed pull request carrying a real `tofu plan` — and then stops, because
 applying is a human's job.
 
-**Status: it works, and it is one binary.** One issue has become one reviewed
-pull request, on a real runner: the first consumer installed it on 2026-08-21
-and the canary reached a pull request the same evening, carrying the whole
-plan and labelled for review, after five failed attempts that found five
-wiring bugs nothing here could have found on its own — a caller granted less
-than a job declares, an agent job that could not clone a private repository,
-`upload-artifact` silently dropping a dot-directory, a log line on stdout
-breaking a step's output, and an artifact rooted at a least common ancestor.
-Each is fixed and each is a case. Three of the five were **fail-open** —
-green steps that had done nothing. That run was on the bash this started as.
-Since then the whole tool has been rewritten in Go
-([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)): one static binary runs
-in CI, where every job installs it from a release and checks its digest, and
-on a laptop, where `falconet init` does the install steps that used to be an
-afternoon of `gh` and `falconet doctor` checks them. The suite is
-`bash tests/run.sh` — 16 files, 892 cases, every one through the binary —
-and `go test ./...` over 19 packages. The binary has run live since v0.2.0,
-and the first thing it found was a pull request carrying a true plan of the
-wrong stack ([#23](https://github.com/zetlen/falconet/issues/23), fixed:
-the plan follows the change now). See
+**Status: it works, and it is one binary.** One static Go binary runs in CI,
+where every job installs it from a release and checks its digest, and on a
+laptop, where `falconet init` does the install and `falconet doctor` checks
+it. It has run live on a real consumer since 2026-08-21 and reached pull
+requests carrying whole plans. Each live run has also found a wiring bug that
+no unit test could see, and each is now a case in the suite. See
 [Where this stands](#where-this-stands).
 
 ## What it does
@@ -451,23 +437,18 @@ the trade it makes and why.
 
 What a run needs, in CI: git, tofu, gitleaks and the binary, and nothing
 else. [`action.yml`](action.yml) installs all three as the first step of
-every job — tofu through `opentofu/setup-opentofu` (whatever release that
-action resolves; falconet pins no tofu version), gitleaks and falconet by
-version and digest, falconet's digest being the one committed in this tree
-at [`release/`](release/). On a workstation, the same, plus a browser for
-`init`'s App step. `jq` and `gh` are not things falconet runs any more: the
-verbs speak to `GITHUB_API_URL` themselves, and the prompts are embedded in
-the binary. `gh` is still used in two of the workflow's own `run:` steps —
-`publish` opens the pull request with `gh pr create`, and `contain` reads the
-issue's state, its labels and the open pull requests with `gh issue view` and
-`gh pr list` — with the App token, on GitHub's runner, where `gh` already is.
-Nothing the binary does needs it.
+every job — tofu through `opentofu/setup-opentofu`, gitleaks and falconet by
+version and digest, falconet's digest being the one committed in this tree at
+[`release/`](release/). On a workstation, the same, plus a browser for
+`init`'s App step. The binary needs neither `jq` nor `gh`: the verbs speak to
+`GITHUB_API_URL` themselves. (The workflow still uses `gh` in two of its own
+`run:` steps, on GitHub's runner, where it already is.)
 
 The same verbs run by hand, against the repository you are standing in — no
-workflow. The two that speak to GitHub, `prepare` and `pause`, read `GH_TOKEN`
-(then `GITHUB_TOKEN`) and `GITHUB_REPOSITORY=owner/name`; `prepare` falls
-back to the origin remote, and `pause` — which operates on an issue rather
-than a tree — deliberately does not. The rest need nothing:
+workflow. `prepare` and `pause` read `GH_TOKEN` (then `GITHUB_TOKEN`) and
+`GITHUB_REPOSITORY=owner/name`; `prepare` falls back to the origin remote,
+and `pause` — which operates on an issue rather than a tree — deliberately
+does not. The rest need nothing:
 
 ```sh
 falconet validate --base "$(git rev-parse main)"
@@ -493,61 +474,32 @@ falconet validate --base "$(git rev-parse main)"
 
 ## Why it exists
 
-It was built inside an OpenTofu repository ([the provenance is
-here](docs/provenance/)) and worked well enough that the surrounding repo
-became mostly pipeline: ~4,700 lines of workflow and shell against ~1,000
-lines of actual infrastructure. Two attempts to escape that — adopting an
-off-the-shelf agentic workflow, or trimming in place — both concluded the same
-way: the workflow is a good tool wearing a repository as a costume.
-
-So it becomes a tool. [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md)
-is the founding record, including the measurements that killed the
-off-the-shelf option.
+It was built inside an OpenTofu repository and worked well enough that the
+surrounding repo became mostly pipeline: ~4,700 lines of workflow and shell
+against ~1,000 lines of actual infrastructure. Two attempts to escape that —
+adopting an off-the-shelf agentic workflow, or trimming in place — both
+concluded the same way: the workflow is a good tool wearing a repository as a
+costume. So it becomes a tool.
+[ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) is the
+founding record, including the measurements that killed the off-the-shelf
+option.
 
 ## Where this stands
 
 | Piece | State |
 | --- | --- |
-| `cmd/falconet/`, `internal/` — the binary | six verbs, two setup verbs and `version`, one static Go binary: the standard library plus `golang.org/x/crypto/nacl/box` for the sealed box the secrets API demands |
-| `tests/` — 16 files, 892 cases | passing through the binary (`make test`), with `go test ./...` over 19 packages beside it |
-| `action.yml` + `.github/workflows/falconet.yml` | install the pinned binary from the release in every job and run it; the wiring invariants held by [`tests/contract.test.sh`](tests/contract.test.sh) (99 cases); not yet run live on the binary |
-| `release/` + `.github/workflows/release.yml` | the digest in the tree before the tag, a build that reproduced on the release runner (v0.1.0, run 32600784604), four assets and `checksums.txt` per tag |
+| `cmd/falconet/`, `internal/` — the binary | six verbs, two setup verbs and `version`; the standard library plus `golang.org/x/crypto/nacl/box` for the sealed box the secrets API demands |
+| `tests/` | 16 files, 892 cases through the binary (`make test`), with `go test ./...` beside it; the wiring invariants are [`tests/contract.test.sh`](tests/contract.test.sh) |
+| `release/` + `.github/workflows/release.yml` | the digest in the tree before the tag, four assets and `checksums.txt` per tag |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
 | `prompts/` | embedded in the binary; the standing-facts block is the origin's |
-| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code, [0006](docs/adr/0006-the-rewrite-is-in-go.md) Go, and why, [0007](docs/adr/0007-the-plan-follows-the-change.md) the plan is of what changed |
-| `docs/provenance/` — the retired orchestrator | reference only |
-| A live run | **yes, on the bash.** 2026-08-21, `zetlen/wayfinders-infra` issue #106 → PR #108: acknowledgment inside a minute, one agent pass, every guard, a real plan, and a pull request carrying it in full — authored by the App, labelled `needs-plan-review`, and the consumer's own CI ran on it, which is what the App credential was for. |
-| A live run on the binary | **yes, and it found one.** v0.2.0 ran on `zetlen/wayfinders-infra` and reached pull requests. Run 32873023567 opened [#121](https://github.com/zetlen/wayfinders-infra/pull/121) carrying a true plan of a stack the change did not touch, because the plan was of the configured stacks rather than of the diff — [#23](https://github.com/zetlen/falconet/issues/23), fixed since: the plan follows the change, every plan is headed by its stack, and a change reaching nothing plannable gets a person. |
-| Rewrite | done ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)): v0.2.0 |
+| Live runs | yes, on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0. Each found a bug that only integration finds — most recently a pull request whose true plan was of a stack the change did not touch ([#23](https://github.com/zetlen/falconet/issues/23), fixed) |
 
-The port from stage-shaped scripts to a coherent CLI is done; [the plan it
-followed](docs/adr/pre-execution-plan.md) records what changed and what was
-found on the way. Preparing a consumer, and then running one, found eight
-wiring bugs that no unit test of a single verb could see — binaries not
-installed in the job that needed them, stacks not initialised before the
-baseline plan, the tool's own checkout dirtying the tree it was about to
-inspect, an install document that told people to grant less than the
-workflow declares, an agent job that could not obtain the source it was
-meant to edit, an upload that silently dropped a dot-directory, a log line on
-stdout that broke the step that printed it, and an artifact rooted somewhere
-neither job looked — each now pinned by
-[`tests/contract.test.sh`](tests/contract.test.sh). Three of them were
-failures that reported success. The rewrite that followed
-([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)) moved every verb into
-Go behind that suite, one commit each, with a differential of the bash
-against the binary over thousands of generated cases per verb, on macOS and
-on Linux; every difference is named in the commit that made it. Then the
-binary ran live, and integration found what integration finds: a pull request
-whose entire plan was "No changes. Your infrastructure matches the
-configuration." — true, and of a stack the change did not touch
-([#23](https://github.com/zetlen/falconet/issues/23),
-[ADR-0007](docs/adr/0007-the-plan-follows-the-change.md)). Nothing in a suite
-of one repository's fixtures was going to find that one; a consumer adding a
-directory did.
-
-Two further documents: [operating](docs/operating.md) covers the credentials
-only the operator can create and where the pieces live; [AGENTS.md](AGENTS.md)
-is what to read before changing anything here.
+The decisions are in [`docs/adr/`](docs/adr/): 0002 founding, 0003 the CLI
+surface, 0006 the rewrite in Go, 0007 the plan is of what changed. 0004 and
+0005 are superseded and kept for the incidents that produced them.
+[operating](docs/operating.md) covers the credentials only the operator can
+create; [AGENTS.md](AGENTS.md) is what to read before changing anything here.
 
 ## Running the tests
 

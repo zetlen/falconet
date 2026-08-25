@@ -50,10 +50,8 @@ thing.
 
 - **Do not re-propose `github/gh-aw`** or anything shaped like it. It was
   spiked, measured, and rejected with numbers in
-  [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md). Its final
-  working configuration is preserved at
-  [`docs/provenance/gh-aw-infra-request.md`](docs/provenance/gh-aw-infra-request.md).
-  Read that first.
+  [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md). Read those
+  measurements first.
 - **Do not wire up the review agent.** `review-verdict` ships unwired as the
   reference verdict protocol. Any future review harness must clear the bar the
   original set: an independent, uncontaminated read of diff, commit message
@@ -140,19 +138,13 @@ match and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found*
 match into a non-zero pipeline — the exact opposite of the answer just
 computed. Capture the whole result, then inspect it.
 
-## Reading the provenance
+## Adding a verb
 
-Header comments in [`docs/provenance/`](docs/provenance/) describe the
-pipeline in the present tense, because they were taken from the commit where
-it was live, and they reference paths that no longer exist. That is expected:
-it is a record, not a copy to keep in sync. Do not "fix" it.
-
-The port from those stage-shaped scripts to the six verbs is done
-([ADR-0003](docs/adr/0003-the-cli-surface.md) designed it,
-[the plan](docs/adr/pre-execution-plan.md) records what executing it turned
-up). If you are adding a verb, the criterion is ADR-0003's: a thing becomes
-public vocabulary if and only if a caller invokes it directly. The secret
-scan is the worked example of something that stayed internal.
+The port from the origin's stage-shaped scripts to the six verbs is done;
+[ADR-0003](docs/adr/0003-the-cli-surface.md) designed it. If you are adding a
+verb, the criterion is ADR-0003's: a thing becomes public vocabulary if and
+only if a caller invokes it directly. The secret scan is the worked example
+of something that stayed internal.
 
 ## Two roots, never one variable
 

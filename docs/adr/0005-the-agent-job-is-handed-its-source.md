@@ -1,6 +1,9 @@
 # ADR-0005 — The agent job is handed its source
 
-**Status:** Accepted · 2026-08-21
+**Status:** Superseded by [ADR-0006](0006-the-rewrite-is-in-go.md) · 2026-08-21
+*The mechanism this records is gone: no job checks falconet out into the
+consumer's tree any more — every job installs the binary from a release.
+Kept for the incident that produced it.*
 **Amends:** the job-boundary section of
 [`.github/workflows/falconet.yml`](../../.github/workflows/falconet.yml);
 [ADR-0002](0002-extract-the-pipeline-into-falconet.md) D4 (one agent pass,
