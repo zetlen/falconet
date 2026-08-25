@@ -182,6 +182,51 @@ assert_contains "$(report "$c")" "## tofu plan was not attempted" "report"
 it "and no plan.txt is left for the assembler"
 assert_file_missing "$c/repo/.falconet/plan.txt"
 
+# --- a stack the change does not reach, whose backend is not there ----------
+#
+# Every planned stack is planned now, which means every planned stack's
+# BACKEND is initialised — a credential and a network, for a stack this
+# change has nothing to do with. A repository with a stack it cannot yet
+# authenticate to (falconet#24) must still get pull requests about the
+# stacks it can. So a failed init in an unreached stack is a note in the
+# body and a line in the log, and the run carries on.
+c="$(new_checkout unreached_init)"; b="$(base_of "$c")"; with_change "$c"
+FAIL_INIT="workspace" v "$c" "$b"; reset_fail
+
+it "an unreached stack whose init failed does not fail the run"
+assert_eq 0 "$RC" "exit code"
+
+it "and leaves no report on the requester's issue"
+assert_file_missing "$c/repo/.falconet/validation-failure.txt"
+
+it "the plan a reviewer acts on is still written"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
+
+it "and the stack that could not be planned is named in the body, not omitted"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## workspace" "plan.txt"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "missing plan, not an empty one" "plan.txt"
+
+it "no plan is even attempted there, because it could only fail the same way"
+assert_not_contains "$(calls "$c")" "/workspace plan" "tofu calls"
+
+it "the run log says what happened, where a person debugging reads it"
+assert_contains "$OUT" "tofu validate (workspace/): FAILED" "stdout"
+
+# A failed VALIDATE is syntax, costs no credential to find, and is never
+# forgiven — in an unconfigured repository every discovered directory is a
+# planned stack, and forgiving both would pass a run with broken Terraform.
+c="$(new_checkout unreached_validate)"; b="$(base_of "$c")"; with_change "$c"
+FAIL_VALIDATE="workspace" v "$c" "$b"; reset_fail
+
+it "an unreached stack whose validate failed still fails the run"
+assert_eq 1 "$RC" "exit code"
+
+it "and says so in the report"
+assert_contains "$(report "$c")" "## tofu validate failed (workspace/)" "report"
+
+it "but still does not cancel the plan of what the change did reach"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "Plan: 1 to add" "plan.txt"
+
 # --- a half-written plan never reaches the assembler ------------------------
 
 c="$(new_checkout plan_fails)"; b="$(base_of "$c")"; with_change "$c"
@@ -250,10 +295,15 @@ assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns init -input=false" "tof
 it "and is initialized exactly once for both"
 assert_eq 1 "$(grep -c -- "-chdir=$(phys "$c")/dns init" "$c/tofu-calls.txt")" "dns inits"
 
-it "a validate-only stack is initialized without its backend"
-assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/workspace init -backend=false" "tofu calls"
+# Every planned stack gets a real init now, reached or not, because every
+# planned stack is planned: the module graph cannot see a
+# `terraform_remote_state` edge, so the only thing that knows whether an
+# untouched stack's plan moved is that stack's plan. The credential-free
+# init is what a validate_only stack gets, and only that.
+it "every planned stack gets a real init, so validate and plan share one"
+assert_contains "$(calls "$c")" "-chdir=$(phys "$c")/workspace init -input=false" "tofu calls"
 
-it "and the planned stack is not"
+it "and no planned stack is initialized without its backend"
 assert_not_contains "$(calls "$c")" "-chdir=$(phys "$c")/dns init -backend=false" "tofu calls"
 
 it "the plan is asked for no color, because its next reader is a file"
@@ -469,9 +519,12 @@ assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
 it "and the run log says which stacks it is about to plan"
 assert_contains "$OUT" "planning: dns" "stdout"
 
-# A planned stack the change does not reach is not planned. "No changes."
-# under a diff that changes something is the sentence this issue is about,
-# and the cheapest way not to print it is not to run the plan.
+# A planned stack the change does not reach IS planned, and headed by its
+# name. #23's sentence — "No changes." with nothing saying what it is a plan
+# of — is answered by the heading, not by declining to look: the walk over
+# `source =` cannot see a `terraform_remote_state` edge, so a stack whose
+# files did not change can still have a plan that moved, and the only thing
+# that knows is the plan.
 c="$(new_checkout untouched)"
 printf '{"stacks":{"plan":["dns","workspace"],"validate_only":["site"]}}
 ' \
@@ -481,10 +534,17 @@ settle "$c"; b="$(base_of "$c")"
 with_change "$c"
 v "$c" "$b"
 
-it "a planned stack the change does not reach is not planned"
+it "a planned stack the change does not reach is planned anyway"
 assert_eq 0 "$RC" "exit code"
 assert_contains "$(calls "$c")" "/dns plan" "tofu calls"
-assert_not_contains "$(calls "$c")" "/workspace plan" "tofu calls"
+assert_contains "$(calls "$c")" "/workspace plan" "tofu calls"
+
+it "and each plan says which stack it is of"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## workspace" "plan.txt"
+
+it "but a validate_only stack is still never planned"
+assert_not_contains "$(calls "$c")" "/site plan" "tofu calls"
 
 it "and it is still validated, because a stack broken by someone else still counts"
 assert_contains "$(calls "$c")" "/workspace validate" "tofu calls"
@@ -530,9 +590,9 @@ assert_eq 0 "$RC" "exit code"
 assert_contains "$(calls "$c")" "/talaria-gcp plan" "tofu calls"
 assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## talaria-gcp" "plan.txt"
 
-it "and the stacks it does not touch are validated and not planned"
+it "and the stacks it does not touch are validated and planned too"
 assert_contains "$(calls "$c")" "/dns validate" "tofu calls"
-assert_not_contains "$(calls "$c")" "/dns plan" "tofu calls"
+assert_contains "$(calls "$c")" "/dns plan" "tofu calls"
 
 # The repository root is never a stack: falconet runs `tofu -chdir=<stack>`
 # and never plans the tree it is standing in, so Terraform at the top belongs

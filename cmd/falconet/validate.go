@@ -428,11 +428,25 @@ func runValidate(args []string) int {
 		paths = append(paths, validate.Unquote(p))
 	}
 	touched, uncovered := stacks.Reach(paths, layout.All(), uses)
-	// The plan follows the diff: the planned stacks the change reaches, in
-	// the order the config named them. A planned stack the change does not
-	// reach is not planned, because "No changes." under a diff that changes
-	// something is the sentence that made this issue.
-	planStacks := stacks.Intersect(layout.Plan, touched)
+	// reachedPlan is the planned stacks the change reaches, in the order the
+	// config named them. It decides two things and no longer decides a third.
+	//
+	// It decides whether there is anything to plan AT ALL (below), which is
+	// #23: a change reaching no planned stack gets a person rather than a
+	// pull request carrying somebody else's plan. And it decides BLAME — a
+	// stack that fails is this change's problem only if this change reaches
+	// it.
+	//
+	// It no longer decides WHICH stacks are planned. That was a second, and
+	// weaker, answer to a question `tofu plan` answers exactly: the walk over
+	// `source =` cannot see a `terraform_remote_state` edge, so a change in
+	// one stack silently omitted the plan of another that reads its outputs.
+	// Every planned stack is planned now, each under its own heading, and a
+	// stack the change does not reach failing on its own account does not
+	// take the reviewer's plan down with it (internal/validate's
+	// PlanUnreached carries the rest of that record).
+	reachedPlan := stacks.Intersect(layout.Plan, touched)
+	planStacks := layout.Plan
 
 	// Terraform in no stack at all: nothing validated it and nothing could
 	// plan it. Collected rather than fatal — the stacks below are still
@@ -444,7 +458,7 @@ func runValidate(args []string) int {
 		if !report(validate.SectionUncovered(uncovered, layout.All(), layout.Declared, configName)) {
 			return 1
 		}
-	} else if len(layout.Plan) > 0 && len(planStacks) == 0 {
+	} else if len(layout.Plan) > 0 && len(reachedPlan) == 0 {
 		// It reached stacks, and none of them is one this repository plans.
 		// A repository that plans NOTHING has said so and is not told about
 		// it on every request; one that plans something and cannot plan this
@@ -477,6 +491,9 @@ func runValidate(args []string) int {
 	// whoever writes `-eq 1` by intuition and plans a stack whose validate
 	// just failed.
 	planStackFailed := false
+	// Stacks whose init or validate failed without failing the run: planned,
+	// unreached, and not worth spawning a plan for that can only fail too.
+	skipPlan := map[string]bool{}
 	for _, s := range layout.All() {
 		planned := contains(planStacks, s)
 		// A configured stack that is not there is a configuration error
@@ -502,7 +519,7 @@ func runValidate(args []string) int {
 
 		// init, then validate, both streams into the one scratch file, the
 		// second carrying on where the first stopped.
-		ok, output, err := initAndValidate(runner, s, planned, scratch)
+		ok, initFailed, output, err := initAndValidate(runner, s, planned, scratch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
 			return 1
@@ -511,8 +528,38 @@ func runValidate(args []string) int {
 			fmt.Println(validate.ValidateOK(s))
 			continue
 		}
+		// A planned stack the change does not reach, whose INIT failed, is
+		// advisory. Planning every stack means initialising every backend,
+		// and a backend is a credential and a network: a stack this change
+		// has nothing to do with must not stop a pull request because its
+		// bucket was unreachable, or because this repository was never given
+		// a key for it — which is the state a stack waiting on federated
+		// identity is in.
+		//
+		// A failed VALIDATE is never forgiven, in any stack, reached or not.
+		// It is syntax, it costs no credential to discover, and "a stack
+		// broken by someone else still counts" is the rule that catches it.
+		// Forgiving both would mean an unconfigured repository — where every
+		// discovered directory is a planned stack — silently passing a run
+		// with broken Terraform in it.
+		unreached := planned && !contains(reachedPlan, s)
+		if unreached {
+			// Whatever went wrong, a plan of it can only go wrong the same
+			// way. It is named in the body instead (PlanUnreached).
+			skipPlan[s] = true
+			if initFailed {
+				fmt.Println(validate.ValidateUnreachedLine(s))
+				_, _ = os.Stderr.Write(output)
+				continue
+			}
+		}
 		status = 1
-		if planned {
+		// Only a stack the change REACHES cancels the plan. A stack broken
+		// somewhere else still fails the run — the report says so, and a
+		// human sees it — but the plan of what this change actually did is
+		// still written, because that is the evidence the run exists to
+		// produce and a reviewer reading the failure needs it too.
+		if planned && !unreached {
 			planStackFailed = true
 		}
 		if !report(validate.SectionValidateFailed(s, output)) {
@@ -520,7 +567,7 @@ func runValidate(args []string) int {
 		}
 	}
 
-	// --- 6. plan (the planned stacks the change reaches) --------------------
+	// --- 6. plan (every stack the config plans) -----------------------------
 	//
 	// The command is plan.command from config (stacks.Runner.PlanCommand
 	// carries the record of how it is read). Every planned stack lands in one
@@ -536,7 +583,7 @@ func runValidate(args []string) int {
 	// and could not plan THIS gets no file, because an empty plan.txt there
 	// reads as "the plan came back empty", which is the sentence #23 is
 	// about.
-	planRefused := len(planStacks) == 0 && len(layout.Plan) > 0
+	planRefused := len(reachedPlan) == 0 && len(layout.Plan) > 0
 	switch {
 	case planStackFailed:
 		if !report(validate.SectionPlanNotAttempted()) {
@@ -553,6 +600,14 @@ func runValidate(args []string) int {
 			return 1
 		}
 		for _, s := range planStacks {
+			if skipPlan[s] {
+				if _, err := plan.WriteString(validate.PlanHeading(s) + validate.PlanUnreached(s)); err != nil {
+					_ = plan.Close()
+					fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", planPath, err)
+					return 1
+				}
+				continue
+			}
 			argv, err := runner.PlanCommand(cfg.Schema.Plan.Command, s)
 			if err != nil {
 				// A configuration error, and a mechanical one: no plan ran,
@@ -603,13 +658,29 @@ func runValidate(args []string) int {
 				fmt.Println(validate.PlanEnd(s))
 				continue
 			}
-			status = 1
 			planErr, err := os.ReadFile(scratch)
 			if err != nil {
 				_ = plan.Close()
 				fmt.Fprintf(os.Stderr, "falconet: cannot read %s: %v\n", scratch, err)
 				return 1
 			}
+			// A stack the change does not reach, failing on its own account,
+			// is named in the body and does not stop the run. It is planned
+			// at all because the module graph cannot see every edge; it is
+			// not allowed to delete a plan of stacks it has nothing to do
+			// with. Its output goes to the run log and NOT to the report,
+			// which is what a person reads on the issue.
+			if !contains(reachedPlan, s) {
+				fmt.Println(validate.PlanUnreachedLine(s))
+				if _, err := plan.WriteString(validate.PlanHeading(s) + validate.PlanUnreached(s)); err != nil {
+					_ = plan.Close()
+					fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", planPath, err)
+					return 1
+				}
+				_, _ = os.Stderr.Write(planErr)
+				continue
+			}
+			status = 1
 			if !report(validate.SectionPlanFailed(s, planErr, planBytes)) {
 				_ = plan.Close()
 				return 1
@@ -654,21 +725,26 @@ func runValidate(args []string) int {
 // be started at all is written into the output as well, so the report says
 // why there was no validate rather than showing an empty section; the
 // error return is for the scratch file itself.
-func initAndValidate(r stacks.Runner, stack string, planned bool, scratch string) (ok bool, output []byte, err error) {
+// initFailed distinguishes the two, and the caller needs the distinction:
+// `init` is the credential-and-network step and `validate` is the syntax
+// step, so a stack the change does not reach may be forgiven the first and
+// never the second. init failing short-circuits validate, which is what
+// makes the phase knowable at all.
+func initAndValidate(r stacks.Runner, stack string, planned bool, scratch string) (ok, initFailed bool, output []byte, err error) {
 	f, err := os.OpenFile(scratch, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o600)
 	if err != nil {
-		return false, nil, fmt.Errorf("cannot write %s: %v", scratch, err)
+		return false, false, nil, fmt.Errorf("cannot write %s: %v", scratch, err)
 	}
-	ok = toFile(f, stacks.Run(r.Init(stack, planned), f, f)) &&
-		toFile(f, stacks.Run(r.Validate(stack), f, f))
+	inited := toFile(f, stacks.Run(r.Init(stack, planned), f, f))
+	ok = inited && toFile(f, stacks.Run(r.Validate(stack), f, f))
 	if cerr := f.Close(); cerr != nil {
-		return false, nil, fmt.Errorf("cannot write %s: %v", scratch, cerr)
+		return false, false, nil, fmt.Errorf("cannot write %s: %v", scratch, cerr)
 	}
 	output, err = os.ReadFile(scratch)
 	if err != nil {
-		return false, nil, fmt.Errorf("cannot read %s: %v", scratch, err)
+		return false, false, nil, fmt.Errorf("cannot read %s: %v", scratch, err)
 	}
-	return ok, output, nil
+	return ok, !inited, output, nil
 }
 
 // runPlan runs the plan command with stdout to one file and stderr to

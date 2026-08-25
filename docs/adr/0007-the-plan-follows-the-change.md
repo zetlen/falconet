@@ -1,6 +1,6 @@
 # ADR-0007 — The plan is of what changed, and the repository's layout is discovered
 
-**Status:** Accepted · 2026-08-25
+**Status:** Accepted · 2026-08-25, D1 amended 2026-08-25 (see below)
 **Amends:** [ADR-0003](0003-the-cli-surface.md) — `stacks.plan` and
 `stacks.validate_only` keep their meanings and stop being the enumeration of
 everything falconet knows about; the config's defaults for them are removed
@@ -74,6 +74,36 @@ that plan.
 touched anything, so there is no change yet to narrow it by, and a baseline
 of everything a later change could be measured against is what makes it a
 baseline.
+
+#### D1 amended, the same day: every planned stack is planned
+
+D1 made the diff decide WHICH stacks are planned. That is a second answer to
+a question `tofu plan` answers exactly, and a weaker one: the walk over
+`source =` cannot see a `data "terraform_remote_state"` edge — remote state
+names a bucket and a key, not a directory — so a change in one stack silently
+omitted the plan of another that reads its outputs. The failure mode is the
+one this ADR exists to prevent, arriving from the other side: a pull request
+whose plan is missing a stack the change really did move.
+
+So every stack in `stacks.plan` is planned, each under its heading (D3), and
+the diff no longer narrows it. What the diff still decides, because tofu
+cannot be asked either question, is unchanged: whether there is anything to
+plan at all (D2), and whose fault a failure is.
+
+The cost is real and is the reason this was not the original decision: every
+run now initialises every planned stack's BACKEND, which is a credential and
+a network per stack per run. Two rules keep that from turning an unrelated
+outage into a blocked queue:
+
+- a failed `init` in a stack the change does not reach is advisory — a line
+  in the run log and a named, missing plan in the body, never a failed run.
+  A repository with a stack it cannot yet authenticate to (#24) still gets
+  pull requests about the stacks it can.
+- a failed `validate` is never forgiven anywhere. It is syntax, it costs no
+  credential to find, and an unconfigured repository plans every directory it
+  discovered — forgiving both would pass a run with broken Terraform in it.
+
+A stack the change does not reach never cancels the plan of one it does.
 
 ### D2 — A change that reaches nothing plannable gets a person, not a pull request
 

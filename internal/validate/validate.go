@@ -263,9 +263,10 @@ func UnplannedLine(touched []string) string {
 	return "nothing planned: the change reaches " + strings.Join(touched, ", ")
 }
 
-// PlannedLine names the stacks this run will plan — the ones the change
-// reached — so the run log says which of the repository's stacks the plan
-// below is about before the plan appears.
+// PlannedLine names the stacks this run will plan — every stack the config
+// plans, not only the ones the change reached (see PlanUnreached) — so the
+// run log says which of the repository's stacks the plan below is about
+// before the plan appears.
 func PlannedLine(planned []string) string {
 	if len(planned) == 0 {
 		return "planning: nothing (this repository plans no stacks)"
@@ -340,6 +341,27 @@ func PlanHeading(stack string) string {
 	return "## " + stack + "\n\n"
 }
 
+// PlanUnreached is what stands in plan.txt where a stack's plan would be,
+// when planning that stack failed and the change does not reach it.
+//
+// Every configured stack is planned, not only the ones the change reaches:
+// the module graph cannot see a `terraform_remote_state` edge, so a change in
+// one stack can move another's plan without touching a file in it, and the
+// tool that knows which is `tofu plan` rather than a walk over `source =`.
+// The cost of asking every stack is that a stack failing for its OWN reasons
+// — a credential this repository does not hold, a backend that is down —
+// would otherwise delete the plan a reviewer is waiting for and stop a pull
+// request that has nothing to do with it. So a failure in a stack the change
+// does not reach says so here, in the body, beside the evidence: a MISSING
+// plan, named, rather than an absent one nobody can distinguish from an empty
+// one. A failure in a stack the change DOES reach still stops everything,
+// because that one is about this change.
+func PlanUnreached(stack string) string {
+	return "_falconet could not plan `" + stack + "`, and this change does not reach\n" +
+		"it. This is a missing plan, not an empty one — the run log carries what\n" +
+		"OpenTofu said. No other stack below is affected._\n\n"
+}
+
 // --- the run log ------------------------------------------------------------
 //
 // This verb does not have a one-word stdout. Five of the six verbs print an
@@ -364,6 +386,22 @@ func ValidateOK(stack string) string {
 // carried the padding.
 func PlanOK(stack string, plan []byte) string {
 	return fmt.Sprintf("tofu plan (%s/): OK (%d lines)", stack, Lines(plan))
+}
+
+// ValidateUnreachedLine is one stack's failed init-or-validate, in a stack
+// the change does not reach. Planning every stack means initialising every
+// stack's BACKEND, and a backend is a credential and a network: a stack this
+// change has nothing to do with must not fail the run because its bucket was
+// unreachable for ten seconds. It is said in the log and nowhere else.
+func ValidateUnreachedLine(stack string) string {
+	return "tofu validate (" + stack + "/): FAILED, and the change does not reach it — not fatal"
+}
+
+// PlanUnreachedLine is the run log's form of PlanUnreached: a plan that
+// failed without failing the run, said in the log so the person reading it
+// does not go looking for the stack in the report.
+func PlanUnreachedLine(stack string) string {
+	return "tofu plan (" + stack + "/): FAILED, and the change does not reach it — not fatal"
 }
 
 // PlanBegin and PlanEnd bracket the plan in the run log. When a PR body has
