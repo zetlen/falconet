@@ -22,6 +22,7 @@ import (
 	"github.com/zetlen/falconet/internal/doctor"
 	"github.com/zetlen/falconet/internal/github"
 	"github.com/zetlen/falconet/internal/repo"
+	"github.com/zetlen/falconet/internal/stacks"
 )
 
 const doctorUsageText = `doctor — check this repository against the README's install steps 1–8, and
@@ -219,17 +220,8 @@ func runDoctor(args []string) int {
 	stacksKnown := cfgErr == nil
 	planned := 0
 	if stacksKnown {
-		var stacks []doctor.Stack
-		for _, key := range []struct {
-			name  string
-			names []string
-		}{{"plan", cfg.Schema.Stacks.Plan}, {"validate_only", cfg.Schema.Stacks.ValidateOnly}} {
-			for _, s := range key.names {
-				stacks = append(stacks, stackOnDisk(key.name, s))
-			}
-		}
-		planned = len(cfg.Schema.Stacks.Plan)
-		report = append(report, doctor.Stacks(stacks, cfg.File)...)
+		report = append(report, stackReport(cfg, root)...)
+		planned = len(resolveLayout(cfg, root).Plan)
 	} else {
 		report = append(report, doctor.CannotTellWhy(1, "the configured stacks", "the config did not parse"))
 	}
@@ -332,6 +324,45 @@ func runDoctor(args []string) int {
 func isHTTP(err error) bool {
 	_, ok := err.(*github.Error)
 	return ok
+}
+
+// resolveLayout is what this repository does with each directory that holds
+// OpenTofu, as validate and prepare resolve it: the config's two lists, or
+// the root modules discovery finds when it names neither. A tree that cannot
+// be walked yields an empty discovery rather than an error — doctor reports
+// what it can see and never refuses to run over one unreadable directory.
+func resolveLayout(cfg *config.Config, root string) stacks.Layout {
+	discovered, err := stacks.Discover(os.DirFS(root))
+	if err != nil {
+		discovered = nil
+	}
+	return stacks.Resolve(discovered, cfg.Schema.Stacks.Plan, cfg.Schema.Stacks.ValidateOnly)
+}
+
+// stackReport is step 1's stack lines: each configured stack on disk, then
+// the directories holding .tf that the config names in neither list (#23) —
+// or, for a config that names no stacks at all, what discovery found and the
+// fact that it was discovery that found it.
+func stackReport(cfg *config.Config, root string) []doctor.Line {
+	layout := resolveLayout(cfg, root)
+	discovered, err := stacks.Discover(os.DirFS(root))
+	if err != nil {
+		discovered = nil
+	}
+	if !layout.Declared {
+		return doctor.Discovered(discovered)
+	}
+	var onDisk []doctor.Stack
+	for _, key := range []struct {
+		name  string
+		names []string
+	}{{"plan", layout.Plan}, {"validate_only", layout.Check}} {
+		for _, s := range key.names {
+			onDisk = append(onDisk, stackOnDisk(key.name, s))
+		}
+	}
+	return append(doctor.Stacks(onDisk, cfg.File),
+		doctor.Undeclared(stacks.Undeclared(discovered, layout), cfg.File)...)
 }
 
 // stackOnDisk is what a configured stack name is, from the repository root.

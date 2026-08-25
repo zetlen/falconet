@@ -20,9 +20,11 @@ Since then the whole tool has been rewritten in Go
 in CI, where every job installs it from a release and checks its digest, and
 on a laptop, where `falconet init` does the install steps that used to be an
 afternoon of `gh` and `falconet doctor` checks them. The suite is
-`bash tests/run.sh` — 16 files, 867 cases, every one through the binary —
-and `go test ./...` over 19 packages. The binary has not yet had a live run;
-the canary after v0.2.0 is where that changes. See
+`bash tests/run.sh` — 16 files, 892 cases, every one through the binary —
+and `go test ./...` over 19 packages. The binary has run live since v0.2.0,
+and the first thing it found was a pull request carrying a true plan of the
+wrong stack ([#23](https://github.com/zetlen/falconet/issues/23), fixed:
+the plan follows the change now). See
 [Where this stands](#where-this-stands).
 
 ## What it does
@@ -34,13 +36,16 @@ falconet:
 2. runs **one** agent pass with a deliberately narrow toolset — it edits
    config and writes a commit message, and holds no shell and no push token
 3. commits through deterministic guards that an agent cannot talk its way past
-4. validates and plans, for real
-5. opens a pull request whose body carries the **entire** plan, labelled for
-   human review
+4. validates every stack, and plans **the stacks the change actually
+   reaches** — a change in a directory nothing here plans gets a person, not
+   a pull request carrying somebody else's plan
+5. opens a pull request whose body carries the **entire** plan, under a
+   heading naming the stack it is a plan of, labelled for human review
 
 Every exit is a terminal state: a pull request, a question for the requester,
 or a hand-off to a human. A request never disappears into a green run that
-produced nothing.
+produced nothing, and no pull request ever carries a plan of somewhere the
+change does not touch.
 
 What it will **not** do is apply anything. The gate at the end is a person.
 
@@ -504,15 +509,15 @@ off-the-shelf option.
 | Piece | State |
 | --- | --- |
 | `cmd/falconet/`, `internal/` — the binary | six verbs, two setup verbs and `version`, one static Go binary: the standard library plus `golang.org/x/crypto/nacl/box` for the sealed box the secrets API demands |
-| `tests/` — 16 files, 867 cases | passing through the binary (`make test`), with `go test ./...` over 19 packages beside it |
+| `tests/` — 16 files, 892 cases | passing through the binary (`make test`), with `go test ./...` over 19 packages beside it |
 | `action.yml` + `.github/workflows/falconet.yml` | install the pinned binary from the release in every job and run it; the wiring invariants held by [`tests/contract.test.sh`](tests/contract.test.sh) (99 cases); not yet run live on the binary |
 | `release/` + `.github/workflows/release.yml` | the digest in the tree before the tag, a build that reproduced on the release runner (v0.1.0, run 32600784604), four assets and `checksums.txt` per tag |
 | credentials for the jobs that plan | one `plan-env` secret, static values only |
 | `prompts/` | embedded in the binary; the standing-facts block is the origin's |
-| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code, [0006](docs/adr/0006-the-rewrite-is-in-go.md) Go, and why |
+| `docs/adr/` — the decisions | [0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) founding, [0003](docs/adr/0003-the-cli-surface.md) the surface, [0004](docs/adr/0004-the-strangler-reaffirmed.md) the language, [0005](docs/adr/0005-the-agent-job-is-handed-its-source.md) how the agent job gets the code, [0006](docs/adr/0006-the-rewrite-is-in-go.md) Go, and why, [0007](docs/adr/0007-the-plan-follows-the-change.md) the plan is of what changed |
 | `docs/provenance/` — the retired orchestrator | reference only |
 | A live run | **yes, on the bash.** 2026-08-21, `zetlen/wayfinders-infra` issue #106 → PR #108: acknowledgment inside a minute, one agent pass, every guard, a real plan, and a pull request carrying it in full — authored by the App, labelled `needs-plan-review`, and the consumer's own CI ran on it, which is what the App credential was for. |
-| A live run on the binary | **not yet.** The canary after v0.2.0 is where that changes; until then, every number in this table is the suite's. |
+| A live run on the binary | **yes, and it found one.** v0.2.0 ran on `zetlen/wayfinders-infra` and reached pull requests. Run 32873023567 opened [#121](https://github.com/zetlen/wayfinders-infra/pull/121) carrying a true plan of a stack the change did not touch, because the plan was of the configured stacks rather than of the diff — [#23](https://github.com/zetlen/falconet/issues/23), fixed since: the plan follows the change, every plan is headed by its stack, and a change reaching nothing plannable gets a person. |
 | Rewrite | done ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)): v0.2.0 |
 
 The port from stage-shaped scripts to a coherent CLI is done; [the plan it
@@ -531,9 +536,14 @@ failures that reported success. The rewrite that followed
 ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md)) moved every verb into
 Go behind that suite, one commit each, with a differential of the bash
 against the binary over thousands of generated cases per verb, on macOS and
-on Linux; every difference is named in the commit that made it. What has not
-happened is a live run on the binary: development *is* integration here, and
-the next canary is the integration.
+on Linux; every difference is named in the commit that made it. Then the
+binary ran live, and integration found what integration finds: a pull request
+whose entire plan was "No changes. Your infrastructure matches the
+configuration." — true, and of a stack the change did not touch
+([#23](https://github.com/zetlen/falconet/issues/23),
+[ADR-0007](docs/adr/0007-the-plan-follows-the-change.md)). Nothing in a suite
+of one repository's fixtures was going to find that one; a consumer adding a
+directory did.
 
 Two further documents: [operating](docs/operating.md) covers the credentials
 only the operator can create and where the pieces live; [AGENTS.md](AGENTS.md)
@@ -768,12 +778,13 @@ from the agent.
 
 ### 7. Write `.github/falconet.json`
 
-Optional in principle — every key has a default — but the defaults name the
-stacks this was extracted from, so in practice every repository sets
-`stacks`. The file is merged **over** the defaults: naming one key changes
-one thing. Arrays replace wholesale rather than append, because an allowlist
-that grows by accident is not an allowlist. A malformed file is a hard
-failure with the parse error, never a silent fall back to defaults.
+Optional — every key has a default, and with no file at all falconet
+discovers your stacks (below). Most repositories set `stacks` anyway, because
+saying which stacks a human applies is a promise and discovering it is a
+guess. The file is merged **over** the defaults: naming one key changes one
+thing. Arrays replace wholesale rather than append, because an allowlist that
+grows by accident is not an allowlist. A malformed file is a hard failure with
+the parse error, never a silent fall back to defaults.
 
 ```json
 {
@@ -791,12 +802,21 @@ evidence in the PR. A validate-only stack is initialised with
 `-backend=false` and validated — a broken stack is still caught, and a
 reviewer is never shown a diff their approval cannot act on.
 
+**Name every stack, or name none.** Naming neither list means "discover
+them": every directory holding `.tf` files, minus the ones another directory
+uses as a local module, is a stack, and every one of them is planned. Naming
+either list makes the file authoritative, and then a directory holding `.tf`
+files that appears in neither is a directory falconet refuses to guess about
+— `doctor` reports it as `MISSING`, and a change that lands in it is refused
+with a report to the requester rather than answered with some other stack's
+plan (#23). Half a config is the one shape that goes wrong.
+
 Every key, with its default:
 
 | Key | Default | What it is |
 | --- | --- | --- |
-| `stacks.plan` | `["dns"]` | Stacks to init, plan, and put in the PR. Directories. |
-| `stacks.validate_only` | `["workspace", "site"]` | Stacks to validate without a backend. Directories. |
+| `stacks.plan` | `[]` — discover | Stacks to init, plan, and put in the PR. Directories. Empty **and** `validate_only` empty means every root module found. |
+| `stacks.validate_only` | `[]` — discover | Stacks to validate without a backend. Directories. Setting this alone and leaving `plan` empty is how a repository says it plans nothing. |
 | `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. |
 | `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Constructs refused anywhere in a changed `.tf`, in this order. |
 | `plan.command` | `tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false` | Run per planned stack. falconet runs `tofu init` first only when this starts with `tofu`; any other command owns its own initialisation. |
@@ -934,6 +954,8 @@ sure the ref in `uses:` is a tag.
 | The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares, or passes an input the workflow does not declare — `falconet-ref`, from a bash-era caller. GitHub checks both when the workflow file is loaded, so nothing runs and nobody is told — including the requester. Until 2026-08-21 this README prescribed `contents: read`, which `publish` exceeds. | Step 8's `permissions:` block, verbatim; no `falconet-ref:`. `falconet doctor` reports both. |
 | **gate** is red and the issue has no comment | `prepare` hard-failed before the acknowledgment — the one failure the requester never hears about, because `contain` is conditioned on the gate having said `ready`. | Open the run; the last lines of **Prepare** name the cause. The usual ones are the next three rows. |
 | `config .stacks.plan names "x", which is not a directory` (or `.stacks.validate_only`) | A name in step 7 is not a directory. | Step 7's check. |
+| The issue is paused with **the change is in no stack this repository knows about** | The change landed in a directory holding `.tf` files that `.github/falconet.json` names in neither stack list, so nothing validated it and nothing could plan it. Nothing is wrong with the change (#23). | Add the directory to `.stacks.plan` if a human applies it from a pull request, or to `.stacks.validate_only`; then re-file. `falconet doctor` reports it as `MISSING` before a request ever finds it. |
+| The issue is paused with **nothing this change touches is planned** | The change reached only stacks in `.stacks.validate_only`, so there is no plan for a human to approve and nothing to open a pull request about. | Decide whether that stack belongs in `.stacks.plan`. If it is genuinely applied by hand, this is the right ending. |
 | `prepare: tofu init failed in dns/ — the stack cannot be planned`, then OpenTofu's own text: *no valid credential sources*, *error configuring S3 Backend* | `FALCONET_PLAN_ENV` is missing, or missing the key the backend needs. | Step 5. |
 | `prepare: working tree is dirty before the agent ran:`, listing paths | Something in your repository creates untracked files on checkout. | Gitignore them. |
 | `init: the working tree is dirty, and the commit init makes must carry only what it writes; commit or stash these first:` | `init` refuses a dirty clone for the same reason. | Commit or stash, then `init` again. |

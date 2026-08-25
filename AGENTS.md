@@ -58,6 +58,18 @@ thing.
   reference verdict protocol. Any future review harness must clear the bar the
   original set: an independent, uncontaminated read of diff, commit message
   and plan before a human is asked to look.
+- **Never narrow a plan with `-target`.** falconet plans whole stacks or it
+  does not plan. A targeted plan does not show what an apply will do, and the
+  human at the end of this pipeline approves an untargeted apply — so it
+  would be a lie told to the one reader everything here exists for. It also
+  makes OpenTofu print `The -target option is not for routine use` into a log
+  an adopter is reading while deciding whether this tool is serious. The way
+  to plan less is to plan fewer stacks, which is what
+  [ADR-0007](docs/adr/0007-the-plan-follows-the-change.md) does. The same
+  goes for anything else that makes tofu report it is being used unusually:
+  the assumptions falconet makes about an OpenTofu repository are the
+  ordinary ones, held in `internal/stacks`, and a clever one belongs in an
+  ADR before it belongs in the code.
 - **The language is Go, and the port is done.** Decided in
   [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md), which supersedes the
   Bun strangler ADR-0002 D1 chose and ADR-0004 reaffirmed. Bun and Rust were

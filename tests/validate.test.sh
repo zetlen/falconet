@@ -84,15 +84,26 @@ new_checkout() { # name -> echoes the checkout path
   printf '%s' "$base"
 }
 
-# The commit the run is measured against, plus one commit on top of it.
-with_change() { # checkout [subject]
-  local c="$1" subject="${2:-Add a record}"
-  printf 'locals {\n  a = 2\n}\n' >"$c/repo/dns/records-example-tech.tf"
+# The commit the run is measured against, plus one commit on top of it. The
+# change lands in dns/ unless a case says otherwise: since #23 the plan
+# follows the diff, so where a change is IS what a case is about.
+with_change() { # checkout [subject] [path...]
+  local c="$1" subject="${2:-Add a record}"; shift 2 || shift $#
+  local paths=("$@") p
+  [[ ${#paths[@]} -gt 0 ]] || paths=(dns/records-example-tech.tf)
+  for p in "${paths[@]}"; do
+    mkdir -p "$(dirname "$c/repo/$p")"
+    printf 'locals {\n  a = 2\n}\n' >"$c/repo/$p"
+  done
   git -C "$c/repo" add -A
   git -C "$c/repo" commit -qm "$subject"
 }
 
 base_of() { git -C "$1/repo" rev-parse main; }
+
+# Fold a case's setup commits into the baseline: main moves to HEAD, so the
+# diff the case is about is the change it makes next and nothing else.
+settle() { git -C "$1/repo" branch -qf main HEAD; }
 
 # git reports the PHYSICAL path, and on a Mac $WORK is under a symlinked
 # /var. Assertions about paths the tool printed have to speak its dialect.
@@ -377,6 +388,178 @@ v "$c" "$b"
 it "and the plan command itself is configurable"
 assert_contains "$(calls "$c")" "plan -no-color -compact-warnings" "tofu calls"
 
+# --- the plan follows the diff (#23) ----------------------------------------
+#
+# zetlen/wayfinders-infra#120 asked for a bigger Cloud SQL tier, the agent
+# edited talaria-gcp/variables.tf — a correct, one-variable change — and
+# v0.2.0 opened a pull request whose entire plan was "No changes. Your
+# infrastructure matches the configuration." That was a true plan of dns/,
+# which the change does not touch, under a diff that changes a database tier,
+# with nothing in the pull request saying which stack the plan was of.
+#
+# Three things lined up: the path guard was `*.tf` ANYWHERE, the plan was of
+# the configured stacks whatever the change was, and a single planned stack
+# got no heading. Each of the three has a case here.
+
+c="$(new_checkout undeclared)"
+mkdir -p "$c/repo/talaria-gcp"
+printf 'locals {
+  a = 1
+}
+' >"$c/repo/talaria-gcp/main.tf"
+printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}
+' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "a stack the config does not name"
+settle "$c"; b="$(base_of "$c")"
+with_change "$c" "Raise the tier" talaria-gcp/variables.tf
+v "$c" "$b"
+
+it "a change in a directory the config names nowhere fails the run"
+assert_eq 1 "$RC" "exit code"
+
+it "and no plan is left for the assembler, so no pull request carries one"
+assert_file_missing "$c/repo/.falconet/plan.txt"
+
+it "and the stack the change does NOT touch is never planned"
+assert_not_contains "$(calls "$c")" "/dns plan" "tofu calls"
+
+it "and the report names the file that reached no stack"
+assert_contains "$(report "$c")" "talaria-gcp/variables.tf" "report"
+
+it "and the stacks it did check, so the requester can see the gap"
+assert_contains "$(report "$c")" "dns" "report"
+
+it "and says whose the fault is not, because it is not the requester's"
+assert_contains "$(report "$c")" "Nothing about the request caused this" "report"
+
+it "and the run log says it in one line"
+assert_contains "$OUT" "changed files in no stack: talaria-gcp/variables.tf" "stdout"
+
+# The second of the three: a change that reaches only a stack this repository
+# does not plan. Everything validates; there is simply no plan to approve.
+c="$(new_checkout unplanned)"
+printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}
+' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+settle "$c"; b="$(base_of "$c")"
+with_change "$c" "Add a user" workspace/users.tf
+v "$c" "$b"
+
+it "a change reaching only a validate-only stack fails the run"
+assert_eq 1 "$RC" "exit code"
+
+it "and the report says what it reaches and what this repository plans"
+assert_contains "$(report "$c")" "nothing this change touches is planned" "report"
+assert_contains "$(report "$c")" "The change reaches" "report"
+
+it "and the stack it does not touch is validated, not planned"
+assert_contains "$(calls "$c")" "/dns validate" "tofu calls"
+assert_not_contains "$(calls "$c")" "/dns plan" "tofu calls"
+
+# The third: the heading, on the run that produced #121's pull request. Two
+# lines, and they make that pull request obviously wrong at a glance.
+c="$(new_checkout oneheading)"; b="$(base_of "$c")"; with_change "$c"
+v "$c" "$b"
+
+it "the only planned stack is headed by its name too"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
+
+it "and the run log says which stacks it is about to plan"
+assert_contains "$OUT" "planning: dns" "stdout"
+
+# A planned stack the change does not reach is not planned. "No changes."
+# under a diff that changes something is the sentence this issue is about,
+# and the cheapest way not to print it is not to run the plan.
+c="$(new_checkout untouched)"
+printf '{"stacks":{"plan":["dns","workspace"],"validate_only":["site"]}}
+' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
+settle "$c"; b="$(base_of "$c")"
+with_change "$c"
+v "$c" "$b"
+
+it "a planned stack the change does not reach is not planned"
+assert_eq 0 "$RC" "exit code"
+assert_contains "$(calls "$c")" "/dns plan" "tofu calls"
+assert_not_contains "$(calls "$c")" "/workspace plan" "tofu calls"
+
+it "and it is still validated, because a stack broken by someone else still counts"
+assert_contains "$(calls "$c")" "/workspace validate" "tofu calls"
+
+# A change in a local module reaches every stack that sources it, which is
+# what every other tool in this space does with one and the only answer that
+# is true of `tofu plan`.
+c="$(new_checkout module)"
+mkdir -p "$c/repo/modules/records"
+printf 'locals {
+  a = 1
+}
+' >"$c/repo/modules/records/main.tf"
+printf 'module "records" {
+  source = "../modules/records"
+}
+' >"$c/repo/dns/uses.tf"
+printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}
+' \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "a module dns uses"
+settle "$c"; b="$(base_of "$c")"
+with_change "$c" "Change the module" modules/records/main.tf
+v "$c" "$b"
+
+it "a change in a local module plans the stack that sources it"
+assert_eq 0 "$RC" "exit code"
+assert_contains "$(calls "$c")" "/dns plan" "tofu calls"
+
+it "and the module is not itself a stack the config had to name"
+assert_not_contains "$(calls "$c")" "modules/records" "tofu calls"
+
+# With no config at all there is nothing to leave a stack out of: every root
+# module in the tree is one, so a directory that did not exist yesterday is
+# planned rather than refused. This is the shape #23 would never have
+# happened in.
+c="$(new_checkout discovered)"; b="$(base_of "$c")"
+with_change "$c" "A stack nobody declared" talaria-gcp/main.tf
+v "$c" "$b"
+
+it "with no stacks configured, a new directory is discovered and planned"
+assert_eq 0 "$RC" "exit code"
+assert_contains "$(calls "$c")" "/talaria-gcp plan" "tofu calls"
+assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## talaria-gcp" "plan.txt"
+
+it "and the stacks it does not touch are validated and not planned"
+assert_contains "$(calls "$c")" "/dns validate" "tofu calls"
+assert_not_contains "$(calls "$c")" "/dns plan" "tofu calls"
+
+# The repository root is never a stack: falconet runs `tofu -chdir=<stack>`
+# and never plans the tree it is standing in, so Terraform at the top belongs
+# to nothing and says so.
+c="$(new_checkout roottf)"; b="$(base_of "$c")"
+with_change "$c" "Terraform at the root" main.tf
+v "$c" "$b"
+
+it "a .tf at the repository root reaches no stack"
+assert_eq 1 "$RC" "exit code"
+assert_contains "$(report "$c")" "main.tf" "report"
+
+# And a file that is not Terraform, outside every stack, changes no plan: it
+# is not a change nothing planned, it is a change nothing needed to plan.
+c="$(new_checkout nontf)"; b="$(base_of "$c")"
+printf 'locals {
+  a = 2
+}
+' >"$c/repo/dns/records-example-tech.tf"
+printf 'notes
+' >"$c/repo/NOTES.md"
+git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "a note beside the change"
+v "$c" "$b"
+
+it "a file that is not Terraform, outside every stack, is not a refusal"
+assert_eq 0 "$RC" "exit code"
+
 # --- an unreadable handoff name cannot make the guard fail open -------------
 #
 # The smuggling check interpolated $HANDOFF_DIR into an ERE. Harmless while
@@ -470,10 +653,10 @@ c="$(new_checkout twoplanned)"; b="$(base_of "$c")"
 printf '{"stacks":{"plan":["dns","workspace"],"validate_only":[]}}\n' \
   >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
-with_change "$c"
+with_change "$c" "Change both" dns/records-example-tech.tf workspace/users.tf
 v "$c" "$b"
 
-it "with more than one planned stack, each plan is headed by its stack's name"
+it "a change reaching more than one planned stack plans each of them"
 assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## dns" "plan.txt"
 assert_contains "$(cat "$c/repo/.falconet/plan.txt")" "## workspace" "plan.txt"
 
@@ -481,7 +664,7 @@ c="$(new_checkout secondfails)"; b="$(base_of "$c")"
 printf '{"stacks":{"plan":["dns","workspace"],"validate_only":[]}}\n' \
   >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A; git -C "$c/repo" commit -qm "configure falconet"
-with_change "$c"
+with_change "$c" "Change both" dns/records-example-tech.tf workspace/users.tf
 FAIL_PLAN="workspace" v "$c" "$b"; reset_fail
 
 it "a plan that fails on the second stack leaves no plan.txt at all"

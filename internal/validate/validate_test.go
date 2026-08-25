@@ -241,6 +241,84 @@ func TestReports(t *testing.T) {
 	}
 }
 
+// --- the coverage sections (#23) ------------------------------------------------
+
+func TestCoverageSections(t *testing.T) {
+	uncovered := SectionUncovered(
+		[]string{"talaria-gcp/variables.tf", "talaria-gcp/main.tf"},
+		[]string{"dns", "workspace", "site"}, true, ".github/falconet.json")
+	for _, want := range []string{
+		"## the change is in no stack this repository knows about",
+		// The files, so the requester can see WHICH change went nowhere.
+		"  talaria-gcp/variables.tf\n  talaria-gcp/main.tf",
+		// The stacks, so they can see the gap rather than infer it.
+		"The stacks this run checked:\n\n  dns\n  workspace\n  site\n",
+		".stacks.plan",
+		"Nothing about the request caused this",
+	} {
+		if !strings.Contains(uncovered, want) {
+			t.Errorf("SectionUncovered lacks %q:\n%s", want, uncovered)
+		}
+	}
+
+	// A repository that declared nothing gets a different middle: there is
+	// no config key to add the directory to, because nothing named any.
+	discovered := SectionUncovered([]string{"main.tf"}, []string{"dns"}, false, ".github/falconet.json")
+	if strings.Contains(discovered, "named in neither") {
+		t.Errorf("an undeclared layout is told to edit a list nothing set:\n%s", discovered)
+	}
+	if !strings.Contains(discovered, "never plans the tree it stands in") {
+		t.Errorf("SectionUncovered does not say why a root .tf is in no stack:\n%s", discovered)
+	}
+
+	unplanned := SectionUnplanned([]string{"workspace"}, []string{"dns"}, true, ".github/falconet.json")
+	for _, want := range []string{
+		"## nothing this change touches is planned",
+		"The change reaches:\n\n  workspace\n",
+		"This repository plans:\n\n  dns\n",
+		"Nothing about the request caused this",
+	} {
+		if !strings.Contains(unplanned, want) {
+			t.Errorf("SectionUnplanned lacks %q:\n%s", want, unplanned)
+		}
+	}
+
+	// A change that reaches nothing at all is the empty list, and "none" is
+	// the fact the reader needs — not a heading over nothing.
+	if got := SectionUnplanned(nil, []string{"dns"}, true, "c.json"); !strings.Contains(got, "The change reaches: none.") {
+		t.Errorf("an empty list is not said in words:\n%s", got)
+	}
+
+	// Both sections end as every other one does: a blank line before the
+	// next, since the report is appended to section by section.
+	for name, section := range map[string]string{"uncovered": uncovered, "unplanned": unplanned} {
+		if !strings.HasSuffix(section, "\n\n") {
+			t.Errorf("%s does not end in a blank line: %q", name, section[len(section)-8:])
+		}
+		// The report instructs nobody, as the header promises: the reader is
+		// the requester, who is not the person being told what to do about
+		// a config they may not be able to edit.
+		if strings.Contains(section, "You should") || strings.Contains(section, "never weaken it") {
+			t.Errorf("%s instructs its reader", name)
+		}
+	}
+}
+
+func TestCoverageRunLogLines(t *testing.T) {
+	if got := UncoveredLine([]string{"a.tf", "b/c.tf"}); got != "changed files in no stack: a.tf b/c.tf" {
+		t.Errorf("UncoveredLine = %q", got)
+	}
+	if got := UnplannedLine([]string{"workspace", "site"}); got != "nothing planned: the change reaches workspace, site" {
+		t.Errorf("UnplannedLine = %q", got)
+	}
+	if got := PlannedLine([]string{"dns", "workspace"}); got != "planning: dns, workspace" {
+		t.Errorf("PlannedLine = %q", got)
+	}
+	if got := PlannedLine(nil); got != "planning: nothing (this repository plans no stacks)" {
+		t.Errorf("PlannedLine of nothing = %q", got)
+	}
+}
+
 // --- the run log ----------------------------------------------------------------
 
 func TestRunLogLines(t *testing.T) {

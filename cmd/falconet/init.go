@@ -802,16 +802,11 @@ func runInit(args []string) int {
 	// One written names the stacks and the prompt copy.
 	if !writeConfig {
 		say(doctor.ConfigLine(cfg.File, nil))
-		var onDisk []doctor.Stack
-		for _, key := range []struct {
-			name  string
-			names []string
-		}{{"plan", cfg.Schema.Stacks.Plan}, {"validate_only", cfg.Schema.Stacks.ValidateOnly}} {
-			for _, s := range key.names {
-				onDisk = append(onDisk, stackOnDisk(key.name, s))
-			}
-		}
-		for _, l := range doctor.Stacks(onDisk, cfg.File) {
+		// The same lines doctor's step 1 prints, including #23's: a
+		// directory holding .tf files that the kept config names in neither
+		// stack list is left for a person, because a change that lands in
+		// one of those is refused rather than answered.
+		for _, l := range stackReport(cfg, root) {
 			say(l)
 			if l.Status == doctor.Missing {
 				left.add(leftFix, setup.LeftFix(l))
