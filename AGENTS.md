@@ -52,8 +52,10 @@ thing.
   spiked, measured, and rejected with numbers in
   [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md). Read those
   measurements first.
-- **Do not wire up the review agent.** `review-verdict` ships unwired as the
-  reference verdict protocol. Any future review harness must clear the bar the
+- **Do not wire up a review agent.** A second reviewing agent was measured
+  and cost more than it caught ([ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md)).
+  Its reference implementation shipped unwired, was never called by
+  anything, and has been deleted; git has it. Any future review harness must clear the bar the
   original set: an independent, uncontaminated read of diff, commit message
   and plan before a human is asked to look.
 - **Never narrow a plan with `-target`.** falconet plans whole stacks or it

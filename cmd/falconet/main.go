@@ -11,14 +11,13 @@
 // The six verbs are the stages of the pipeline (docs/adr/0003-the-cli-surface.md).
 // They never call each other; they pass files through the handoff directory.
 //
-// `prompt`, `plan-env`, `scan`, `config` and `review-verdict` are unlisted
-// on purpose: public in the sense that they work, not in the sense that they
-// are vocabulary. The first two are the workflow's plumbing — a prompt
-// resolved without heredocs in YAML, and one secret turned into masked
-// environment — `scan` is the commit verb's secret scan, `config` is what
-// the config file resolves to, and `review-verdict` ships unwired (ADR-0003,
-// as amended 2026-08-22). Each is reachable here so that the test suite
-// spawns it through the same door as every verb.
+// `prompt`, `plan-env`, `scan` and `config` are unlisted on purpose: public
+// in the sense that they work, not in the sense that they are vocabulary.
+// The first two are the workflow's plumbing — a prompt resolved without
+// heredocs in YAML, and one secret turned into masked environment — `scan`
+// is the commit verb's secret scan, and `config` is what the config file
+// resolves to. Each is reachable here so that the test suite spawns it
+// through the same door as every verb.
 //
 // Exit codes, uniform across every verb:
 //
@@ -65,7 +64,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // error.
 var (
 	verbs    = []string{"prepare", "commit", "push", "pause", "validate", "assemble", "doctor", "init", "version"}
-	unlisted = []string{"prompt", "plan-env", "scan", "config", "review-verdict"}
+	unlisted = []string{"prompt", "plan-env", "scan", "config"}
 )
 
 // native is what this binary answers for: one entry per name in the two
@@ -86,7 +85,6 @@ var native = map[string]func(args []string) int{
 	"validate":       runValidate,
 	"prompt":         runPrompt,
 	"plan-env":       runPlanEnv,
-	"review-verdict": runReviewVerdict,
 	"doctor":         runDoctor,
 	"init":           runInit,
 }

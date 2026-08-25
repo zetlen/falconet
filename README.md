@@ -422,7 +422,7 @@ install path above:
 | `init` | does the appendix's steps 2–8, each idempotent and reported one line, then one commit and never a push | 0 everything attempted succeeded (a skipped step is not a failure); 1 a dirty tree, a refused write, a refused plan-env file, a repository that does not qualify or cannot be reached |
 | `version` | the tag and the Go it was built with | 0 |
 
-`prompt`, `config`, `scan`, `plan-env` and `review-verdict` exist unlisted —
+`prompt`, `config`, `scan` and `plan-env` exist unlisted —
 public in that they work, not vocabulary, by
 [ADR-0003](docs/adr/0003-the-cli-surface.md)'s criterion that a thing is a
 verb if and only if a caller invokes it directly. `-h` on any of them says
@@ -465,8 +465,7 @@ falconet validate --base "$(git rev-parse main)"
   in the comment above the guard, and the port moved those comments into Go
   verbatim: the operator reads Go, and the guards are the product.
 - **One agent, one context.** An earlier design ran a second reviewing agent;
-  measurements showed the second cold context cost more than it caught. Its
-  verdict protocol survives here as a reference implementation, unwired.
+  measurements showed the second cold context cost more than it caught.
 - **The plan is the evidence.** It goes in the PR body in full, never
   abridged, because a human approving a summary of evidence is not review.
 - **Opinionated on purpose.** GitHub and Claude Code are assumed. OpenTofu is
