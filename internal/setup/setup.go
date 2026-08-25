@@ -50,11 +50,11 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/zetlen/falconet/internal/doctor"
 	"github.com/zetlen/falconet/internal/github"
+	"github.com/zetlen/falconet/internal/stacks"
 )
 
 // --- step 6: the labels ----------------------------------------------------
@@ -104,42 +104,16 @@ func Labels(want doctor.Labels, existing []string) []LabelStep {
 
 // --- step 7: the stacks and the config -------------------------------------
 
-// skipped are the directories discovery never enters: git's own, tofu's
-// provider cache, and a JavaScript dependency tree that can hold anything —
-// besides every dot-directory, which is somebody's tool's and not a stack.
-var skipped = map[string]bool{".git": true, ".terraform": true, "node_modules": true}
-
-// DiscoverStacks is every directory under the root that directly contains a
-// .tf file, as a sorted list of root-relative paths. README step 1: each
-// stack is its own subdirectory, so a .tf at the root itself is not a stack
-// and is not counted — falconet runs `tofu -chdir=<stack>` and never
-// touches the repository root.
+// DiscoverStacks is the root modules the repository holds, as a sorted list
+// of root-relative paths: internal/stacks.Discover, which is also what a run
+// falls back on when the config names no stacks, so what init writes and what
+// a run assumes cannot drift. README step 1: each stack is its own
+// subdirectory, so a .tf at the root itself is not a stack — falconet runs
+// `tofu -chdir=<stack>` and never touches the repository root — and a
+// directory another one sources as a local module is that module's, not a
+// stack of its own (#23).
 func DiscoverStacks(fsys fs.FS) ([]string, error) {
-	found := map[string]bool{}
-	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if p != "." && (skipped[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if dir := path.Dir(p); dir != "." && strings.HasSuffix(d.Name(), ".tf") {
-			found[dir] = true
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	stacks := make([]string, 0, len(found))
-	for s := range found {
-		stacks = append(stacks, s)
-	}
-	sort.Strings(stacks)
-	return stacks, nil
+	return stacks.Discover(fsys)
 }
 
 // Stacks is how the discovered stacks are sorted: README step 7's rule is

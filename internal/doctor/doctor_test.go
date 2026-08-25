@@ -188,6 +188,42 @@ func TestStacks(t *testing.T) {
 	}
 }
 
+// #23 as a repository sitting still: a directory holding .tf files that the
+// config names in neither list. Caught when the config is looked at rather
+// than when a request lands in it.
+func TestUndeclared(t *testing.T) {
+	got := Undeclared([]string{"talaria-gcp", "modules/orphan"}, "")
+	want := []string{
+		"MISSING      1. directory talaria-gcp holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only\n             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only",
+		"MISSING      1. directory modules/orphan holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only\n             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only",
+	}
+	if !reflect.DeepEqual(strs(got), want) {
+		t.Errorf("\n got %q\nwant %q", strs(got), want)
+	}
+	if got := Undeclared(nil, ""); got != nil {
+		t.Errorf("nothing undeclared is no lines: %v", strs(got))
+	}
+	if got := Undeclared([]string{"x"}, "cfg/alt.json"); !strings.Contains(got[0].Hint, "in cfg/alt.json") {
+		t.Errorf("the hint names the file the lists were read from: %q", got[0].Hint)
+	}
+}
+
+func TestDiscovered(t *testing.T) {
+	// "falconet found these on its own" and "you told falconet these" are
+	// different answers to the same question, and only one is a promise.
+	if got := Discovered([]string{"dns", "site"}); len(got) != 1 ||
+		got[0].String() != "ok           1. the config names no stacks, so every root module found is planned: dns, site" {
+		t.Errorf("%q", strs(got))
+	}
+	got := Discovered(nil)
+	if len(got) != 1 || got[0].Status != Missing {
+		t.Fatalf("a repository with no .tf anywhere is MISSING, not a note: %q", strs(got))
+	}
+	if !strings.Contains(got[0].Hint, "a .tf at the root itself is not a stack") {
+		t.Errorf("the hint does not say where a stack goes: %q", got[0].Hint)
+	}
+}
+
 func TestIssues(t *testing.T) {
 	if got := Issues(&github.Repository{HasIssues: true}).String(); got != "ok           1. the repository has issues enabled" {
 		t.Errorf("%q", got)

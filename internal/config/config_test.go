@@ -44,7 +44,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"labels.human":       s.Labels.Human,
 		"plan.command":       s.Plan.Command,
 		"paths.allow[0]":     s.Paths.Allow[0],
-		"stacks.plan[0]":     s.Stacks.Plan[0],
 		"blocking_labels[3]": s.Issue.BlockingLabels[3],
 	}
 	want := map[string]string{
@@ -53,7 +52,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"labels.human":       "ready-for-human",
 		"plan.command":       "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false",
 		"paths.allow[0]":     "*.tf",
-		"stacks.plan[0]":     "dns",
 		"blocking_labels[3]": "wontfix",
 	}
 	for k, got := range checks {
@@ -61,6 +59,15 @@ func TestDefaultsStandAlone(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want[k])
 		}
 	}
+	// Neither stack list has a default (#23). The old ones named dns,
+	// workspace and site — the origin repository's own three — so a consumer
+	// whose directories were called anything else met "config .stacks.plan
+	// names \"dns\", which is not a directory" before it met anything of
+	// falconet's. Empty means "discover them", which is a real answer.
+	if len(s.Stacks.Plan) != 0 || len(s.Stacks.ValidateOnly) != 0 {
+		t.Errorf("stacks = %v / %v, want both empty", s.Stacks.Plan, s.Stacks.ValidateOnly)
+	}
+
 	// Order is load-bearing for the denylist: templatefile( before file(.
 	deny := s.Paths.DenyContent
 	tf, f := index(deny, "templatefile("), index(deny, "file(")

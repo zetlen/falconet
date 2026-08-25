@@ -295,8 +295,12 @@ d "$c"
 it "no config file is ok for step 7: the defaults stand alone"
 assert_contains "$OUT" "ok           7. no .github/falconet.json, so the defaults stand alone" "stdout"
 
-it "and the default stacks are what is checked"
-assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
+# No config names no stacks, and the defaults name none either (#23): the
+# root modules in the tree are what a run would plan, so they are what step 1
+# reports — and it says it was discovery that found them, because "falconet
+# found these on its own" and "you told falconet these" are different answers.
+it "and with no stacks configured, the root modules found are what is checked"
+assert_line "$OUT" "ok           1. the config names no stacks, so every root module found is planned: dns, site, workspace"
 assert_eq 0 "$RC" "exit code"
 
 c="$(new_checkout prompt)"
@@ -337,8 +341,45 @@ it "and the one that is fine is still ok"
 assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
 assert_eq 1 "$RC" "exit code"
 
+# #23, caught where it is cheap: a directory holding .tf files that the config
+# names in neither list. falconet will not guess about one — a change that
+# lands in it is refused rather than answered with some other stack's plan —
+# so the moment the config is looked at is the moment to say so, rather than
+# the moment a request finds it.
+c="$(new_checkout undeclared)"
+mkdir -p "$c/repo/talaria-gcp"; printf 'variable "tier" {}\n' >"$c/repo/talaria-gcp/variables.tf"
+printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
+script
+d "$c"
+
+it "a directory with .tf files that the config names nowhere is MISSING"
+assert_line "$OUT" "MISSING      1. directory talaria-gcp holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only"
+
+it "and the hint says which list it belongs in and why"
+assert_line "$OUT" "             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only"
+
+it "and the run fails, because a request landing in it would be refused"
+assert_eq 1 "$RC" "exit code"
+
+it "the configured stacks are still reported as themselves"
+assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
+
+# A directory another stack uses as a module is that module's, not a stack of
+# its own, so it is not something the config has to name.
+c="$(new_checkout modules)"
+mkdir -p "$c/repo/modules/records"
+printf 'locals {\n  a = 1\n}\n' >"$c/repo/modules/records/main.tf"
+printf 'module "records" {\n  source = "../modules/records"\n}\n' >"$c/repo/dns/uses.tf"
+printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
+script
+d "$c"
+
+it "a local module is not a stack the config has to name"
+assert_no_line_matching "$OUT" 'modules/records' "stdout"
+assert_eq 0 "$RC" "exit code"
+
 c="$(new_checkout noplan)"
-printf '{"stacks":{"plan":[],"validate_only":["workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"stacks":{"plan":[],"validate_only":["dns","workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":3,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"}]}}'
 d "$c"
 

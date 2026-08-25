@@ -22,11 +22,13 @@ package main
 //  3. snapshot the commits to DIR/diff.patch and the changed paths to
 //     DIR/changed-files.txt — the review agent is granted no Bash, so
 //     its evidence has to be on disk before it starts
-//  4. tofu validate, once per configured stack (dns/, workspace/, site/ by
-//     default — #16 split the single root module into three)
-//  5. the plan command — `tofu -chdir=dns plan -no-color -refresh=false
-//     -lock=false` by default — into DIR/plan.txt — stacks.plan only; see
-//     step 5 for why the other two stacks are not planned here.
+//  4. work out which stacks the change reaches, and refuse a change that
+//     reaches none this repository plans (#23, internal/stacks)
+//  5. tofu validate, once per stack in the layout
+//  6. the plan command — `tofu -chdir={stack} plan -no-color -input=false
+//     -refresh=false -lock=false` by default — into DIR/plan.txt, once per
+//     planned stack the change reached, each under its own `## <stack>`
+//     heading
 //
 // Nothing checks a record registry between 4 and 5 any more. That step
 // cross-checked the dns/records-*.tf locals lists against
@@ -44,9 +46,14 @@ package main
 // artifact of exactly the kind humans review everywhere. Its reasoning
 // transcript is not, and the reviewer never sees that.
 //
-// -refresh=false -lock=false is mandatory in CI: the job holds a
-// bucket-scoped READ-ONLY state credential, so taking a lock is refused, and
-// it must never call the Namecheap API.
+// -refresh=false -lock=false comes from the origin repository, whose CI job
+// holds a bucket-scoped READ-ONLY state credential: taking a lock is refused
+// there, and a refresh would call the provider's API. It is plan.command's
+// default and a consumer who wants a refreshing plan says so in one config
+// key. What the default deliberately does NOT contain is `-target`: falconet
+// plans whole stacks or it does not plan, and an operator who finds
+// `Note: resource targeting is in effect` in their run log is right to
+// wonder what else this tool decided on their behalf.
 //
 // There is deliberately NO `tofu fmt -check` here, but no longer for the
 // reason issue #20 gave — that `tofu fmt` already failed on main. #20 is
@@ -54,16 +61,27 @@ package main
 // `tofu fmt -check -recursive` as its first step on every pull request, so
 // repeating it here would report the same thing twice to the same reader.
 //
-// ONE PLAN, NOT THREE (#16). Of the three stacks, only dns/ is ever applied
-// by this pipeline: deploy.yml runs an untargeted `tofu -chdir=dns apply`
-// and nothing else applies anything — workspace/ is applied by hand against
-// the real Google Workspace tenant, and site/ is plan-only forever, against
-// a GCP project that does not exist. A human approves THIS verb's plan and
-// that approval becomes exactly one apply. Planning workspace/ or site/
-// here would show a reviewer a diff their approval cannot act on, which is
-// the dishonest option; showing them only the plan their label will trigger
-// is the truthful one. (workspace/ and site/ still get `tofu validate` in
-// step 4 below, so a broken stack is still caught — just not planned.)
+// THE PLAN IS OF WHAT CHANGED (#16, then #23). Not every stack is applied
+// from a pull request: the origin repository plans dns/ and applies it,
+// applies workspace/ by hand against a live Google Workspace tenant, and
+// never applies site/ at all. Planning a stack a reviewer's approval cannot
+// act on shows them a diff they cannot act on, which is the dishonest
+// option — that is `stacks.plan` versus `stacks.validate_only`, and it is
+// #16's decision, unchanged.
+//
+// #23 is the other half of the same sentence, and it cost a pull request to
+// learn: planning a stack the CHANGE does not touch is dishonest for exactly
+// the same reason. A consumer added a stack, left it out of the config, and
+// filed a request whose fix landed in it; every configured stack validated
+// and planned clean — the diff was nowhere near them — and the pull request
+// carried "No changes. Your infrastructure matches the configuration." over
+// a diff that changed a database tier, with nothing in it naming the stack
+// that plan was of. So the plan follows the diff: step 4 works out what the
+// change reaches, step 6 plans the planned stacks among them and no others,
+// every plan is headed by its stack, and a change that reaches nothing
+// plannable gets a person instead of a pull request. Every stack in the
+// layout still gets `tofu validate` in step 5, so a broken stack is still
+// caught — just not planned.
 //
 // Outputs, written into DIR (default: handoff_dir at the root of the
 // repository, which is where the CI pipeline hands files between its stages
@@ -111,10 +129,14 @@ Validate HEAD against the commit the run started from:
   3. snapshot the commits to DIR/diff.patch and the changed paths to
      DIR/changed-files.txt — the review agent is granted no Bash, so
      its evidence has to be on disk before it starts
-  4. tofu validate, once per configured stack (stacks.plan, then
-     stacks.validate_only), collecting every failure
-  5. plan.command, once per stacks.plan stack, into DIR/plan.txt — only
-     when every planned stack validated
+  4. work out which stacks the change reaches, and refuse a change that
+     reaches no stack this repository plans
+  5. tofu validate, once per stack (stacks.plan, then stacks.validate_only,
+     or every root module in the repository when the config names neither),
+     collecting every failure
+  6. plan.command into DIR/plan.txt, once per planned stack the change
+     reached — each under a "## <stack>" heading, and only when every stack
+     being planned validated
 
 --base is resolved to a commit before anything compares against it; a
 ref, a short sha or HEAD are fine, and a --base naming no commit is a
@@ -379,40 +401,98 @@ func runValidate(args []string) int {
 	}()
 
 	runner := stacks.Runner{Tofu: envOr("TOFU", "tofu"), RepoRoot: root}
+	configName := orDefault(cfg.File, ".github/falconet.json")
 
-	// --- 4. tofu validate, once per stack -----------------------------------
+	// --- 4. which stacks the change reaches ---------------------------------
 	//
-	// The stacks come from config now. stacks.plan get a real init because
-	// they are the ones step 5 plans and one init serves both verbs;
-	// stacks.validate_only get -backend=false, which is enough for `validate`
-	// to see provider schemas without touching state or credentials they do
-	// not need for that (stacks.Runner.Init carries the record).
+	// #23. The layout is what the config named, or — when it named neither
+	// list — the root modules discovery found, which is the same function
+	// `init` writes its config from. Reach maps the changed paths onto it:
+	// a file in a stack reaches that stack, a file in a local module reaches
+	// every stack that sources it, and a `.tf` in neither is a change nothing
+	// here can plan. internal/stacks carries the record of why each of those
+	// is the safe assumption for an ordinary OpenTofu repository.
+	discovered, err := stacks.Discover(os.DirFS(root))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "falconet: cannot read the repository's layout: %v\n", err)
+		return 1
+	}
+	layout := stacks.Resolve(discovered, cfg.Schema.Stacks.Plan, cfg.Schema.Stacks.ValidateOnly)
+	uses, err := stacks.Uses(os.DirFS(root), layout.All())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "falconet: cannot read the repository's modules: %v\n", err)
+		return 1
+	}
+	var paths []string
+	for _, p := range validate.SplitLines(changed) {
+		paths = append(paths, validate.Unquote(p))
+	}
+	touched, uncovered := stacks.Reach(paths, layout.All(), uses)
+	// The plan follows the diff: the planned stacks the change reaches, in
+	// the order the config named them. A planned stack the change does not
+	// reach is not planned, because "No changes." under a diff that changes
+	// something is the sentence that made this issue.
+	planStacks := stacks.Intersect(layout.Plan, touched)
+
+	// Terraform in no stack at all: nothing validated it and nothing could
+	// plan it. Collected rather than fatal — the stacks below are still
+	// checked — but the run fails, so no pull request is opened and the
+	// requester gets the report instead.
+	if len(uncovered) > 0 {
+		status = 1
+		fmt.Println(validate.UncoveredLine(uncovered))
+		if !report(validate.SectionUncovered(uncovered, layout.All(), layout.Declared, configName)) {
+			return 1
+		}
+	} else if len(layout.Plan) > 0 && len(planStacks) == 0 {
+		// It reached stacks, and none of them is one this repository plans.
+		// A repository that plans NOTHING has said so and is not told about
+		// it on every request; one that plans something and cannot plan this
+		// change has nothing to open a pull request about.
+		status = 1
+		fmt.Println(validate.UnplannedLine(touched))
+		if !report(validate.SectionUnplanned(touched, layout.Plan, layout.Declared, configName)) {
+			return 1
+		}
+	}
+
+	// --- 5. tofu validate, once per stack -----------------------------------
 	//
-	// planStackFailed tracks the PLANNED stacks alone, because only their own
-	// validate result decides whether step 5 attempts a plan; a broken
-	// validate-only stack must not silently cancel the one plan a reviewer
-	// acts on.
+	// Every stack in the layout, planned first — not only the ones the change
+	// reached. A stack broken by something else is still worth catching, and
+	// `validate` costs a subprocess. The stacks this run will PLAN get a real
+	// init because one init serves both verbs; every other stack gets
+	// -backend=false, which is enough for `validate` to see provider schemas
+	// without touching state or credentials it does not need for that
+	// (stacks.Runner.Init carries the record).
+	//
+	// planStackFailed tracks the stacks this run plans alone, because only
+	// their own validate result decides whether step 6 attempts a plan; a
+	// broken stack nobody is planning must not silently cancel the plan a
+	// reviewer acts on.
 	//
 	// It was called dns_validate_ok and it was inverted with respect to its
 	// name: 0 meant OK and 1 meant failed, and it read correctly only because
 	// its one use said `-ne 0`. Renamed rather than left as a trap for
 	// whoever writes `-eq 1` by intuition and plans a stack whose validate
 	// just failed.
-	planStacks := nonEmpty(cfg.Schema.Stacks.Plan)
-	checkStacks := nonEmpty(cfg.Schema.Stacks.ValidateOnly)
 	planStackFailed := false
-	for _, s := range append(append([]string{}, planStacks...), checkStacks...) {
+	for _, s := range layout.All() {
 		planned := contains(planStacks, s)
 		// A configured stack that is not there is a configuration error
 		// rather than a validation failure. Reported rather than fatal, so
 		// the other stacks are still checked and the report says which key
-		// named a directory that is not in the repository.
+		// named a directory that is not in the repository — the key the
+		// CONFIG put it under, which is not the same question as whether
+		// this run is planning it.
 		if !isDir(runner.Dir(s)) {
 			status = 1
 			key := "validate_only"
+			if layout.Plans(s) {
+				key = "plan"
+			}
 			if planned {
 				planStackFailed = true
-				key = "plan"
 			}
 			if !report(validate.SectionStackMissing(s, cfg.StackMissing(key, s, root))) {
 				return 1
@@ -440,21 +520,31 @@ func runValidate(args []string) int {
 		}
 	}
 
-	// --- 5. plan (the planned stacks only — see the header on why) ----------
+	// --- 6. plan (the planned stacks the change reaches) --------------------
 	//
 	// The command is plan.command from config (stacks.Runner.PlanCommand
-	// carries the record of how it is read). All planned stacks land in one
+	// carries the record of how it is read). Every planned stack lands in one
 	// plan.txt, because the handoff protocol names one file and assemble
-	// attaches one file. With more than one they are separated by a
-	// `## <stack>` heading; with the default single stack the file is exactly
-	// what it always was.
+	// attaches one file, and every one is headed with `## <stack>` —
+	// including the only one, which is the case #23 was about: a pull request
+	// whose entire plan was "No changes." with nothing anywhere saying what
+	// it was a plan OF.
 	planPath := filepath.Join(out, planFile)
-	if planStackFailed {
+	// A repository that plans nothing at all still gets an empty plan.txt,
+	// as it always has: the next stage looks for the file and "there was
+	// nothing to plan" is a true answer. A repository that plans SOMETHING
+	// and could not plan THIS gets no file, because an empty plan.txt there
+	// reads as "the plan came back empty", which is the sentence #23 is
+	// about.
+	planRefused := len(planStacks) == 0 && len(layout.Plan) > 0
+	switch {
+	case planStackFailed:
 		if !report(validate.SectionPlanNotAttempted()) {
 			return 1
 		}
-	} else {
-		multi := len(planStacks) > 1
+	case planRefused:
+	default:
+		fmt.Println(validate.PlannedLine(planStacks))
 		// Created empty first, as `: > plan.txt` did: a run with nothing to
 		// plan still leaves the file the next stage looks for.
 		plan, err := os.Create(planPath)
@@ -489,12 +579,10 @@ func runValidate(args []string) int {
 				return 1
 			}
 			if ok {
-				if multi {
-					if _, err := plan.WriteString(validate.PlanHeading(s)); err != nil {
-						_ = plan.Close()
-						fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", planPath, err)
-						return 1
-					}
+				if _, err := plan.WriteString(validate.PlanHeading(s)); err != nil {
+					_ = plan.Close()
+					fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", planPath, err)
+					return 1
 				}
 				if _, err := plan.Write(planBytes); err != nil {
 					_ = plan.Close()
@@ -668,17 +756,6 @@ func remove(path string) error {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-// nonEmpty drops empty entries, as the `[ -n "$_s" ]` in the read loops did.
-func nonEmpty(list []string) []string {
-	var out []string
-	for _, s := range list {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 func contains(list []string, s string) bool {

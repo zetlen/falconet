@@ -72,8 +72,8 @@ const Defaults = `{
     ]
   },
   "stacks": {
-    "plan": ["dns"],
-    "validate_only": ["workspace", "site"]
+    "plan": [],
+    "validate_only": []
   },
   "plan": {
     "command": "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false"
@@ -105,6 +105,16 @@ type Schema struct {
 		// so it has to survive here.
 		DenyContent []string `json:"deny_content"`
 	} `json:"paths"`
+	// Stacks is the classification of the repository's root modules, and
+	// naming NEITHER list is a real answer rather than an empty one: it
+	// means "discover them", which is what internal/stacks.Resolve does
+	// with it. The defaults used to name dns, workspace and site — the
+	// origin repository's own three — so a consumer whose directories were
+	// called something else met "config .stacks.plan names \"dns\", which is
+	// not a directory" before it met anything of falconet's, and a consumer
+	// who never wrote a config got the origin's layout asserted over theirs
+	// (#23). A default that names somebody else's directories is not a
+	// default.
 	Stacks struct {
 		Plan         []string `json:"plan"`
 		ValidateOnly []string `json:"validate_only"`

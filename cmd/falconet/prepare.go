@@ -51,6 +51,7 @@ import (
 	"github.com/zetlen/falconet/internal/prepare"
 	"github.com/zetlen/falconet/internal/repo"
 	"github.com/zetlen/falconet/internal/stacks"
+	"github.com/zetlen/falconet/internal/validate"
 )
 
 const prepareUsageText = `prepare — decide whether an issue is this pipeline's to work, and if it is,
@@ -672,16 +673,26 @@ func runPrepare(args []string) int {
 	// The stacks, the init that comes first when tofu is the planner, and the
 	// plan's argv are internal/stacks, shared with validate so that the two
 	// verbs hand tofu the same thing; the baseline lands in one file, each
-	// stack's output under a `## <stack>` heading when more than one is
-	// planned, and in exactly the bytes tofu wrote when one is.
+	// stack's output under its own `## <stack>` heading — every one of them,
+	// including the only one (#23).
+	//
+	// Which stacks: the ones `stacks.plan` names, or — when the config names
+	// neither list — every root module discovery finds, which is the same
+	// answer validate resolves and the same one `init` writes a config from.
+	// This runs before anyone has touched anything, so unlike validate there
+	// is no change yet to narrow it by: the baseline is of everything a later
+	// change could be planned against, which is what makes it a baseline.
 	planPath := filepath.Join(out, "plan-baseline.txt")
 	baseline, err := os.Create(planPath)
 	if err != nil {
 		return die("falconet: cannot write %s: %v", planPath, err)
 	}
 	defer func() { _ = baseline.Close() }()
-	planStacks := nonEmpty(cfg.Schema.Stacks.Plan)
-	multi := len(planStacks) > 1
+	discovered, err := stacks.Discover(os.DirFS(root))
+	if err != nil {
+		return die("falconet: cannot read the repository's layout: %v", err)
+	}
+	planStacks := stacks.Resolve(discovered, cfg.Schema.Stacks.Plan, cfg.Schema.Stacks.ValidateOnly).Plan
 	initFirst := stacks.InitFirst(cfg.Schema.Plan.Command)
 	runner := stacks.Runner{Tofu: envOr("TOFU", "tofu"), RepoRoot: root}
 
@@ -735,10 +746,8 @@ func runPrepare(args []string) int {
 		if err != nil {
 			return die("falconet: cannot read %s: %v", stackPlan, err)
 		}
-		if multi {
-			if _, err := baseline.WriteString("## " + s + "\n\n"); err != nil {
-				return die("falconet: cannot write %s: %v", planPath, err)
-			}
+		if _, err := baseline.WriteString(validate.PlanHeading(s)); err != nil {
+			return die("falconet: cannot write %s: %v", planPath, err)
 		}
 		if _, err := baseline.Write(planBytes); err != nil {
 			return die("falconet: cannot write %s: %v", planPath, err)

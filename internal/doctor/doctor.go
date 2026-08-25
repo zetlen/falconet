@@ -268,7 +268,7 @@ func Stacks(stacks []Stack, configFile string) []Line {
 		configFile = ".github/falconet.json"
 	}
 	if len(stacks) == 0 {
-		return []Line{{Status: Note, Step: 1, Text: "no stacks are configured (.stacks.plan and .stacks.validate_only are both empty), so nothing would be validated or planned"}}
+		return []Line{{Status: Note, Step: 1, Text: "no stacks are configured (.stacks.plan and .stacks.validate_only are both empty), so the repository's root modules are discovered instead"}}
 	}
 	var lines []Line
 	for _, s := range stacks {
@@ -284,6 +284,41 @@ func Stacks(stacks []Stack, configFile string) []Line {
 		}
 	}
 	return lines
+}
+
+// Undeclared is #23 as a repository sitting still, before a request lands in
+// it: a directory holding .tf files that the config names in NEITHER stack
+// list. falconet will not guess about one — it is not validated, it is not
+// planned, and a change that lands in it is refused rather than answered
+// with some other stack's plan — so this is the check that catches a new
+// stack when the config is next looked at rather than when a request finds
+// it. names are the directories, configFile is where the lists were read.
+func Undeclared(names []string, configFile string) []Line {
+	if configFile == "" {
+		configFile = ".github/falconet.json"
+	}
+	var lines []Line
+	for _, n := range names {
+		lines = append(lines, Line{Status: Missing, Step: 1,
+			Text: "directory " + n + " holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only",
+			Hint: "add it to .stacks.plan in " + configFile + " if a human applies it from a pull request, or to .stacks.validate_only"})
+	}
+	return lines
+}
+
+// Discovered is step 1 for a repository whose config names no stacks at all.
+// There is nothing wrong with that — every root module in the tree is a
+// stack and every one of them is planned — but the report says so, because
+// "falconet found these on its own" and "you told falconet these" are
+// different answers to the same question and only one of them is a promise.
+func Discovered(names []string) []Line {
+	if len(names) == 0 {
+		return []Line{{Status: Missing, Step: 1,
+			Text: "no directory under the repository root holds .tf files, so there is nothing to validate or plan",
+			Hint: "each stack is its own subdirectory with its .tf files in it; a .tf at the root itself is not a stack"}}
+	}
+	return []Line{{Status: OK, Step: 1,
+		Text: "the config names no stacks, so every root module found is planned: " + strings.Join(names, ", ")}}
 }
 
 // Issues is `has_issues`: the queue is an issue, so a repository without
