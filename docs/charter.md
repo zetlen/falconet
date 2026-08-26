@@ -4,7 +4,7 @@ falconet turns a plain-language infrastructure request into a pull request a
 person can approve, and then stops, because applying is a human's job.
 
 This is the shortest document in this repository, on purpose. Everything else
-here — every record in [`adr/`](adr/), every guard, every line of Go — is
+here — every row of [the register](decisions.md), every guard, every line of Go — is
 downstream of it and can be replaced. What is below cannot be, without
 changing what the tool is.
 
@@ -92,7 +92,7 @@ starts demanding that the adopter manage more, the mechanism is what is wrong.
 - **It is not built for a repository where strangers trigger workflows.**
   That threat model is real and it is someone else's; gh-aw serves it, and
   was measured and rejected here for exactly that mismatch
-  ([ADR-0002](adr/0002-extract-the-pipeline-into-falconet.md)). One operator,
+  ([the register](decisions.md#the-pipeline-is-falconets-own-code)). One operator,
   one collaborator, a human apply.
 - **It is not a general agent harness.** One pass, one narrow toolset. The
   narrowness is I5, not an unfinished feature.
@@ -102,9 +102,10 @@ starts demanding that the adopter manage more, the mechanism is what is wrong.
 Go. One static binary and a digest committed before the tag. A reusable
 workflow and a composite action. A GitHub App used purely as a credential.
 One JSON config file. Six verbs and a handoff directory. Every one of those
-is a **means**: chosen for reasons, and the reasons are in [`adr/`](adr/).
-[The decision register](decisions.md) indexes them, and gives each one the
-invariant it serves and the observation that should retire it.
+is a **means**: chosen for reasons, and the reasons are in
+[the decision register](decisions.md), which gives each one the invariant it
+serves and the observation that should retire it. How each was reached is in
+[`history/`](history/), which is a record and not a description.
 
 A means is not a rule. It is a decision, and a decision has a shelf life.
 
@@ -114,7 +115,7 @@ A means is not a rule. It is a decision, and a decision has a shelf life.
 
 The worked example, and the reason this document exists: falconet is packaged
 as a reusable workflow, decided in passing inside
-[ADR-0003](adr/0003-the-cli-surface.md)'s record of the CLI surface. That
+[the record of the CLI surface](history/0003-the-cli-surface.md). That
 choice grew a secret-management problem, and the problem grew elaborate — and
 because "reusable workflow" had been written down in the same voice and at the
 same weight as I1, the elaboration was read as work to be done rather than as
@@ -124,8 +125,8 @@ address.
 
 ## Changing this document
 
-An invariant changes when the operator says it changes — not in an ADR, and
-never as the side effect of some other decision. A record that finds itself
-amending one has either found the wrong solution or found a real
-disagreement; either way it stops and asks. Means change all the time, in
-ADRs, and keeping the two apart is the whole point.
+An invariant changes when the operator says it changes — not in the register,
+and never as the side effect of some other decision. A change that finds
+itself amending one has either found the wrong solution or found a real
+disagreement; either way it stops and asks. Means change all the time, as
+rows of the register, and keeping the two apart is the whole point.

@@ -1,18 +1,20 @@
 # Working on falconet
 
-Instructions for agents and humans changing this repository. Read these three
+Instructions for agents and humans changing this repository. Read these two
 in order, and always know which one you are reading:
 
 1. **[docs/charter.md](docs/charter.md)** — what falconet is for, and the six
    invariants that are not up for negotiation. One page. Read it first.
-2. **[docs/decisions.md](docs/decisions.md)** — every live decision, the
-   invariant it serves, and the observation that should retire it. Read it
-   before proposing a change to how any of this is built.
-3. **[docs/adr/](docs/adr/)** — the reasoning and the measurements behind each
-   row of the register. Read the one you are about to argue with; several were
-   settled against measured alternatives.
+2. **[docs/decisions.md](docs/decisions.md)** — every live decision: what is
+   true, the invariant it serves, the observation that should retire it, and
+   what was rejected. Read it before proposing a change to how any of this is
+   built. It describes the tree as it is.
 
-The ranking is the point of having three. An **invariant** is a property of
+`docs/history/` is how those decisions were reached. It is not a description
+of anything, several of its records contradict the tree on purpose, and you
+do not need it to work here. Do not read it for what is true.
+
+The ranking is the point of having two. An **invariant** is a property of
 what falconet produces, and it is not traded away for a nicer implementation.
 A **means** is a choice someone made for reasons, and a choice has a shelf
 life. If you cannot tell which of the two a sentence in this file is, that is
@@ -25,10 +27,9 @@ not licence to rewrite whatever you find inconvenient. It is a question to ask
 out loud, in the register's terms — name the row, name its trigger — before
 spending a week serving a decision instead of a goal.
 
-Each fact lives in one place. The charter says what must be true, an ADR holds
-the argument and the measurements, the register indexes, and this file states
-the rule in a line and links. Nothing here restates an argument it does not
-own.
+Each fact lives in one place. The charter says what must be true, the
+register says what is and why, and this file states the working rules and
+links. Nothing here restates an argument it does not own.
 
 ## The guards are scar tissue, not defensive programming
 
@@ -49,8 +50,7 @@ without reading why it exists.** Two examples, both load-bearing:
 If a guard looks like paranoia, that is what a guard that has been working
 looks like.
 
-Since the rewrite in Go ([ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md))
-the guard logic lives in `internal/<pkg>`, with no filesystem access and
+The guard logic lives in `internal/<pkg>`, with no filesystem access and
 the incident prose above each guard moved there verbatim from the bash it
 replaced; `cmd/falconet/<verb>.go` is the flags, the files, the
 subprocesses and the exit code. The operator reads Go, the comment is the
@@ -61,7 +61,7 @@ a bug.
 ## What is not up for negotiation
 
 The [charter](docs/charter.md)'s invariants, as they appear in this tree.
-Changing one is not an ADR: it changes what the tool is, and it goes to the
+Changing one is not a register row: it changes what the tool is, and it goes to the
 operator. If you think one is wrong, say so and stop.
 
 - **The implementing agent gets no shell and no push token** (I5). Its grant
@@ -78,12 +78,12 @@ operator. If you think one is wrong, say so and stop.
   would be a lie told to the one reader everything here exists for. It also
   makes OpenTofu print `The -target option is not for routine use` into a log
   an adopter is reading while deciding whether this tool is serious. The way
-  to plan less is to plan fewer stacks, which is what
-  [ADR-0007](docs/adr/0007-the-plan-follows-the-change.md) does. The same goes
-  for anything else that makes tofu report it is being used unusually: the
-  assumptions falconet makes about an OpenTofu repository are the ordinary
-  ones, held in `internal/stacks`, and a clever one belongs in an ADR before
-  it belongs in the code.
+  to plan less is to plan fewer stacks
+  ([register](docs/decisions.md#every-planned-stack-is-planned)). The same
+  goes for anything else that makes tofu report it is being used unusually:
+  the assumptions falconet makes about an OpenTofu repository are the
+  ordinary ones, held in `internal/stacks`, and a clever one belongs in the
+  register before it belongs in the code.
 
 - **The plan reaches the reviewer whole, and says which stack it is of**
   (I2, I3). Assembly is mechanical and refuses to abridge; a change that
@@ -101,28 +101,18 @@ Settled, with reasons, and each carries a **Reopen when** in
 [the register](docs/decisions.md). Disagree loudly and cite the trigger you
 can point at in the present. Do not quietly build the other thing.
 
-- **Do not re-propose `github/gh-aw`** or anything shaped like it. It was
-  spiked, measured, and rejected with numbers in
-  [ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md). Read those
-  measurements first. It reopens on one observation: strangers can trigger
-  this pipeline.
-- **Do not wire up a review agent.** A second reviewing agent was measured
-  and cost more than it caught ([ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md)).
-  Its reference implementation shipped unwired, was never called by anything,
-  and has been deleted; git has it. Any future review harness must clear the
-  bar the original set: an independent, uncontaminated read of diff, commit
-  message and plan before a human is asked to look.
-- **The language is Go, and the port is done.** Decided in
-  [ADR-0006](docs/adr/0006-the-rewrite-is-in-go.md), which supersedes the
-  Bun strangler ADR-0002 D1 chose and ADR-0004 reaffirmed. Bun and Rust were
-  both weighed there, with reasons; do not re-propose either. Every verb is
-  native, the bash it replaced was deleted in the cutover (#19, ADR-0006 D3
-  step 3), and the suite runs once, through the binary `make build` leaves
-  at `dist/falconet`: `make test`.
-- **The rest are in the register**, not restated here: the verb surface and
-  the JSON config, the packaging, the GitHub client, the App-as-credential,
-  the release digest, `plan-env`. Each row names what it serves and what
-  would retire it.
+- **Do not re-propose `github/gh-aw`** or anything shaped like it
+  ([register](docs/decisions.md#the-pipeline-is-falconets-own-code)). It
+  reopens on one observation: strangers can trigger this pipeline.
+- **Do not wire up a review agent**
+  ([register](docs/decisions.md#no-second-reviewing-agent)) unless it clears
+  the bar written there.
+- **The language is Go, and the port is done**
+  ([register](docs/decisions.md#the-language-is-go)). Bun and Rust were
+  weighed, with reasons; do not re-propose either. The suite runs once,
+  through the binary `make build` leaves at `dist/falconet`: `make test`.
+- **The rest are in the register**, not restated here. Each row names what
+  it serves and what would retire it.
 
 ## Tests
 
@@ -138,7 +128,7 @@ can point at in the present. Do not quietly build the other thing.
   lists in step with what it implements. `go vet`, `staticcheck`,
   `errcheck` and `govulncheck` are part of green in CI — ci.yml runs them
   before the suite, and `make check` runs the same pinned versions locally:
-  an ignored error is a red build (ADR-0006 D1).
+  an ignored error is a red build.
 - **`bash tests/run.sh`** — the acceptance suite and the incident record,
   run through the binary. It is not rewritten for Go and it reaches inside
   nothing: **no test may reach inside its subject.** Every assertion crosses
@@ -151,7 +141,7 @@ can point at in the present. Do not quietly build the other thing.
 
 GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
 `fake_github` in `tests/lib.sh` that answers from fixtures and records what
-it was asked, with `GITHUB_API_URL` pointing at it (ADR-0006 D2). No test
+it was asked, with `GITHUB_API_URL` pointing at it. No test
 file stubs `gh`; the files that once did put a tripwire on `PATH` instead,
 so a verb that shelled out to `gh` would fail loudly before the real one
 could carry a test token anywhere. `tofu` and `gitleaks` are bash stubs
@@ -171,12 +161,12 @@ before it is made green.
 
 ## The records have a test too
 
-`make lint-docs` holds the shape of the three documents above, the same way
-`contract.test.sh` holds the wiring's: every ADR carries **Status**, **Serves**
-and **Reopen when**; every `Serves` names an invariant the charter actually
-declares; every accepted record is indexed by a row of the register; a
-supersession is acknowledged by both records; and nothing in `README.md`,
-`AGENTS.md` or `docs/` links a file that is not in this tree. It is
+`make lint-docs` holds the shape of the two documents above, the same way
+`contract.test.sh` holds the wiring's: every row of the register names an
+invariant the charter actually declares and links a section of the register
+that exists; every invariant is named by some row; and nothing in
+`README.md`, `AGENTS.md` or `docs/` links a file that is not in this tree. It
+is
 `tools/docslint`, Go and the standard library, with its own cases in
 `tools/docslint/lint_test.go` — each one a corpus broken in exactly one place,
 proved red on the break it exists for.
@@ -187,8 +177,10 @@ inside CI. `make hooks` puts it on `pre-push` for this clone, which is a
 convenience and not the gate: CI runs it on every push and every pull request,
 and `--no-verify` exists.
 
-A new field, a new invariant, or a new kind of record starts by breaking the
-lint on purpose and watching it refuse.
+A new invariant or a new kind of row starts by breaking the lint on purpose
+and watching it refuse. A new decision is a row and a section in the
+register, made in the same commit as the change; the reasoning that does not
+fit there goes in that commit's message. No new files go in `docs/history/`.
 
 ## Two facts about tofu
 
@@ -209,10 +201,9 @@ computed. Capture the whole result, then inspect it.
 
 ## Adding a verb
 
-The port from the origin's stage-shaped scripts to the six verbs is done;
-[ADR-0003](docs/adr/0003-the-cli-surface.md) designed it. If you are adding a
-verb, the criterion is ADR-0003's: a thing becomes public vocabulary if and
-only if a caller invokes it directly. The secret scan is the worked example
+If you are adding a verb, the criterion is the
+[register's](docs/decisions.md#stage-level-verbs-one-json-config-file): a
+thing becomes public vocabulary if and only if a caller invokes it directly. The secret scan is the worked example
 of something that stayed internal.
 
 ## Two roots, never one variable

@@ -7,7 +7,7 @@
 // wholesale. That is deliberate. Setting paths.allow means "this list instead
 // of the default", never "these in addition to *.tf" — an allowlist that
 // grows by accident is not an allowlist. A default spelled at a call site
-// drifts from the schema in docs/adr/0003-the-cli-surface.md the first time
+// drifts from the schema in docs/decisions.md the first time
 // someone edits one and not the other.
 //
 // Discovery, in precedence order:
@@ -39,7 +39,7 @@ import (
 )
 
 // Defaults is the schema with every default, as the JSON document the bash
-// config library carried. Every key in docs/adr/0003-the-cli-surface.md is here but one, so
+// config library carried. Every key in docs/decisions.md is here but one, so
 // a verb never has to ask whether a key is set. The one is prompts: its
 // default was issue #3 — a path relative to the consumer's repository, which
 // made the default an override and the shipped prompt unreachable — and the

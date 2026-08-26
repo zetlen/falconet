@@ -1,16 +1,18 @@
 // docslint holds the shape of this repository's records.
 //
-// The charter names invariants; an ADR names the invariant it serves and the
-// observation that should retire it; the register indexes every live decision
-// against both. None of that survives contact with a busy week unless
-// something refuses a record that skips it — the same reason
-// tests/contract.test.sh holds the wiring's shape rather than trusting it.
+// The charter names invariants; the register lists every live decision with
+// the invariant it serves, the observation that should retire it, and a
+// section in the same file that records it. None of that survives contact
+// with a busy week unless something refuses a row that skips it — the same
+// reason tests/contract.test.sh holds the wiring's shape rather than trusting
+// it. docs/history/ is link-checked and nothing more: it records how the
+// decisions were reached, and is not read for what they are.
 //
 // It is Go and the standard library because this repository pins exactly one
 // binary and adding a dependency to check a document is a decision, not a
-// convenience (AGENTS.md, ADR-0003). What is checked here is not really
-// markdown structure anyway: it is a typed header block and the referential
-// integrity between records, which no tree parser would answer for.
+// convenience (AGENTS.md). What is checked here is not really markdown
+// structure anyway: it is the referential integrity between two documents,
+// which no tree parser would answer for.
 //
 // Run it directly (`make lint-docs`), or let `go test ./...` run it against
 // this tree — TestTheRecordsInThisRepository does exactly that.

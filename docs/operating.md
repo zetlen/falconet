@@ -73,7 +73,7 @@ here, not after.
 **The consuming repository** is `wayfinders-infra` (private,
 `zetlen/wayfinders-infra`) — falconet's only integration environment, and
 deliberately so until falconet stops being a personal project
-([ADR-0002](adr/0002-extract-the-pipeline-into-falconet.md), move 3). It still
+([ADR-0002](history/0002-extract-the-pipeline-into-falconet.md), move 3). It still
 holds its own copies of `scripts/`: they were copied, not moved, because its
 `work-infra-issues` skill is currently the only thing working its request
 queue.

@@ -8,7 +8,7 @@
 //
 //	falconet <verb> [args]
 //
-// The six verbs are the stages of the pipeline (docs/adr/0003-the-cli-surface.md).
+// The six verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
 // `prompt`, `plan-env`, `scan` and `config` are unlisted on purpose: public

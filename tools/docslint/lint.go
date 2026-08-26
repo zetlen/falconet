@@ -12,40 +12,19 @@ import (
 const (
 	charterPath  = "docs/charter.md"
 	registerPath = "docs/decisions.md"
-	adrDir       = "docs/adr"
 )
 
-// The fields an ADR header may carry. The set is closed on purpose: a
-// misspelled **Supercedes:** would otherwise be a field nothing reads and
-// nothing refuses, which is how a cross-reference goes quietly missing.
-var knownFields = map[string]bool{
-	"Status":      true,
-	"Serves":      true,
-	"Reopen when": true,
-	"Supersedes":  true,
-	"Amends":      true,
-	"Builds on":   true,
-	"Reaffirms":   true,
-}
-
-// Serves and Reopen when are what this tool exists for; Status is what tells
-// it which records are live.
-var requiredFields = []string{"Status", "Serves", "Reopen when"}
-
 // Files linked from anywhere in these are checked to exist. The set is the
-// prose an adopter or an agent is sent to.
+// prose an adopter or an agent is sent to; everything under docs/ joins it.
 var linkChecked = []string{"README.md", "AGENTS.md"}
 
 var (
-	reADRFile      = regexp.MustCompile(`^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$`)
-	reADRTitle     = regexp.MustCompile(`^# ADR-(\d{4}) — \S`)
-	reField        = regexp.MustCompile(`^\*\*([A-Z][A-Za-z ]*?):\*\*[ ]?(.*)$`)
-	reStatus       = regexp.MustCompile(`^(?:Accepted|Proposed|Superseded by \[ADR-(\d{4})\]\([^)]*\)) · \d{4}-\d{2}-\d{2}`)
 	reInvariantRef = regexp.MustCompile(`\bI([1-9][0-9]*)\b`)
 	reInvariantHed = regexp.MustCompile(`^### (I[1-9][0-9]*) · (\S.*)$`)
 	reLink         = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 	reInlineCode   = regexp.MustCompile("`[^`]*`")
-	reADRMention   = regexp.MustCompile(`\bADR-(\d{4})\b`)
+	reHeading      = regexp.MustCompile(`^#{1,6} +(\S.*)$`)
+	reNotSlug      = regexp.MustCompile(`[^a-z0-9 -]`)
 	reFence        = regexp.MustCompile("^\\s{0,3}(```|~~~)")
 )
 
@@ -63,16 +42,7 @@ func (f finding) String() string {
 }
 
 type field struct {
-	value string
-	line  int
-}
-
-type adr struct {
-	path      string // repo-relative
-	base      string // file name
-	num       string // "0003"
-	fields    map[string]field
-	supersede string // the ADR number this one's Status says superseded it
+	line int
 }
 
 // lint answers for the whole corpus at once, because most of what can go
@@ -86,26 +56,17 @@ func lint(fsys fs.FS) ([]finding, error) {
 	}
 	out = append(out, fs1...)
 
-	adrs, fs2, err := readADRs(fsys, invariants)
+	cited, fs2, err := readRegister(fsys, invariants)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, fs2...)
 
-	cited, fs3, err := readRegister(fsys, adrs, invariants)
-	if err != nil {
-		return nil, err
-	}
-	out = append(out, fs3...)
-
-	out = append(out, checkSupersession(adrs)...)
-
-	// An invariant nothing serves is either missing its record or is not an
-	// invariant. Citations come from both directions: an ADR's Serves field
-	// and a register row's.
+	// An invariant nothing serves is either missing its decision or is not
+	// an invariant.
 	for _, id := range sortedKeys(invariants) {
 		if !cited[id] {
-			out = append(out, finding{charterPath, invariants[id], id + " is cited by no record: no ADR serves it and no decision in the register names it"})
+			out = append(out, finding{charterPath, invariants[id], id + " is cited by no decision: no row of the register names it"})
 		}
 	}
 
@@ -115,11 +76,11 @@ func lint(fsys fs.FS) ([]finding, error) {
 		return nil, err
 	}
 	for _, p := range files {
-		fs4, err := checkLinks(fsys, p)
+		fs3, err := checkLinks(fsys, p)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, fs4...)
+		out = append(out, fs3...)
 	}
 
 	sort.SliceStable(out, func(i, j int) bool {
@@ -136,7 +97,7 @@ func lint(fsys fs.FS) ([]finding, error) {
 func readCharter(fsys fs.FS) (map[string]int, []finding, error) {
 	lines, err := readLines(fsys, charterPath)
 	if err != nil {
-		return map[string]int{}, []finding{{charterPath, 0, "missing: this is the document every ADR's Serves field points at"}}, nil
+		return map[string]int{}, []finding{{charterPath, 0, "missing: this is the document every decision's Serves cell points at"}}, nil
 	}
 	var out []finding
 	invariants := map[string]int{}
@@ -150,7 +111,7 @@ func readCharter(fsys fs.FS) (map[string]int, []finding, error) {
 			continue
 		}
 		if prev, dup := invariants[m[1]]; dup {
-			out = append(out, finding{charterPath, i + 1, fmt.Sprintf("%s is declared twice (also on line %d); an invariant id is an address and two records would disagree about where it points", m[1], prev)})
+			out = append(out, finding{charterPath, i + 1, fmt.Sprintf("%s is declared twice (also on line %d); an invariant id is an address and two decisions would disagree about where it points", m[1], prev)})
 			continue
 		}
 		invariants[m[1]] = i + 1
@@ -164,206 +125,31 @@ func readCharter(fsys fs.FS) (map[string]int, []finding, error) {
 	return invariants, out, nil
 }
 
-func readADRs(fsys fs.FS, invariants map[string]int) ([]*adr, []finding, error) {
-	entries, err := fs.ReadDir(fsys, adrDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading %s: %w", adrDir, err)
-	}
-	var out []finding
-	var adrs []*adr
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		p := path.Join(adrDir, e.Name())
-		m := reADRFile.FindStringSubmatch(e.Name())
-		if m == nil {
-			out = append(out, finding{p, 0, "name is not `NNNN-lower-case-words.md`, so it has no number the other records can cite"})
-			continue
-		}
-		a, fs1, err := readADR(fsys, p, m[1], invariants)
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, fs1...)
-		if a != nil {
-			adrs = append(adrs, a)
-		}
-	}
-	if len(adrs) == 0 {
-		out = append(out, finding{adrDir, 0, "holds no records"})
-	}
-	return adrs, out, nil
-}
-
-func readADR(fsys fs.FS, p, num string, invariants map[string]int) (*adr, []finding, error) {
-	lines, err := readLines(fsys, p)
-	if err != nil {
-		return nil, nil, err
-	}
-	var out []finding
-	a := &adr{path: p, base: path.Base(p), num: num, fields: map[string]field{}}
-
-	if len(lines) == 0 || !reADRTitle.MatchString(lines[0]) {
-		out = append(out, finding{p, 1, "first line must be `# ADR-NNNN — Title`"})
-	} else if got := reADRTitle.FindStringSubmatch(lines[0])[1]; got != num {
-		out = append(out, finding{p, 1, fmt.Sprintf("titled ADR-%s in a file numbered %s; a citation would reach the wrong record", got, num)})
-	}
-
-	// The header block is everything above the first `## ` heading. Nothing
-	// else is parsed as a field, so a `**Bold:**` line in the body is prose.
-	end := len(lines)
-	for i, l := range lines {
-		if strings.HasPrefix(l, "## ") {
-			end = i
-			break
-		}
-	}
-	header := lines[:end]
-
-	var current string
-	for i, l := range header {
-		if reFence.MatchString(l) {
-			out = append(out, finding{p, i + 1, "fenced code in the header block; the header is fields and prose, and a fence here would make the fields unparseable"})
-			break
-		}
-		m := reField.FindStringSubmatch(l)
-		if m == nil {
-			// A continuation of the field above, or free prose. Either way it
-			// belongs to whatever field was last opened.
-			if current != "" {
-				f := a.fields[current]
-				f.value = strings.TrimSpace(f.value + " " + strings.TrimSpace(l))
-				a.fields[current] = f
-			}
-			continue
-		}
-		name := m[1]
-		if !knownFields[name] {
-			out = append(out, finding{p, i + 1, fmt.Sprintf("unknown header field %q; the fields are %s", name, strings.Join(sortedKeys(knownFields), ", "))})
-			current = ""
-			continue
-		}
-		if _, dup := a.fields[name]; dup {
-			out = append(out, finding{p, i + 1, fmt.Sprintf("**%s:** appears twice", name)})
-		}
-		a.fields[name] = field{value: strings.TrimSpace(m[2]), line: i + 1}
-		current = name
-	}
-
-	for _, name := range requiredFields {
-		f, ok := a.fields[name]
-		if !ok {
-			out = append(out, finding{p, 1, missingFieldMessage(name)})
-			continue
-		}
-		if strings.TrimSpace(f.value) == "" {
-			out = append(out, finding{p, f.line, fmt.Sprintf("**%s:** is empty", name)})
-		}
-	}
-
-	if f, ok := a.fields["Status"]; ok && strings.TrimSpace(f.value) != "" {
-		m := reStatus.FindStringSubmatch(f.value)
-		if m == nil {
-			out = append(out, finding{p, f.line, "**Status:** must begin `Accepted · YYYY-MM-DD`, `Proposed · YYYY-MM-DD`, or `Superseded by [ADR-NNNN](file.md) · YYYY-MM-DD`"})
-		} else if m[1] != "" {
-			a.supersede = m[1]
-		}
-	}
-
-	if f, ok := a.fields["Serves"]; ok {
-		out = append(out, checkServes(p, f, a.fields["Serves"].value, invariants)...)
-	}
-	return a, out, nil
-}
-
-func missingFieldMessage(name string) string {
-	switch name {
-	case "Serves":
-		return "no **Serves:** field. Name the charter invariant this record is in service of — `**Serves:** I6 (adoption stays inside one operator's reach)`. A record that serves no invariant is describing a preference, not a decision."
-	case "Reopen when":
-		return "no **Reopen when:** field. Name the observation that should retire this decision — written now, while you have no stake in defending it. `nothing reopens this` is an answer, if it is true and you say why."
-	default:
-		return "no **" + name + ":** field"
-	}
-}
-
-func checkServes(p string, f field, value string, invariants map[string]int) []finding {
-	refs := reInvariantRef.FindAllStringSubmatch(value, -1)
-	if len(refs) == 0 {
-		return []finding{{p, f.line, "**Serves:** names no invariant; cite at least one by id, like `I3`"}}
-	}
-	var out []finding
-	for _, r := range refs {
-		id := "I" + r[1]
-		if _, ok := invariants[id]; !ok {
-			out = append(out, finding{p, f.line, fmt.Sprintf("**Serves:** cites %s, which %s does not declare", id, charterPath)})
-		}
-	}
-	return out
-}
-
-// checkSupersession refuses a supersession only one of the two records knows
-// about. The superseding record must mention the superseded one somewhere in
-// its own header — under Supersedes when the whole record goes, under Amends
-// when only a mechanism does.
-func checkSupersession(adrs []*adr) []finding {
-	byNum := map[string]*adr{}
-	for _, a := range adrs {
-		byNum[a.num] = a
-	}
-	var out []finding
-	for _, a := range adrs {
-		if a.supersede == "" {
-			continue
-		}
-		other, ok := byNum[a.supersede]
-		if !ok {
-			out = append(out, finding{a.path, a.fields["Status"].line, fmt.Sprintf("**Status:** says ADR-%s superseded it, and there is no such record here", a.supersede)})
-			continue
-		}
-		if !mentionsADR(other, a.num) {
-			out = append(out, finding{other.path, 1, fmt.Sprintf("ADR-%s says this record superseded it, and this record's header does not mention ADR-%s. A supersession only one side knows about is how the corpus starts contradicting itself.", a.num, a.num)})
-		}
-	}
-	return out
-}
-
-func mentionsADR(a *adr, num string) bool {
-	for _, name := range []string{"Supersedes", "Amends", "Builds on", "Reaffirms", "Status"} {
-		f, ok := a.fields[name]
-		if !ok {
-			continue
-		}
-		for _, m := range reADRMention.FindAllStringSubmatch(f.value, -1) {
-			if m[1] == num {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// readRegister holds the register's shape and returns the set of invariant
-// ids its rows cite.
-func readRegister(fsys fs.FS, adrs []*adr, invariants map[string]int) (map[string]bool, []finding, error) {
+// readRegister reads the table of live decisions and the sections beneath it.
+// Every row names an invariant the charter declares and links the section
+// that records it; the section must exist, in this file, because the
+// register is the one document a decision is read from.
+func readRegister(fsys fs.FS, invariants map[string]int) (map[string]bool, []finding, error) {
 	cited := map[string]bool{}
-	for _, a := range adrs {
-		for _, m := range reInvariantRef.FindAllStringSubmatch(a.fields["Serves"].value, -1) {
-			cited["I"+m[1]] = true
-		}
-	}
-
 	lines, err := readLines(fsys, registerPath)
 	if err != nil {
 		return cited, []finding{{registerPath, 0, "missing: this is the index of every live decision"}}, nil
 	}
 
 	var out []finding
+	code := fenced(lines)
+	anchors := map[string]bool{}
+	for i, l := range lines {
+		if code[i] {
+			continue
+		}
+		if m := reHeading.FindStringSubmatch(l); m != nil {
+			anchors[slug(m[1])] = true
+		}
+	}
+
 	want := []string{"Decision", "Serves", "Reopen when", "Record"}
 	inTable, sawTable := false, false
-	recorded := map[string]bool{}
-	code := fenced(lines)
 	for i, l := range lines {
 		if code[i] || !strings.HasPrefix(strings.TrimSpace(l), "|") {
 			inTable = false
@@ -398,25 +184,48 @@ func readRegister(fsys fs.FS, adrs []*adr, invariants map[string]int) (map[strin
 			out = append(out, finding{registerPath, i + 1, "the Record cell links nothing; a decision with no record is a decision nobody can reopen"})
 		}
 		for _, m := range links {
-			recorded[path.Base(strings.SplitN(m[1], "#", 2)[0])] = true
+			target := m[1]
+			if !strings.HasPrefix(target, "#") {
+				continue // a file; checkLinks holds it
+			}
+			if !anchors[strings.TrimPrefix(target, "#")] {
+				out = append(out, finding{registerPath, i + 1, fmt.Sprintf("the Record cell links %s, and no heading in this file has that anchor", target)})
+			}
 		}
 	}
 	if !sawTable {
 		out = append(out, finding{registerPath, 0, "no register table; its header row is `" + strings.Join(want, " | ") + "`"})
 	}
-
-	for _, a := range adrs {
-		if a.supersede != "" || recorded[a.base] {
-			continue
-		}
-		out = append(out, finding{registerPath, 0, fmt.Sprintf("ADR-%s is accepted and no row cites it, so the decision it holds is indexed nowhere", a.num)})
-	}
 	return cited, out, nil
+}
+
+// slug is the anchor GitHub gives a heading: lower-cased, punctuation
+// dropped, spaces to hyphens. Close enough for the headings this repository
+// writes; a heading that needs more than this is a heading to simplify.
+func slug(heading string) string {
+	s := strings.ToLower(strings.TrimSpace(heading))
+	s = reNotSlug.ReplaceAllString(s, "")
+	return strings.ReplaceAll(s, " ", "-")
+}
+
+func checkServes(p string, f field, value string, invariants map[string]int) []finding {
+	refs := reInvariantRef.FindAllStringSubmatch(value, -1)
+	if len(refs) == 0 {
+		return []finding{{p, f.line, "the Serves cell names no invariant; cite at least one by id, like `I3`"}}
+	}
+	var out []finding
+	for _, m := range refs {
+		id := "I" + m[1]
+		if _, ok := invariants[id]; !ok {
+			out = append(out, finding{p, f.line, fmt.Sprintf("Serves cites %s, which %s does not declare", id, charterPath)})
+		}
+	}
+	return out
 }
 
 // checkLinks refuses a relative link to a file that is not there. External
 // links and bare anchors are left alone; a dangling one of those is a
-// different job.
+// different job — except in the register, where readRegister holds them.
 func checkLinks(fsys fs.FS, p string) ([]finding, error) {
 	lines, err := readLines(fsys, p)
 	if err != nil {
@@ -447,7 +256,7 @@ func checkLinks(fsys fs.FS, p string) ([]finding, error) {
 }
 
 // prose is every document this tool reads links out of: the two entry points
-// and everything under docs/.
+// and everything under docs/, history included.
 func prose(fsys fs.FS) ([]string, error) {
 	out := append([]string{}, linkChecked...)
 	err := fs.WalkDir(fsys, "docs", func(p string, d fs.DirEntry, err error) error {

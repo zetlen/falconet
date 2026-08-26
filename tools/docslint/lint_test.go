@@ -7,8 +7,8 @@ import (
 	"testing/fstest"
 )
 
-// A corpus that agrees with itself: one invariant, one record that serves it,
-// one row that indexes the record. Every case below is this, broken in one
+// A corpus that agrees with itself: one invariant, one decision that serves
+// it, one section that records it. Every case below is this, broken in one
 // place, so a case names the break it exists for.
 func corpus() fstest.MapFS {
 	return fstest.MapFS{
@@ -20,26 +20,20 @@ func corpus() fstest.MapFS {
 
 falconet plans; it never applies.
 `)},
-		"docs/adr/0002-a-record.md": &fstest.MapFile{Data: []byte(`# ADR-0002 — A record
-
-**Status:** Accepted · 2026-08-20
-**Serves:** I1 (a person decides the apply)
-**Reopen when:** somebody wants the tool to apply.
-
-## Context
-
-Prose.
-`)},
 		"docs/decisions.md": &fstest.MapFile{Data: []byte(`# The decision register
 
 | Decision | Serves | Reopen when | Record |
 | --- | --- | --- | --- |
-| It never applies | I1 | never | [ADR-0002](adr/0002-a-record.md) |
+| It never applies | I1 | never | [never applies](#it-never-applies) |
 
-Trailing prose.
+## It never applies
+
+Prose. See [operating](operating.md).
 `)},
-		"README.md": &fstest.MapFile{Data: []byte("# falconet\n\nSee [the charter](docs/charter.md).\n")},
-		"AGENTS.md": &fstest.MapFile{Data: []byte("# Working on falconet\n\nRead [the register](docs/decisions.md).\n")},
+		"docs/operating.md":             &fstest.MapFile{Data: []byte("# Operating\n")},
+		"docs/history/0002-a-record.md": &fstest.MapFile{Data: []byte("# ADR-0002 — A record\n\nHow it was reached.\n")},
+		"README.md":                     &fstest.MapFile{Data: []byte("# falconet\n\nSee [the charter](docs/charter.md).\n")},
+		"AGENTS.md":                     &fstest.MapFile{Data: []byte("# Working on falconet\n\nRead [the register](docs/decisions.md).\n")},
 	}
 }
 
@@ -66,92 +60,63 @@ func TestTheGoodCorpusIsSilent(t *testing.T) {
 	}
 }
 
+func TestSlug(t *testing.T) {
+	cases := map[string]string{
+		"It never applies":                          "it-never-applies",
+		"The language is Go":                        "the-language-is-go",
+		"Verbs never call each other; `.falconet/`": "verbs-never-call-each-other-falconet",
+		"Never `-target`":                           "never--target",
+	}
+	for in, want := range cases {
+		if got := slug(in); got != want {
+			t.Errorf("slug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestEachBreakIsRefused(t *testing.T) {
 	cases := []struct {
 		name   string
 		break_ func(fstest.MapFS) fstest.MapFS
 		want   string
 	}{
-		{"no Serves field", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Serves:** I1 (a person decides the apply)\n", "")
-		}, "no **Serves:** field"},
-
-		{"no Reopen when field", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Reopen when:** somebody wants the tool to apply.\n", "")
-		}, "no **Reopen when:** field"},
-
-		{"empty Reopen when", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Reopen when:** somebody wants the tool to apply.", "**Reopen when:**")
-		}, "**Reopen when:** is empty"},
-
 		{"Serves cites an invariant the charter does not declare", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Serves:** I1", "**Serves:** I9")
+			return sub(f, "docs/decisions.md", "| I1 |", "| I9 |")
 		}, "cites I9, which docs/charter.md does not declare"},
 
 		{"Serves names no invariant at all", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Serves:** I1 (a person decides the apply)", "**Serves:** the reviewer")
+			return sub(f, "docs/decisions.md", "| I1 |", "| the reviewer |")
 		}, "names no invariant"},
 
-		{"a misspelled field name", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Status:**", "**Supercedes:** nothing\n**Status:**")
-		}, `unknown header field "Supercedes"`},
-
-		{"a Status with no shape", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Status:** Accepted · 2026-08-20", "**Status:** done I think")
-		}, "**Status:** must begin"},
-
-		{"a link to a file that is not there", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "## Context", "See [ADR-0001](0001-gone.md).\n\n## Context")
-		}, "there is no docs/adr/0001-gone.md in this tree"},
-
-		{"an accepted record no row indexes", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/decisions.md", "[ADR-0002](adr/0002-a-record.md)", "[operating](operating.md)")
-		}, "ADR-0002 is accepted and no row cites it"},
+		{"an empty cell", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "docs/decisions.md", "| never |", "| |")
+		}, "the Reopen when cell is empty"},
 
 		{"a Record cell that links nothing", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/decisions.md", "[ADR-0002](adr/0002-a-record.md)", "ADR-0002")
+			return sub(f, "docs/decisions.md", "[never applies](#it-never-applies)", "below")
 		}, "links nothing"},
 
-		{"a supersession only one side knows about", func(f fstest.MapFS) fstest.MapFS {
-			f = write(f, "docs/adr/0003-the-other.md", `# ADR-0003 — The other
+		{"a Record anchor no heading answers to", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "docs/decisions.md", "(#it-never-applies)", "(#it-always-applies)")
+		}, "no heading in this file has that anchor"},
 
-**Status:** Accepted · 2026-08-21
-**Serves:** I1
-**Reopen when:** never.
+		{"a Record link to a file that is not there", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "docs/decisions.md", "[never applies](#it-never-applies)", "[gone](adr/0001-gone.md)")
+		}, "there is no docs/adr/0001-gone.md in this tree"},
 
-## Context
-`)
-			f = sub(f, "docs/adr/0002-a-record.md", "**Status:** Accepted · 2026-08-20",
-				"**Status:** Superseded by [ADR-0003](0003-the-other.md) · 2026-08-21")
-			return sub(f, "docs/decisions.md", "| It never applies", "| The other | I1 | never | [ADR-0003](adr/0003-the-other.md) |\n| It never applies")
-		}, "does not mention ADR-0002"},
+		{"a link to a file that is not there, from history", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "docs/history/0002-a-record.md", "How it was reached.", "See [ADR-0001](0001-gone.md).")
+		}, "there is no docs/history/0001-gone.md in this tree"},
 
-		{"a status naming a superseding record that is not here", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Status:** Accepted · 2026-08-20",
-				"**Status:** Superseded by [ADR-0044](0044-nowhere.md) · 2026-08-21")
-		}, "there is no such record here"},
-
-		{"an invariant no record serves", func(f fstest.MapFS) fstest.MapFS {
+		{"an invariant no decision serves", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "docs/charter.md", "### I1 · A person decides the apply",
 				"### I2 · Nobody's business\n\nUnserved.\n\n### I1 · A person decides the apply")
-		}, "I2 is cited by no record"},
+		}, "I2 is cited by no decision"},
 
 		{"one invariant id declared twice", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "docs/charter.md", "### I1 · A person decides the apply",
 				"### I1 · Something else\n\nProse.\n\n### I1 · A person decides the apply")
 		}, "declared twice"},
-
-		{"a file numbered one thing and titled another", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "# ADR-0002 — A record", "# ADR-0009 — A record")
-		}, "titled ADR-0009 in a file numbered 0002"},
-
-		{"a file name with no number", func(f fstest.MapFS) fstest.MapFS {
-			return write(f, "docs/adr/thoughts.md", "# Thoughts\n")
-		}, "has no number the other records can cite"},
-
-		{"a fence in the header block", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/adr/0002-a-record.md", "**Status:**", "```\nnot here\n```\n**Status:**")
-		}, "fenced code in the header block"},
 
 		{"no charter", func(f fstest.MapFS) fstest.MapFS {
 			delete(f, "docs/charter.md")
@@ -166,6 +131,10 @@ func TestEachBreakIsRefused(t *testing.T) {
 		{"a register with no table", func(f fstest.MapFS) fstest.MapFS {
 			return write(f, "docs/decisions.md", "# The decision register\n\nNothing yet.\n")
 		}, "no register table"},
+
+		{"a heading inside a fence does not count as an anchor", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "docs/decisions.md", "## It never applies", "```\n## It never applies\n```")
+		}, "no heading in this file has that anchor"},
 	}
 
 	for _, tc := range cases {

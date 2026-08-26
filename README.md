@@ -424,8 +424,8 @@ install path above:
 
 `prompt`, `config`, `scan` and `plan-env` exist unlisted —
 public in that they work, not vocabulary, by
-[ADR-0003](docs/adr/0003-the-cli-surface.md)'s criterion that a thing is a
-verb if and only if a caller invokes it directly. `-h` on any of them says
+[the register](docs/decisions.md#stage-level-verbs-one-json-config-file)'s
+criterion that a thing is a verb if and only if a caller invokes it directly. `-h` on any of them says
 what it does.
 
 The reusable workflow runs the six as four jobs — **gate**, **implement**,
@@ -479,9 +479,8 @@ against ~1,000 lines of actual infrastructure. Two attempts to escape that —
 adopting an off-the-shelf agentic workflow, or trimming in place — both
 concluded the same way: the workflow is a good tool wearing a repository as a
 costume. So it becomes a tool.
-[ADR-0002](docs/adr/0002-extract-the-pipeline-into-falconet.md) is the
-founding record, including the measurements that killed the off-the-shelf
-option.
+[The founding record](docs/history/0002-extract-the-pipeline-into-falconet.md)
+has the measurements that killed the off-the-shelf option.
 
 ## Where this stands
 
@@ -497,11 +496,10 @@ option.
 [The charter](docs/charter.md) is what falconet is for, in one page: the six
 invariants that hold, the non-goals, and the line between those and everything
 that is merely how it is built today. [The decision register](docs/decisions.md)
-indexes every live decision against the invariant it serves and the observation
-that should retire it. The reasoning is in [`docs/adr/`](docs/adr/): 0002
-founding, 0003 the CLI surface, 0006 the rewrite in Go, 0007 the plan is of
-what changed. 0004 and 0005 are superseded and kept for the incidents that
-produced them. [operating](docs/operating.md) covers the credentials only the
+holds every live decision, with the invariant it serves, the observation that
+should retire it, and why. [`docs/history/`](docs/history/) is how those
+decisions were reached, kept for its incidents and measurements; it is not a
+description of the tree. [operating](docs/operating.md) covers the credentials only the
 operator can create; [AGENTS.md](AGENTS.md) is what to read before changing
 anything here.
 
