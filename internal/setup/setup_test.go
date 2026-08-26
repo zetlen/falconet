@@ -436,6 +436,12 @@ func TestWorkflowRef(t *testing.T) {
 		"v0.1.1-0.20260822120000-0123456789ab+dirty": "main",
 		"v0.2.0-pre.0.20260822120000-abcdefabcdef":   "main",
 		"v0.2.0-rc1": "v0.2.0-rc1",
+		// A tag with build metadata behind it is no more fetchable than a
+		// pseudo-version with the same behind it. This is what a build from an
+		// edited tree at a release tag reports, which is every dev build made
+		// while checked out at one.
+		"v0.4.0+dirty":        "main",
+		"v1.2.3+incompatible": "main",
 	} {
 		if got := WorkflowRef(in); got != want {
 			t.Errorf("WorkflowRef(%q) = %q, want %q", in, got, want)

@@ -310,9 +310,6 @@ func Uses(ref string) string {
 
 // pseudoVersion is what the go command records for a module built from a
 // commit with no tag: vX.Y.Z-[pre.]0.YYYYMMDDHHMMSS-abcdefabcdef.
-// Build metadata after it — `+dirty`, which the go command appends when the
-// tree had uncommitted changes, or `+incompatible` — is still a
-// pseudo-version; no uses: line can fetch those either.
 var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}(\+[0-9A-Za-z.-]+)?$`)
 
 // WorkflowRef is the ref the `uses:` line pins, from this binary's version:
@@ -325,6 +322,18 @@ var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}(\+[0-9A-Za-z.-]+
 func WorkflowRef(version string) string {
 	switch {
 	case version == "", version == "dev", version == "(devel)":
+		return "main"
+	// Build metadata — `+dirty`, which the go command appends when the tree
+	// had uncommitted changes, or `+incompatible` — names no ref at all, and
+	// this is true of a TAGGED build too. A binary built from an edited tree
+	// sitting exactly on v0.4.0 reports `v0.4.0+dirty`, and the workflow it
+	// wrote pinned `uses: …@v0.4.0+dirty`: a ref GitHub cannot fetch, in a
+	// file that looks pinned. The suite has held this rule from outside since
+	// the ref was first written; the implementation checked it only when a
+	// pseudo-version carried it, so the one case that reaches an operator —
+	// editing anything while checked out at a release — was the case that
+	// escaped. Nothing that cannot be fetched is pinned.
+	case strings.Contains(version, "+"):
 		return "main"
 	case pseudoVersion.MatchString(version):
 		return "main"
