@@ -4,6 +4,11 @@
 **Amends:** [ADR-0003](0003-the-cli-surface.md) — `stacks.plan` and
 `stacks.validate_only` keep their meanings and stop being the enumeration of
 everything falconet knows about; the config's defaults for them are removed
+**Serves:** I3 (the plan is of what the change touches), I1 (a person decides
+the apply)
+**Reopen when:** a real repository layout appears that discovery reads
+wrongly. The `-target` refusal in this record does not reopen with it: that is
+I1 in mechanism form.
 
 ## Context
 

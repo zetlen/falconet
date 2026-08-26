@@ -494,11 +494,16 @@ option.
 | `prompts/` | embedded in the binary; the standing-facts block is the origin's |
 | Live runs | yes, on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0. Each found a bug that only integration finds — most recently a pull request whose true plan was of a stack the change did not touch ([#23](https://github.com/zetlen/falconet/issues/23), fixed) |
 
-The decisions are in [`docs/adr/`](docs/adr/): 0002 founding, 0003 the CLI
-surface, 0006 the rewrite in Go, 0007 the plan is of what changed. 0004 and
-0005 are superseded and kept for the incidents that produced them.
-[operating](docs/operating.md) covers the credentials only the operator can
-create; [AGENTS.md](AGENTS.md) is what to read before changing anything here.
+[The charter](docs/charter.md) is what falconet is for, in one page: the six
+invariants that hold, the non-goals, and the line between those and everything
+that is merely how it is built today. [The decision register](docs/decisions.md)
+indexes every live decision against the invariant it serves and the observation
+that should retire it. The reasoning is in [`docs/adr/`](docs/adr/): 0002
+founding, 0003 the CLI surface, 0006 the rewrite in Go, 0007 the plan is of
+what changed. 0004 and 0005 are superseded and kept for the incidents that
+produced them. [operating](docs/operating.md) covers the credentials only the
+operator can create; [AGENTS.md](AGENTS.md) is what to read before changing
+anything here.
 
 ## Running the tests
 

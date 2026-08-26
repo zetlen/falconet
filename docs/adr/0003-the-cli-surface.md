@@ -2,6 +2,12 @@
 
 **Status:** Accepted · 2026-08-20
 **Builds on:** [ADR-0002](0002-extract-the-pipeline-into-falconet.md)
+**Serves:** I6 (adoption stays inside one operator's reach), I4 (every run
+ends somewhere a person can see)
+**Reopen when:** a caller needs an operation no verb exposes; or the
+packaging's credentials and setup outgrow what an adopter can check in the
+README's steps — the trigger this record's own reusable-workflow choice sits
+closest to.
 
 ## Context
 

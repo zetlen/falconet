@@ -1,7 +1,15 @@
 # ADR-0002 — Extract the pipeline into falconet
 
 **Status:** Accepted · 2026-08-20
-**Supersedes:** [ADR-0001](0001-replace-the-issue-pipeline-with-gh-aw.md)
+**Supersedes:** ADR-0001, which decided to replace the hand-rolled issue
+pipeline with gh-aw. It is not in this tree and never was: it was written in
+the origin repository, before the extraction this record decides. Every
+reference to it below is to a record that lives there.
+**Serves:** I5 (the agent is a suspect), I6 (adoption stays inside one
+operator's reach)
+**Reopen when:** strangers can trigger this pipeline. That is the threat model
+gh-aw is sized for and this repository is not; the watchdog tax measured here
+is a bargain against it and a permanent loss without it.
 
 ## Context
 

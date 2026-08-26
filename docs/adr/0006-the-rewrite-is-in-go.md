@@ -9,6 +9,11 @@ met, and this is the reconsideration it asked for
 `gh` stub, and two verbs added under its own criterion;
 [ADR-0005](0005-the-agent-job-is-handed-its-source.md) — the agent job's
 one checkout becomes none
+**Serves:** I2, I5 (the operator can read the guards that hold both), I6
+(one binary, one install step, nothing vendored)
+**Reopen when:** a guard cannot be expressed safely in Go, or the operator
+stops being able to read the guards. Separately, for D6: the build stops
+reproducing, or an adopter needs a target the four assets miss.
 
 ## Context
 

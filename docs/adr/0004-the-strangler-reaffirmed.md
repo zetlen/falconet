@@ -3,6 +3,13 @@
 **Status:** Superseded by [ADR-0006](0006-the-rewrite-is-in-go.md) · 2026-08-22
 **Reaffirms:** [ADR-0002](0002-extract-the-pipeline-into-falconet.md) D1
 **Supersedes:** nothing
+**Serves:** I2 and I5 — by way of the constraint it discovered, that no test
+reaches inside its subject, which is how the guards behind both stay
+adjudicable
+**Reopen when:** the language question is closed; ADR-0006 answered it. The
+constraint reopens only if a property cannot be observed from outside a
+process — and then it becomes a Go unit test beside the guard, not a test that
+reaches in.
 
 ## Context
 

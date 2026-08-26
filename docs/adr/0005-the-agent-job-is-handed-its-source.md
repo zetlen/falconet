@@ -9,6 +9,10 @@ Kept for the incident that produced it.*
 [ADR-0002](0002-extract-the-pipeline-into-falconet.md) D4 (one agent pass,
 holding nothing it could publish with)
 **Supersedes:** nothing
+**Serves:** I5 (the agent is a suspect)
+**Reopen when:** nothing reopens this. The mechanism it records is gone — no
+job checks falconet out into the consumer's tree any more. The incident is
+what is kept.
 
 ## Context
 

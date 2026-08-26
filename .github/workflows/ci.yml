@@ -62,6 +62,14 @@ jobs:
           "$(go env GOPATH)/bin/errcheck" ./...
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+      # The records: every ADR names the charter invariant it serves and the
+      # observation that should retire it, every accepted record is indexed in
+      # the register, and nothing links a file that is not in the tree. Its own
+      # unit tests run in the step below; this one is here so a broken record
+      # fails under its own name instead of inside `go test ./...`.
+      - name: The records agree
+        run: go run ./tools/docslint
+
       - name: Unit tests
         run: go test ./...
 

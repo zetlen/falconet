@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# The records agree before they leave this machine.
+#
+# Installed by `make hooks`, which sets core.hooksPath to this directory — so
+# the hook that runs is the hook in the tree, and every clone gets the same one
+# with one command. It is a convenience, not the gate: ci.yml runs the same
+# check on every push and every pull request, and `git push --no-verify`
+# skips this. What it buys is finding out here rather than in a red build.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v go >/dev/null 2>&1; then
+  echo "pre-push: no go on PATH, so the records were not checked." >&2
+  exit 0
+fi
+
+make lint-docs
