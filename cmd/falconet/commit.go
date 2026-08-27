@@ -16,7 +16,7 @@ package main
 //
 // The guards are internal/commit, which carries the incident record above
 // each; the secret scan is internal/scan. This file is the sequence they run
-// in, the subprocesses between them — git and tofu — the files, and the exit
+// in, the subprocesses between them — git and gitleaks — the files, and the exit
 // code. It changes directory to the repository root and stays there, as the
 // script did: every path git reports is relative to that root, and every
 // path built from those reports only resolves correctly from there.
@@ -68,13 +68,12 @@ the root of the repository):
   failure-reason.txt   written only on failure
 
 Exit codes: 0 = an outcome was determined and printed
-            1 = git, tofu or the secret scan refused; nothing is printed,
+            1 = git or the secret scan refused; nothing is printed,
                 stderr says why
             2 = usage error (including --help: it isn't one of the three
                 outcomes, so it does not get an outcome's exit code)
 
-$TOFU overrides the formatter and $GITLEAKS the secret scanner, for the
-tests.
+$GITLEAKS overrides the secret scanner, for the tests.
 `
 
 func commitUsage() int {
@@ -121,8 +120,7 @@ func runCommit(args []string) int {
 	}
 	// Resolve --out-dir against the caller's CWD before changing directories:
 	// git status below reports paths relative to the repository root, and
-	// every path built from those reports (the file checks, tofu fmt, git
-	// add) only resolves correctly if this process is standing in the root
+	// every path built from those reports (the file checks, git add) only resolves correctly if this process is standing in the root
 	// when it uses them.
 	if outDir != "" && !filepath.IsAbs(outDir) {
 		outDir = filepath.Join(cwd, outDir)
@@ -186,9 +184,8 @@ func runCommit(args []string) int {
 	// See internal/commit's header. The scanner's report is a list of the
 	// channels that matched, and it comes back as values rather than through
 	// this process's stdout: this verb's only contract with the workflow is
-	// that its own stdout is exactly one word, and the lesson of `tofu fmt`
-	// below is that a subprocess with something to say will say it into that
-	// contract if you let it.
+	// that its own stdout is exactly one word, and a subprocess with
+	// something to say will say it into that contract if you let it.
 	//
 	// A broken scanner is a mechanical failure (exit 1, no outcome word), not
 	// a pass. "gitleaks is not installed" and "gitleaks found nothing" must
@@ -298,33 +295,13 @@ func runCommit(args []string) int {
 		return giveUp(commit.ReasonNoMessage(changed))
 	}
 
-	// --- format, then commit ------------------------------------------------
+	// --- commit ---------------------------------------------------------------
 	//
-	// One target per invocation: `tofu fmt` takes a single file or directory,
-	// not a list. Never -recursive, and never a path the agent did not touch —
-	// main is fmt-clean today, and the point of the narrow scope is that a
-	// future regression somewhere else cannot ride into an unrelated change.
-	// The `--` guards a file whose name looks like a flag (an agent might
-	// create `-check.tf`); the stdout redirect matters more: `tofu fmt` prints
-	// the reformatted file's own name to STDOUT on success, and this verb's
-	// only contract with its caller is that stdout is exactly one of three
-	// words.
-	tofu := envOr("TOFU", "tofu")
-	for _, path := range existing {
-		format := exec.Command(tofu, "fmt", "--", path)
-		format.Stdout = os.Stderr
-		format.Stderr = os.Stderr
-		if err := format.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "tofu fmt failed on %s\n", path)
-			return 1
-		}
-	}
-
 	// Stage exactly the vetted paths — not `git add -A` — so the security
 	// boundary enforced above is a pathspec you can read, not an invariant
 	// about what `-A` happens to pick up given everything checked so far. To
-	// stderr: same reasoning as `tofu fmt` above, though `git add` is
-	// ordinarily silent.
+	// stderr, though `git add` is ordinarily silent: this verb's only
+	// contract with its caller is that stdout is exactly one of three words.
 	add := exec.Command("git", append([]string{"add", "--"}, changed...)...)
 	add.Stdout = os.Stderr
 	add.Stderr = os.Stderr
@@ -333,20 +310,19 @@ func runCommit(args []string) int {
 		return 1
 	}
 
-	// `tofu fmt` can turn an agent's edit into a no-op — whitespace it just
-	// undid, say — leaving nothing staged. `git commit` would fail on that,
-	// but with "nothing to commit, working tree clean" on STDOUT even under
-	// -q, which would otherwise leak into this verb's own stdout contract.
-	// Caught here instead: an empty change is `failure`, not a mechanical
-	// error, so it gets failure's exit code (0) rather than a git failure's
-	// (1). `--quiet` exits 0 for no difference and 1 for one; anything else
+	// A path git status listed can still stage to nothing — a mode flip
+	// git ignores, say — and `git commit` would fail on that, but with
+	// "nothing to commit, working tree clean" on STDOUT even under -q, which
+	// would otherwise leak into this verb's own stdout contract. Caught here
+	// instead: an empty change is `failure`, not a mechanical error, so it
+	// gets failure's exit code (0) rather than a git failure's (1). `--quiet` exits 0 for no difference and 1 for one; anything else
 	// is git refusing, and is a mechanical failure.
 	quiet := exec.Command("git", "diff", "--cached", "--quiet")
 	quiet.Stderr = os.Stderr
 	var exit *exec.ExitError
 	switch err := quiet.Run(); {
 	case err == nil:
-		return giveUp(commit.ReasonEmptyAfterFmt(changed))
+		return giveUp(commit.ReasonEmptyStaged(changed))
 	case errors.As(err, &exit) && exit.ExitCode() == 1:
 		// Something is staged. Carry on.
 	default:
@@ -356,9 +332,8 @@ func runCommit(args []string) int {
 
 	// The diff, now that there is one to read, and still before the commit:
 	// the branch is pushed immediately after this verb returns, so a
-	// credential that reaches a commit reaches the remote. .tf content is
-	// also what `tofu plan` echoes into plan.txt and from there into the
-	// pull-request body, so this arm guards that channel too.
+	// credential that reaches a commit reaches the remote — and from there
+	// into whatever the plan bot posts on the pull request.
 	if rc, done := refuseOnSecret(nil, true); done {
 		return rc
 	}

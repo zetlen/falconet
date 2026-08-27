@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# doctor.test.sh — README "Install it in your repository" steps 1–8, checked
+# doctor.test.sh — README "Install it in your repository" steps 1–7, checked
 # by the first setup verb and reported one line each.
 #
 # doctor has no bash predecessor (ADR-0006 D3 step 1), so nothing here is a
@@ -38,7 +38,7 @@ export PATH
 
 # --- fixtures -----------------------------------------------------------------
 
-# The caller workflow README step 8 prescribes, minimal and correct, with the
+# The caller workflow README step 6 prescribes, minimal and correct, with the
 # ref pinned so that nothing in it is a note.
 caller() { # [contents-level]
   cat <<EOF
@@ -66,9 +66,8 @@ jobs:
 EOF
 }
 
-# A repository installed to the letter: three stacks with .tf in them, the
-# handoff directory ignored, a config naming the stacks and one prompt, and
-# the caller above. Built like prepare.test.sh's new_checkout.
+# A repository installed to the letter: some .tf in it, the handoff
+# directory ignored, a config naming one prompt, and the caller above. Built like prepare.test.sh's new_checkout.
 new_checkout() { # name -> echoes path
   local base="$WORK/$1"
   mkdir -p "$base/repo/.github/workflows" "$base/repo/dns" "$base/repo/workspace" "$base/repo/site" "$base/repo/prompts"
@@ -79,8 +78,7 @@ new_checkout() { # name -> echoes path
     printf 'locals {\n  a = 1\n}\n' >"$base/repo/$s/main.tf"
   done
   printf '.falconet/\n' >"$base/repo/.gitignore"
-  printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]},"prompts":{"implement":"prompts/implement.md"}}\n' \
-    >"$base/repo/.github/falconet.json"
+  printf '{"prompts":{"implement":"prompts/implement.md"}}\n' >"$base/repo/.github/falconet.json"
   printf 'Implement the request.\n' >"$base/repo/prompts/implement.md"
   caller >"$base/repo/.github/workflows/infra-requests.yml"
   git -C "$base/repo" add -A
@@ -88,7 +86,7 @@ new_checkout() { # name -> echoes path
   printf '%s' "$base"
 }
 
-# responses.json: the four labels and the four secrets exist; anything a
+# responses.json: the four labels and the three secrets exist; anything a
 # case wants on top is passed as extra rules, which come FIRST so that they
 # win.
 script() { # [extra-rule-json ...]
@@ -96,7 +94,7 @@ script() { # [extra-rule-json ...]
   for r in "$@"; do extra="$extra$r,"; done
   printf '[%s
     {"method":"GET","path":"/repos/zetlen/wayfinders-infra/labels","body":[{"name":"infra-request"},{"name":"needs-info"},{"name":"ready-for-human"},{"name":"needs-plan-review"}]},
-    {"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":4,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"},{"name":"FALCONET_PLAN_ENV"}]}}
+    {"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":3,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"}]}}
   ]\n' "$extra" >"$FAKE_GITHUB/responses.json"
 }
 
@@ -134,19 +132,14 @@ it "a repository installed to the letter is exit 0"
 assert_eq 0 "$RC" "exit code"
 
 it "and the summary says so, counting the checks and not the notes"
-assert_eq "doctor: 19 ok, 0 missing, 0 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
+assert_eq "doctor: 15 ok, 0 missing, 0 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
 
 it "and nothing is MISSING or cannot tell"
 assert_no_line_matching "$OUT" '^(MISSING|cannot tell)' "stdout"
 
 it "every line is the status word, the step number and the check, in one column"
-assert_eq 0 "$(grep -Ev '^(ok|MISSING|cannot tell|note) {1,11}[1-8]\. |^             [^ ]|^note         the token|^doctor: ' <<<"$OUT" | grep -c .)" \
+assert_eq 0 "$(grep -Ev '^(ok|MISSING|cannot tell|note) {1,11}[1-7]\. |^             [^ ]|^note         the token|^doctor: ' <<<"$OUT" | grep -c .)" \
   "lines outside the format"
-
-it "step 1: each configured stack is a directory with .tf in it, naming the key"
-assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
-assert_line "$OUT" "ok           1. stack workspace (.stacks.validate_only) is a directory with .tf files"
-assert_line "$OUT" "ok           1. stack site (.stacks.validate_only) is a directory with .tf files"
 
 it "step 1: issues enabled, allowed_actions all"
 assert_line "$OUT" "ok           1. the repository has issues enabled"
@@ -161,26 +154,25 @@ assert_contains "$OUT" "note         1. runners must be Linux x64" "stdout"
 it "step 2: the handoff directory is ignored"
 assert_line "$OUT" "ok           2. .falconet/ is gitignored"
 
-it "steps 3–5: the four secrets exist by name, and the line says a value is never readable"
+it "steps 3–4: the three secrets exist by name, and the line says a value is never readable"
 assert_line "$OUT" "ok           3. secret FALCONET_APP_ID exists (a value can never be read back, so the name is the check)"
 assert_line "$OUT" "ok           3. secret FALCONET_APP_PRIVATE_KEY exists (a value can never be read back, so the name is the check)"
 assert_line "$OUT" "ok           4. secret ANTHROPIC_API_KEY exists (a value can never be read back, so the name is the check)"
-assert_line "$OUT" "ok           5. secret FALCONET_PLAN_ENV exists (a value can never be read back, so the name is the check)"
 
-it "step 6: the four labels, one line each"
-assert_line "$OUT" "ok           6. label infra-request"
-assert_line "$OUT" "ok           6. label needs-info"
-assert_line "$OUT" "ok           6. label ready-for-human"
-assert_line "$OUT" "ok           6. label needs-plan-review"
+it "step 5: the four labels, one line each"
+assert_line "$OUT" "ok           5. label infra-request"
+assert_line "$OUT" "ok           5. label needs-info"
+assert_line "$OUT" "ok           5. label ready-for-human"
+assert_line "$OUT" "ok           5. label needs-plan-review"
 
-it "step 7: the config parses and the prompt override exists"
-assert_line "$OUT" "ok           7. .github/falconet.json parses"
-assert_line "$OUT" "ok           7. prompts.implement names prompts/implement.md, which exists"
+it "step 6: the config parses and the prompt override exists"
+assert_line "$OUT" "ok           6. .github/falconet.json parses"
+assert_line "$OUT" "ok           6. prompts.implement names prompts/implement.md, which exists"
 
-it "step 8: the caller exists, uses the reusable workflow, grants what the widest job declares"
-assert_line "$OUT" "ok           8. .github/workflows/infra-requests.yml exists"
-assert_line "$OUT" "ok           8. it uses zetlen/falconet/.github/workflows/falconet.yml@0123abcd"
-assert_line "$OUT" "ok           8. permissions grants contents: write, issues: write, pull-requests: write"
+it "step 7: the caller exists, uses the reusable workflow, grants what the widest job declares"
+assert_line "$OUT" "ok           7. .github/workflows/infra-requests.yml exists"
+assert_line "$OUT" "ok           7. it uses zetlen/falconet/.github/workflows/falconet.yml@0123abcd"
+assert_line "$OUT" "ok           7. permissions grants contents: write, issues: write, pull-requests: write"
 
 it "stderr is silent on a clean run with a token"
 assert_eq "" "$ERR" "stderr"
@@ -188,7 +180,7 @@ assert_eq "" "$ERR" "stderr"
 it "doctor reads and never writes: every API call is a GET"
 assert_eq "" "$(grep -Ev '^GET ' <<<"$(calls)")" "non-GET calls"
 
-it "and it asked the repository Actions named, for everything step 1–6 needs"
+it "and it asked the repository Actions named, for everything step 1–5 needs"
 assert_eq "GET /repos/zetlen/wayfinders-infra
 GET /repos/zetlen/wayfinders-infra/actions/permissions
 GET /repos/zetlen/wayfinders-infra/actions/permissions/workflow
@@ -211,8 +203,8 @@ assert_eq "$OUT" "$OUT2" "stdout from dns/"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/labels","body":[{"name":"infra-request"},{"name":"ready-for-human"},{"name":"needs-plan-review"}]}'
 d "$c"
 
-it "one label gone: MISSING for step 6, naming it"
-assert_line "$OUT" "MISSING      6. label needs-info"
+it "one label gone: MISSING for step 5, naming it"
+assert_line "$OUT" "MISSING      5. label needs-info"
 
 it "and the next line says how to create it"
 assert_line "$OUT" "             create it: gh label create needs-info   (or: falconet init)"
@@ -221,12 +213,12 @@ it "and exit 1"
 assert_eq 1 "$RC" "exit code"
 
 it "and the other three are still ok: nothing stops at the first finding"
-assert_line "$OUT" "ok           6. label infra-request"
-assert_line "$OUT" "ok           6. label ready-for-human"
-assert_line "$OUT" "ok           6. label needs-plan-review"
+assert_line "$OUT" "ok           5. label infra-request"
+assert_line "$OUT" "ok           5. label ready-for-human"
+assert_line "$OUT" "ok           5. label needs-plan-review"
 
 it "and the summary counts it"
-assert_eq "doctor: 18 ok, 1 missing, 0 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
+assert_eq "doctor: 14 ok, 1 missing, 0 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
 
 # --- no token: it degrades to the README, never to nothing --------------------
 
@@ -235,19 +227,19 @@ script
 RC="$(cat "$WORK/rc")"; OUT="$(cat "$WORK/out")"; ERR="$(cat "$WORK/err2")"
 
 it "without FALCONET_SETUP_TOKEN every remote check says so"
-assert_eq 11 "$(grep -c ' (no FALCONET_SETUP_TOKEN)$' <<<"$OUT")" "cannot-tell lines"
+assert_eq 10 "$(grep -c ' (no FALCONET_SETUP_TOKEN)$' <<<"$OUT")" "cannot-tell lines"
 assert_line "$OUT" "cannot tell  3. secret FALCONET_APP_ID (no FALCONET_SETUP_TOKEN)"
-assert_line "$OUT" "cannot tell  6. label needs-info (no FALCONET_SETUP_TOKEN)"
+assert_line "$OUT" "cannot tell  5. label needs-info (no FALCONET_SETUP_TOKEN)"
 assert_line "$OUT" "cannot tell  1. the repository has issues enabled (no FALCONET_SETUP_TOKEN)"
 
 it "and the local checks still run"
 assert_line "$OUT" "ok           2. .falconet/ is gitignored"
-assert_line "$OUT" "ok           7. .github/falconet.json parses"
-assert_line "$OUT" "ok           8. permissions grants contents: write, issues: write, pull-requests: write"
+assert_line "$OUT" "ok           6. .github/falconet.json parses"
+assert_line "$OUT" "ok           7. permissions grants contents: write, issues: write, pull-requests: write"
 
 it "and cannot tell is not ok: exit 1, and the summary says which"
 assert_eq 1 "$RC" "exit code"
-assert_eq "doctor: 9 ok, 0 missing, 11 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
+assert_eq "doctor: 6 ok, 0 missing, 10 cannot tell" "$(tail -1 <<<"$OUT")" "summary"
 
 it "and the permission table is on stderr, once, with the seven-day advice"
 assert_eq 1 "$(grep -c 'no FALCONET_SETUP_TOKEN in the environment' <<<"$ERR")" "hint count"
@@ -260,29 +252,28 @@ assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
 it "GITHUB_TOKEN and GH_TOKEN are not fallbacks"
 ( unset FALCONET_SETUP_TOKEN; export GITHUB_TOKEN=actions-token GH_TOKEN=gh-token; d "$c"; printf '%s' "$OUT" >"$WORK/out" )
-assert_eq 11 "$(grep -c ' (no FALCONET_SETUP_TOKEN)$' "$WORK/out")" "cannot-tell lines"
+assert_eq 10 "$(grep -c ' (no FALCONET_SETUP_TOKEN)$' "$WORK/out")" "cannot-tell lines"
 assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
-# --- step 7: the config ---------------------------------------------------------
+# --- step 6: the config ---------------------------------------------------------
 
 c="$(new_checkout badcfg)"
-printf '{"stacks": {"plan": ["dns"],}\n' >"$c/repo/.github/falconet.json"
+printf '{"prompts": {"implement": "prompts/implement.md",}\n' >"$c/repo/.github/falconet.json"
 script
 d "$c"
 
-it "a malformed config is MISSING for step 7, quoting the parse error"
-assert_contains "$OUT" 'MISSING      7. the config does not parse: ".github/falconet.json is not valid JSON: ' "stdout"
+it "a malformed config is MISSING for step 6, quoting the parse error"
+assert_contains "$OUT" 'MISSING      6. the config does not parse: ".github/falconet.json is not valid JSON: ' "stdout"
 
 it "and then everything the config names is cannot tell, not a silent fall back to defaults"
-assert_line "$OUT" "cannot tell  1. the configured stacks (the config did not parse)"
 assert_line "$OUT" "cannot tell  2. the handoff directory is gitignored (the config did not parse)"
-assert_line "$OUT" "cannot tell  6. the four labels (the config did not parse)"
-assert_line "$OUT" "cannot tell  7. the prompt overrides (the config did not parse)"
+assert_line "$OUT" "cannot tell  5. the four labels (the config did not parse)"
+assert_line "$OUT" "cannot tell  6. the prompt overrides (the config did not parse)"
 
 it "while the checks that do not need it still run"
 assert_line "$OUT" "ok           1. the repository has issues enabled"
 assert_line "$OUT" "ok           3. secret FALCONET_APP_ID exists (a value can never be read back, so the name is the check)"
-assert_line "$OUT" "ok           8. permissions grants contents: write, issues: write, pull-requests: write"
+assert_line "$OUT" "ok           7. permissions grants contents: write, issues: write, pull-requests: write"
 
 it "and exit 1"
 assert_eq 1 "$RC" "exit code"
@@ -292,109 +283,27 @@ rm "$c/repo/.github/falconet.json"
 script
 d "$c"
 
-it "no config file is ok for step 7: the defaults stand alone"
-assert_contains "$OUT" "ok           7. no .github/falconet.json, so the defaults stand alone" "stdout"
-
-# No config names no stacks, and the defaults name none either (#23): the
-# root modules in the tree are what a run would plan, so they are what step 1
-# reports — and it says it was discovery that found them, because "falconet
-# found these on its own" and "you told falconet these" are different answers.
-it "and with no stacks configured, the root modules found are what is checked"
-assert_line "$OUT" "ok           1. the config names no stacks, so every root module found is planned: dns, site, workspace"
+it "no config file is ok for step 6: the defaults stand alone"
+assert_contains "$OUT" "ok           6. no .github/falconet.json, so the defaults stand alone" "stdout"
 assert_eq 0 "$RC" "exit code"
 
+
 c="$(new_checkout prompt)"
-printf '{"stacks":{"plan":["dns"],"validate_only":[]},"prompts":{"implement":"prompts/mine.md","park_needs_info":"prompts/park.md"}}\n' \
-  >"$c/repo/.github/falconet.json"
+printf '{"prompts":{"implement":"prompts/mine.md","park_needs_info":"prompts/park.md"}}\n' >"$c/repo/.github/falconet.json"
 script
 d "$c"
 
 it "a prompt override naming a missing file is MISSING"
-assert_line "$OUT" "MISSING      7. prompts.implement names prompts/mine.md, which does not exist"
+assert_line "$OUT" "MISSING      6. prompts.implement names prompts/mine.md, which does not exist"
 
 it "and a prompts key falconet does not read is a note"
-assert_line "$OUT" "note         7. prompts.park_needs_info is not a prompt falconet reads (the two are implement and pause_needs_info)"
+assert_line "$OUT" "note         6. prompts.park_needs_info is not a prompt falconet reads (the two are implement and pause_needs_info)"
 
 it "--config names another file, relative to the repository root as every verb's is"
-printf '{"stacks":{"plan":["dns"],"validate_only":["site"]}}\n' >"$c/alt.json"
+printf '{"handoff_dir":"elsewhere"}\n' >"$c/alt.json"
 OUT="$( cd "$c/repo/dns" && "$FALCONET" doctor --config ../alt.json 2>/dev/null )"
-assert_line "$OUT" "ok           7. ../alt.json parses"
-assert_line "$OUT" "ok           1. stack site (.stacks.validate_only) is a directory with .tf files"
-assert_no_line_matching "$OUT" 'stack workspace' "stdout"
-
-# --- step 1: the stacks ---------------------------------------------------------
-
-c="$(new_checkout stacks)"
-rm "$c/repo/site/main.tf"; printf 'README\n' >"$c/repo/site/README.md"
-printf '{"stacks":{"plan":["dns","nope"],"validate_only":["site"]}}\n' >"$c/repo/.github/falconet.json"
-script
-d "$c"
-
-it "a stack directory with no .tf in it is MISSING"
-assert_line "$OUT" "MISSING      1. stack site (.stacks.validate_only) has no .tf files"
-
-it "a configured stack that is not a directory is MISSING, naming the key"
-assert_line "$OUT" "MISSING      1. stack nope (.stacks.plan) is not a directory"
-assert_line "$OUT" "             set .stacks.plan in .github/falconet.json to the directories your OpenTofu stacks live in"
-
-it "and the one that is fine is still ok"
-assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
-assert_eq 1 "$RC" "exit code"
-
-# #23, caught where it is cheap: a directory holding .tf files that the config
-# names in neither list. falconet will not guess about one — a change that
-# lands in it is refused rather than answered with some other stack's plan —
-# so the moment the config is looked at is the moment to say so, rather than
-# the moment a request finds it.
-c="$(new_checkout undeclared)"
-mkdir -p "$c/repo/talaria-gcp"; printf 'variable "tier" {}\n' >"$c/repo/talaria-gcp/variables.tf"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
-script
-d "$c"
-
-it "a directory with .tf files that the config names nowhere is MISSING"
-assert_line "$OUT" "MISSING      1. directory talaria-gcp holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only"
-
-it "and the hint says which list it belongs in and why"
-assert_line "$OUT" "             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only"
-
-it "and the run fails, because a request landing in it would be refused"
-assert_eq 1 "$RC" "exit code"
-
-it "the configured stacks are still reported as themselves"
-assert_line "$OUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
-
-# A directory another stack uses as a module is that module's, not a stack of
-# its own, so it is not something the config has to name.
-c="$(new_checkout modules)"
-mkdir -p "$c/repo/modules/records"
-printf 'locals {\n  a = 1\n}\n' >"$c/repo/modules/records/main.tf"
-printf 'module "records" {\n  source = "../modules/records"\n}\n' >"$c/repo/dns/uses.tf"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
-script
-d "$c"
-
-it "a local module is not a stack the config has to name"
-assert_no_line_matching "$OUT" 'modules/records' "stdout"
-assert_eq 0 "$RC" "exit code"
-
-c="$(new_checkout noplan)"
-printf '{"stacks":{"plan":[],"validate_only":["dns","workspace","site"]}}\n' >"$c/repo/.github/falconet.json"
-script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":3,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"}]}}'
-d "$c"
-
-it "FALCONET_PLAN_ENV absent with no planned stacks is a note, not MISSING"
-assert_line "$OUT" "note         5. secret FALCONET_PLAN_ENV is not set (no planned stacks, so no planning environment is needed)"
-assert_eq 0 "$RC" "exit code"
-
-c="$(new_checkout nosecret)"
-script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":3,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"}]}}'
-d "$c"
-
-it "but with a planned stack it is MISSING, with the command"
-assert_line "$OUT" "MISSING      5. secret FALCONET_PLAN_ENV"
-assert_line "$OUT" "             store it: gh secret set FALCONET_PLAN_ENV   (or: falconet init)"
-assert_eq 1 "$RC" "exit code"
+assert_line "$OUT" "ok           6. ../alt.json parses"
+assert_line "$OUT" "MISSING      2. elsewhere/ is not gitignored"
 
 # --- step 2: the handoff directory ----------------------------------------------
 
@@ -418,11 +327,11 @@ assert_line "$OUT" "ok           2. scratch/ is gitignored"
 
 c="$(new_checkout selected)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions","body":{"enabled":true,"allowed_actions":"selected"}}' \
-  '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions/selected-actions","body":{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["zetlen/*","opentofu/setup-opentofu@*","anthropics/claude-code-action"]}}'
+  '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions/selected-actions","body":{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["zetlen/*","anthropics/claude-code-action"]}}'
 d "$c"
 
 it "allowed_actions selected with the patterns is ok"
-assert_line "$OUT" "ok           1. allowed_actions is selected, covering zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"
+assert_line "$OUT" "ok           1. allowed_actions is selected, covering zetlen/falconet, actions/* and anthropics/claude-code-action"
 assert_eq 0 "$RC" "exit code"
 
 it "and the selected-actions list was read only because the policy is selected"
@@ -432,8 +341,8 @@ script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissio
   '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions/selected-actions","body":{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["zetlen/falconet"]}}'
 d "$c"
 
-it "selected without the patterns is MISSING, naming which of the four is not covered"
-assert_line "$OUT" "MISSING      1. allowed_actions is selected and does not cover opentofu/setup-opentofu, anthropics/claude-code-action"
+it "selected without the patterns is MISSING, naming which of the three is not covered"
+assert_line "$OUT" "MISSING      1. allowed_actions is selected and does not cover anthropics/claude-code-action"
 assert_eq 1 "$RC" "exit code"
 
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions","body":{"enabled":true,"allowed_actions":"local_only"}}'
@@ -448,7 +357,7 @@ d "$c"
 it "issues disabled is MISSING"
 assert_line "$OUT" "MISSING      1. the repository has issues disabled"
 
-# --- step 8: the caller workflow -------------------------------------------------
+# --- step 7: the caller workflow -------------------------------------------------
 
 c="$(new_checkout caller)"
 caller read >"$c/repo/.github/workflows/infra-requests.yml"
@@ -456,7 +365,7 @@ script
 d "$c"
 
 it "a caller granting contents: read is MISSING, naming the permission"
-assert_line "$OUT" "MISSING      8. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write"
+assert_line "$OUT" "MISSING      7. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write"
 assert_contains "$OUT" "startup_failure" "stdout"
 assert_eq 1 "$RC" "exit code"
 
@@ -465,8 +374,8 @@ sed -e 's/@0123abcd/@main/' \
 d "$c"
 
 it "@main is a note, not MISSING: the first canary has to run from somewhere"
-assert_line "$OUT" "ok           8. it uses zetlen/falconet/.github/workflows/falconet.yml@main"
-assert_line "$OUT" "note         8. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"
+assert_line "$OUT" "ok           7. it uses zetlen/falconet/.github/workflows/falconet.yml@main"
+assert_line "$OUT" "note         7. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"
 assert_eq 0 "$RC" "exit code"
 
 # falconet-ref was an input until #19 chose which falconet the jobs checked
@@ -478,7 +387,7 @@ awk '{ print } /^      issue: /{ print "      falconet-ref: 0123abcd" }' \
 d "$c"
 
 it "a caller still passing falconet-ref is MISSING, because the workflow would not even load"
-assert_line "$OUT" "MISSING      8. falconet-ref is no longer an input; remove it"
+assert_line "$OUT" "MISSING      7. falconet-ref is no longer an input; remove it"
 assert_contains "$OUT" "startup_failure" "stdout"
 
 it "and that alone makes the report red, in step with uses: or not"
@@ -488,7 +397,7 @@ rm "$c/repo/.github/workflows/infra-requests.yml"
 d "$c"
 
 it "no caller workflow at all is MISSING"
-assert_line "$OUT" "MISSING      8. .github/workflows/infra-requests.yml"
+assert_line "$OUT" "MISSING      7. .github/workflows/infra-requests.yml"
 assert_eq 1 "$RC" "exit code"
 
 # --- which repository -------------------------------------------------------------
@@ -528,10 +437,10 @@ d "$c"
 
 it "a 403 on the secrets is cannot tell on each secret, naming the permission the endpoint needs"
 assert_line "$OUT" "cannot tell  3. secret FALCONET_APP_ID (403 Resource not accessible by personal access token — needs Secrets: read)"
-assert_line "$OUT" "cannot tell  5. secret FALCONET_PLAN_ENV (403 Resource not accessible by personal access token — needs Secrets: read)"
+assert_line "$OUT" "cannot tell  4. secret ANTHROPIC_API_KEY (403 Resource not accessible by personal access token — needs Secrets: read)"
 
 it "and the labels were still checked: doctor never stops at the first refusal"
-assert_line "$OUT" "ok           6. label needs-info"
+assert_line "$OUT" "ok           5. label needs-info"
 assert_contains "$(calls)" "GET /repos/zetlen/wayfinders-infra/labels" "API calls"
 assert_eq 1 "$RC" "exit code"
 
@@ -562,7 +471,7 @@ script
 ( export GITHUB_API_URL=http://127.0.0.1:1; d "$c"; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$OUT" >"$WORK/out"; printf '%s' "$ERR" >"$WORK/err2" )
 
 it "an unreachable GITHUB_API_URL is cannot tell on every remote check, not a crash"
-assert_eq 11 "$(grep -c ' (GITHUB_API_URL unreachable)$' "$WORK/out")" "cannot-tell lines"
+assert_eq 10 "$(grep -c ' (GITHUB_API_URL unreachable)$' "$WORK/out")" "cannot-tell lines"
 assert_eq 1 "$(cat "$WORK/rc")" "exit code"
 
 it "and one line on stderr"
@@ -571,8 +480,7 @@ assert_eq 1 "$(grep -c . "$WORK/err2")" "stderr lines"
 # --- what the first review of this verb found ------------------------------------
 
 c="$(new_checkout outside)"
-printf '{"handoff_dir":"/tmp/falconet-elsewhere","stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' \
-  >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":"/tmp/falconet-elsewhere"}\n' >"$c/repo/.github/falconet.json"
 script
 d "$c"
 it "an absolute handoff_dir outside the tree has nothing to gitignore: a note, not a failure"
@@ -580,12 +488,11 @@ assert_line "$OUT" "note         2. /tmp/falconet-elsewhere is outside the repos
 assert_no_line_matching "$OUT" '^cannot tell  2\.' "stdout"
 
 c="$(new_checkout emptyoverride)"
-printf '{"prompts":{"implement":"","pause_needs_info":null},"stacks":{"plan":["dns"],"validate_only":["workspace","site"]}}\n' \
-  >"$c/repo/.github/falconet.json"
+printf '{"prompts":{"implement":"","pause_needs_info":null}}\n' >"$c/repo/.github/falconet.json"
 script
 d "$c"
 it "an empty or null prompts override is no override, as prompt treats it: nothing to report"
-assert_no_line_matching "$OUT" '^MISSING      7\. prompts' "stdout"
+assert_no_line_matching "$OUT" '^MISSING      6\. prompts' "stdout"
 assert_eq 0 "$RC" "exit code"
 
 it "--repo with a byte GitHub would not accept is a usage error, not a request for another repository"

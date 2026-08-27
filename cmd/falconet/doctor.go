@@ -22,7 +22,6 @@ import (
 	"github.com/zetlen/falconet/internal/doctor"
 	"github.com/zetlen/falconet/internal/github"
 	"github.com/zetlen/falconet/internal/repo"
-	"github.com/zetlen/falconet/internal/stacks"
 )
 
 const doctorUsageText = `doctor — check this repository against the README's install steps 1–8, and
@@ -217,14 +216,7 @@ func runDoctor(args []string) int {
 	}
 
 	// --- step 1 --------------------------------------------------------------
-	stacksKnown := cfgErr == nil
-	planned := 0
-	if stacksKnown {
-		report = append(report, stackReport(cfg, root)...)
-		planned = len(resolveLayout(cfg, root).Plan)
-	} else {
-		report = append(report, doctor.CannotTellWhy(1, "the configured stacks", "the config did not parse"))
-	}
+	configKnown := cfgErr == nil
 	report = append(report, remote(1, "the repository has issues enabled", errRepo, doctor.NeedsMetadata,
 		func() doctor.Line { return doctor.Issues(repository) }))
 	report = append(report, remote(1, "allowed_actions", errPerm, doctor.NeedsAdministration, func() doctor.Line {
@@ -243,7 +235,7 @@ func runDoctor(args []string) int {
 	// this unknown too: checking the default instead would be the silent fall
 	// back to defaults that config.Load refuses to be.
 	switch {
-	case !stacksKnown:
+	case !configKnown:
 		report = append(report, doctor.CannotTellWhy(2, "the handoff directory is gitignored", "the config did not parse"))
 	case !underRoot(root, cfg.Schema.HandoffDir):
 		// An absolute handoff_dir is honoured by every verb (handoff.Resolve
@@ -261,18 +253,18 @@ func runDoctor(args []string) int {
 		}
 	}
 
-	// --- steps 3–5 -----------------------------------------------------------
+	// --- steps 3–4 -----------------------------------------------------------
 	names := make([]string, 0, len(secrets))
 	for _, s := range secrets {
 		names = append(names, s.Name)
 	}
 	for _, s := range doctor.Secrets {
 		report = append(report, remote(s.Step, "secret "+s.Name, errSecrets, doctor.NeedsSecrets,
-			func() doctor.Line { return doctor.SecretLine(s, names, planned, stacksKnown) }))
+			func() doctor.Line { return doctor.SecretLine(s, names) }))
 	}
 
-	// --- step 6 --------------------------------------------------------------
-	if stacksKnown {
+	// --- step 5 --------------------------------------------------------------
+	if configKnown {
 		want := doctor.Labels{
 			Queue:     cfg.Schema.Issue.QueueLabel,
 			NeedsInfo: cfg.Schema.Labels.NeedsInfo,
@@ -284,14 +276,14 @@ func runDoctor(args []string) int {
 			have = append(have, l.Name)
 		}
 		for _, label := range want.Names() {
-			report = append(report, remote(6, "label "+label, errLabels, doctor.NeedsIssues,
+			report = append(report, remote(5, "label "+label, errLabels, doctor.NeedsIssues,
 				func() doctor.Line { return doctor.LabelLine(label, have) }))
 		}
 	} else {
-		report = append(report, doctor.CannotTellWhy(6, "the four labels", "the config did not parse"))
+		report = append(report, doctor.CannotTellWhy(5, "the four labels", "the config did not parse"))
 	}
 
-	// --- step 7 --------------------------------------------------------------
+	// --- step 6 --------------------------------------------------------------
 	file := ""
 	if cfg != nil {
 		file = cfg.File
@@ -299,13 +291,13 @@ func runDoctor(args []string) int {
 		file = explicit
 	}
 	report = append(report, doctor.ConfigLine(file, cfgErr))
-	if stacksKnown {
+	if configKnown {
 		report = append(report, doctor.PromptLines(promptsOnDisk(cfg))...)
 	} else {
-		report = append(report, doctor.CannotTellWhy(7, "the prompt overrides", "the config did not parse"))
+		report = append(report, doctor.CannotTellWhy(6, "the prompt overrides", "the config did not parse"))
 	}
 
-	// --- step 8 --------------------------------------------------------------
+	// --- step 7 --------------------------------------------------------------
 	text, err := os.ReadFile(doctor.WorkflowPath)
 	report = append(report, doctor.WorkflowLines(text, err == nil)...)
 
@@ -324,65 +316,6 @@ func runDoctor(args []string) int {
 func isHTTP(err error) bool {
 	_, ok := err.(*github.Error)
 	return ok
-}
-
-// resolveLayout is what this repository does with each directory that holds
-// OpenTofu, as validate and prepare resolve it: the config's two lists, or
-// the root modules discovery finds when it names neither. A tree that cannot
-// be walked yields an empty discovery rather than an error — doctor reports
-// what it can see and never refuses to run over one unreadable directory.
-func resolveLayout(cfg *config.Config, root string) stacks.Layout {
-	discovered, err := stacks.Discover(os.DirFS(root))
-	if err != nil {
-		discovered = nil
-	}
-	return stacks.Resolve(discovered, cfg.Schema.Stacks.Plan, cfg.Schema.Stacks.ValidateOnly)
-}
-
-// stackReport is step 1's stack lines: each configured stack on disk, then
-// the directories holding .tf that the config names in neither list (#23) —
-// or, for a config that names no stacks at all, what discovery found and the
-// fact that it was discovery that found it.
-func stackReport(cfg *config.Config, root string) []doctor.Line {
-	layout := resolveLayout(cfg, root)
-	discovered, err := stacks.Discover(os.DirFS(root))
-	if err != nil {
-		discovered = nil
-	}
-	if !layout.Declared {
-		return doctor.Discovered(discovered)
-	}
-	var onDisk []doctor.Stack
-	for _, key := range []struct {
-		name  string
-		names []string
-	}{{"plan", layout.Plan}, {"validate_only", layout.Check}} {
-		for _, s := range key.names {
-			onDisk = append(onDisk, stackOnDisk(key.name, s))
-		}
-	}
-	return append(doctor.Stacks(onDisk, cfg.File),
-		doctor.Undeclared(stacks.Undeclared(discovered, layout), cfg.File)...)
-}
-
-// stackOnDisk is what a configured stack name is, from the repository root.
-func stackOnDisk(key, name string) doctor.Stack {
-	s := doctor.Stack{Key: key, Name: name}
-	info, err := os.Stat(name)
-	if err != nil || !info.IsDir() {
-		return s
-	}
-	s.IsDir = true
-	entries, err := os.ReadDir(name)
-	if err != nil {
-		return s
-	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tf") {
-			s.TFFiles++
-		}
-	}
-	return s
 }
 
 // checkIgnore is `git check-ignore -q <dir>/`: 0 ignored, 1 not, anything

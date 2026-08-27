@@ -73,9 +73,9 @@
 //
 // makes `tofu plan` print that file's entire contents under
 // `Changes to Outputs:` — no provider, no `tofu init`, and none of the four
-// constructs above — and plan.txt is what ci-pr-body.sh attaches to the pull
+// constructs above — and the plan is what the plan bot posts on the pull
 // request. The best target is inside the workspace the agent is standing in:
-// `file("${path.module}/.git/config")` is readable at Validate time because
+// `file("${path.module}/.git/config")` was readable at plan time because
 // actions/checkout left the job's token there and ci-push-branch.sh rewrote
 // the remote to `https://x-access-token:$GH_TOKEN@...` two steps earlier. This
 // configuration uses none of the three today, so the entries cost nothing; a
@@ -487,11 +487,11 @@ func ReasonNoMessage(changed []string) string {
 		indented(changed))
 }
 
-// ReasonEmptyAfterFmt is the failure of a change that `tofu fmt` undid.
-func ReasonEmptyAfterFmt(changed []string) string {
+// ReasonEmptyStaged is the failure of a change that staged to nothing.
+func ReasonEmptyStaged(changed []string) string {
 	return reason(
-		"The agent's change amounted to nothing once the touched .tf",
-		"files were formatted; the tree now matches what is already",
-		"committed, so there is nothing to commit. Changed paths:",
+		"The agent's change amounted to nothing once staged; the tree",
+		"matches what is already committed, so there is nothing to",
+		"commit. Changed paths:",
 		indented(changed))
 }

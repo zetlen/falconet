@@ -65,8 +65,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-
-	"github.com/zetlen/falconet/internal/assemble"
+	"strings"
 )
 
 // CommentLimit is the cap on --body, in bytes. A GitHub comment holds 65,536
@@ -131,7 +130,7 @@ func Comment(in Input) []byte {
 			// Longer than any backtick run the body carries, as the
 			// pull-request body's is: a validation log that happened to
 			// contain ``` must not break out of its own block.
-			fence := assemble.Fence(detail)
+			fence := Fence(detail)
 			fmt.Fprintf(&b, "<details><summary>%s</summary>\n\n%s\n", in.BodyTitle, fence)
 			b.Write(detail)
 			fmt.Fprintf(&b, "%s\n\n</details>\n", fence)
@@ -193,4 +192,25 @@ func Label(label, needsInfo, human string) error {
 	}
 	return fmt.Errorf("--label must be %s or %s (the two pause labels; set labels.needs_info and labels.human to change them)",
 		needsInfo, human)
+}
+
+// Fence is a fence one backtick longer than the longest run of backticks in
+// b, and never shorter than the three that markdown needs.
+func Fence(b []byte) string {
+	longest, run := 0, 0
+	for _, c := range b {
+		if c == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	n := 3
+	if longest >= 3 {
+		n = longest + 1
+	}
+	return strings.Repeat("`", n)
 }

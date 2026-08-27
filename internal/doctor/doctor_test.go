@@ -32,8 +32,8 @@ func TestLineString(t *testing.T) {
 	}{
 		{Line{OK, 1, "the repository has issues enabled", ""},
 			"ok           1. the repository has issues enabled"},
-		{Line{Missing, 6, "label needs-info", "create it: gh label create needs-info   (or: falconet init)"},
-			"MISSING      6. label needs-info\n             create it: gh label create needs-info   (or: falconet init)"},
+		{Line{Missing, 5, "label needs-info", "create it: gh label create needs-info   (or: falconet init)"},
+			"MISSING      5. label needs-info\n             create it: gh label create needs-info   (or: falconet init)"},
 		{Line{CannotTell, 3, "secret FALCONET_APP_ID (no FALCONET_SETUP_TOKEN)", ""},
 			"cannot tell  3. secret FALCONET_APP_ID (no FALCONET_SETUP_TOKEN)"},
 		{Line{Note, 1, "default_workflow_permissions is read (fine: the caller workflow grants what it needs)", ""},
@@ -129,7 +129,7 @@ func TestRefusedNamesThePermissionOnlyWhenGitHubSaidNo(t *testing.T) {
 			t.Errorf("%v:\n got %q\nwant %q", tc.err, got, tc.want)
 		}
 	}
-	if got := NoToken(6, "label x").String(); got != "cannot tell  6. label x (no FALCONET_SETUP_TOKEN)" {
+	if got := NoToken(5, "label x").String(); got != "cannot tell  5. label x (no FALCONET_SETUP_TOKEN)" {
 		t.Errorf("NoToken: %q", got)
 	}
 }
@@ -166,64 +166,6 @@ func TestTheTokenHintCarriesTheTableAndTheAdvice(t *testing.T) {
 
 // --- step 1 ----------------------------------------------------------------------
 
-func TestStacks(t *testing.T) {
-	got := Stacks([]Stack{
-		{"plan", "dns", true, 3},
-		{"validate_only", "site", true, 0},
-		{"validate_only", "nope", false, 0},
-	}, "")
-	want := []string{
-		"ok           1. stack dns (.stacks.plan) is a directory with .tf files",
-		"MISSING      1. stack site (.stacks.validate_only) has no .tf files\n             set .stacks.validate_only in .github/falconet.json to the directories your OpenTofu stacks live in",
-		"MISSING      1. stack nope (.stacks.validate_only) is not a directory\n             set .stacks.validate_only in .github/falconet.json to the directories your OpenTofu stacks live in",
-	}
-	if !reflect.DeepEqual(strs(got), want) {
-		t.Errorf("\n got %q\nwant %q", strs(got), want)
-	}
-	if got := Stacks(nil, "x.json"); len(got) != 1 || got[0].Status != Note {
-		t.Errorf("no stacks is one note: %v", strs(got))
-	}
-	if got := Stacks([]Stack{{"plan", "dns", false, 0}}, "cfg/alt.json"); !strings.Contains(got[0].Hint, "in cfg/alt.json") {
-		t.Errorf("the hint names the file the names came from: %q", got[0].Hint)
-	}
-}
-
-// #23 as a repository sitting still: a directory holding .tf files that the
-// config names in neither list. Caught when the config is looked at rather
-// than when a request lands in it.
-func TestUndeclared(t *testing.T) {
-	got := Undeclared([]string{"talaria-gcp", "modules/orphan"}, "")
-	want := []string{
-		"MISSING      1. directory talaria-gcp holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only\n             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only",
-		"MISSING      1. directory modules/orphan holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only\n             add it to .stacks.plan in .github/falconet.json if a human applies it from a pull request, or to .stacks.validate_only",
-	}
-	if !reflect.DeepEqual(strs(got), want) {
-		t.Errorf("\n got %q\nwant %q", strs(got), want)
-	}
-	if got := Undeclared(nil, ""); got != nil {
-		t.Errorf("nothing undeclared is no lines: %v", strs(got))
-	}
-	if got := Undeclared([]string{"x"}, "cfg/alt.json"); !strings.Contains(got[0].Hint, "in cfg/alt.json") {
-		t.Errorf("the hint names the file the lists were read from: %q", got[0].Hint)
-	}
-}
-
-func TestDiscovered(t *testing.T) {
-	// "falconet found these on its own" and "you told falconet these" are
-	// different answers to the same question, and only one is a promise.
-	if got := Discovered([]string{"dns", "site"}); len(got) != 1 ||
-		got[0].String() != "ok           1. the config names no stacks, so every root module found is planned: dns, site" {
-		t.Errorf("%q", strs(got))
-	}
-	got := Discovered(nil)
-	if len(got) != 1 || got[0].Status != Missing {
-		t.Fatalf("a repository with no .tf anywhere is MISSING, not a note: %q", strs(got))
-	}
-	if !strings.Contains(got[0].Hint, "a .tf at the root itself is not a stack") {
-		t.Errorf("the hint does not say where a stack goes: %q", got[0].Hint)
-	}
-}
-
 func TestIssues(t *testing.T) {
 	if got := Issues(&github.Repository{HasIssues: true}).String(); got != "ok           1. the repository has issues enabled" {
 		t.Errorf("%q", got)
@@ -253,26 +195,26 @@ func TestActionsPolicy(t *testing.T) {
 		{"local_only", &github.ActionsPermissions{Enabled: true, AllowedActions: "local_only"}, nil,
 			"MISSING      1. allowed_actions is local_only: workflows from outside the repository cannot run"},
 		{"selected, every one covered", selected,
-			sel(true, false, "zetlen/falconet", "opentofu/setup-opentofu@v1", "anthropics/claude-code-action@*"),
-			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"},
+			sel(true, false, "zetlen/falconet", "anthropics/claude-code-action@*"),
+			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/* and anthropics/claude-code-action"},
 		{"selected, covered by wide patterns", selected,
-			sel(false, false, "zetlen/*", "actions/*", "opentofu/*", "anthropics/*"),
-			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"},
+			sel(false, false, "zetlen/*", "actions/*", "anthropics/*"),
+			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/* and anthropics/claude-code-action"},
 		{"selected, github-owned covered by github_owned_allowed and nothing else", selected,
 			sel(true, false),
-			"MISSING      1. allowed_actions is selected and does not cover zetlen/falconet, opentofu/setup-opentofu, anthropics/claude-code-action"},
+			"MISSING      1. allowed_actions is selected and does not cover zetlen/falconet, anthropics/claude-code-action"},
 		{"selected, nothing at all", selected,
 			sel(false, false),
-			"MISSING      1. allowed_actions is selected and does not cover zetlen/falconet, actions/*, opentofu/setup-opentofu, anthropics/claude-code-action"},
+			"MISSING      1. allowed_actions is selected and does not cover zetlen/falconet, actions/*, anthropics/claude-code-action"},
 		{"selected, one short", selected,
 			sel(true, false, "zetlen/falconet", "opentofu/setup-opentofu"),
 			"MISSING      1. allowed_actions is selected and does not cover anthropics/claude-code-action"},
 		{"selected, github-owned by patterns for each", selected,
-			sel(false, false, "zetlen/falconet", "opentofu/setup-opentofu", "anthropics/claude-code-action",
+			sel(false, false, "zetlen/falconet", "anthropics/claude-code-action",
 				"actions/checkout@*", "actions/upload-artifact@*", "actions/download-artifact@*", "actions/create-github-app-token@*"),
-			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"},
+			"ok           1. allowed_actions is selected, covering zetlen/falconet, actions/* and anthropics/claude-code-action"},
 		{"selected, github-owned by patterns for some", selected,
-			sel(false, false, "zetlen/falconet", "opentofu/setup-opentofu", "anthropics/claude-code-action", "actions/checkout@*"),
+			sel(false, false, "zetlen/falconet", "anthropics/claude-code-action", "actions/checkout@*"),
 			"MISSING      1. allowed_actions is selected and does not cover actions/*"},
 		{"selected, no list read", selected, nil,
 			"cannot tell  1. allowed_actions is selected (the selected-actions list was not read)"},
@@ -404,68 +346,55 @@ func TestHandoffIgnored(t *testing.T) {
 	}
 }
 
-// --- steps 3–5 -------------------------------------------------------------------
+// --- steps 3–4 -------------------------------------------------------------------
 
 func TestSecretLines(t *testing.T) {
-	all := []string{"FALCONET_APP_ID", "FALCONET_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "FALCONET_PLAN_ENV", "SOMETHING_ELSE"}
-	got := strs(SecretLines(all, 1, true))
+	all := []string{"FALCONET_APP_ID", "FALCONET_APP_PRIVATE_KEY", "ANTHROPIC_API_KEY", "SOMETHING_ELSE"}
+	got := strs(SecretLines(all))
 	want := []string{
 		"ok           3. secret FALCONET_APP_ID exists (a value can never be read back, so the name is the check)",
 		"ok           3. secret FALCONET_APP_PRIVATE_KEY exists (a value can never be read back, so the name is the check)",
 		"ok           4. secret ANTHROPIC_API_KEY exists (a value can never be read back, so the name is the check)",
-		"ok           5. secret FALCONET_PLAN_ENV exists (a value can never be read back, so the name is the check)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got %q\nwant %q", got, want)
 	}
-	got = strs(SecretLines(nil, 1, true))
+	got = strs(SecretLines(nil))
 	want = []string{
 		"MISSING      3. secret FALCONET_APP_ID\n             store it: gh secret set FALCONET_APP_ID   (or: falconet init)",
 		"MISSING      3. secret FALCONET_APP_PRIVATE_KEY\n             store it: gh secret set FALCONET_APP_PRIVATE_KEY   (or: falconet init)",
 		"MISSING      4. secret ANTHROPIC_API_KEY\n             store it: gh secret set ANTHROPIC_API_KEY   (or: falconet init)",
-		"MISSING      5. secret FALCONET_PLAN_ENV\n             store it: gh secret set FALCONET_PLAN_ENV   (or: falconet init)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got %q\nwant %q", got, want)
 	}
-	// README step 5: skip it if every stack you plan needs nothing — which
-	// doctor can only say when it knows there are no planned stacks.
-	if got := SecretLines(nil, 0, true)[3].String(); got != "note         5. secret FALCONET_PLAN_ENV is not set (no planned stacks, so no planning environment is needed)" {
-		t.Errorf("no planned stacks: %q", got)
-	}
-	if got := SecretLines(nil, 0, false)[3]; got.Status != Missing {
-		t.Errorf("stacks unknown: the safe answer is MISSING, got %+v", got)
-	}
-	if got := SecretLines([]string{"FALCONET_PLAN_ENV"}, 0, true)[3]; got.Status != OK {
-		t.Errorf("present with no planned stacks is still ok: %+v", got)
-	}
 }
 
-// --- step 6 ----------------------------------------------------------------------
+// --- step 5 ----------------------------------------------------------------------
 
 func TestLabelLines(t *testing.T) {
 	labels := Labels{"infra-request", "needs-info", "ready-for-human", "needs-plan-review"}
 	got := strs(LabelLines(labels, []string{"infra-request", "ready-for-human", "needs-plan-review", "bug"}))
 	want := []string{
-		"ok           6. label infra-request",
-		"MISSING      6. label needs-info\n             create it: gh label create needs-info   (or: falconet init)",
-		"ok           6. label ready-for-human",
-		"ok           6. label needs-plan-review",
+		"ok           5. label infra-request",
+		"MISSING      5. label needs-info\n             create it: gh label create needs-info   (or: falconet init)",
+		"ok           5. label ready-for-human",
+		"ok           5. label needs-plan-review",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got %q\nwant %q", got, want)
 	}
 	// Configured names, not the defaults; and two keys on one label is two lines.
 	got = strs(LabelLines(Labels{"queue", "same", "same", "pr"}, []string{"same"}))
-	if len(got) != 4 || got[1] != "ok           6. label same" || got[2] != got[1] || !strings.HasPrefix(got[0], "MISSING      6. label queue") {
+	if len(got) != 4 || got[1] != "ok           5. label same" || got[2] != got[1] || !strings.HasPrefix(got[0], "MISSING      5. label queue") {
 		t.Errorf("%q", got)
 	}
 }
 
-// --- step 7 ----------------------------------------------------------------------
+// --- step 6 ----------------------------------------------------------------------
 
 func TestConfigLine(t *testing.T) {
-	if got := ConfigLine(".github/falconet.json", nil).String(); got != "ok           7. .github/falconet.json parses" {
+	if got := ConfigLine(".github/falconet.json", nil).String(); got != "ok           6. .github/falconet.json parses" {
 		t.Errorf("%q", got)
 	}
 	if got := ConfigLine("", nil); got.Status != OK || !strings.Contains(got.Text, "defaults stand alone") {
@@ -473,7 +402,7 @@ func TestConfigLine(t *testing.T) {
 	}
 	err := errors.New(".github/falconet.json is not valid JSON: invalid character '}' looking for beginning of value")
 	got := ConfigLine(".github/falconet.json", err)
-	if got.String() != "MISSING      7. the config does not parse: \".github/falconet.json is not valid JSON: invalid character '}' looking for beginning of value\"\n             check it: jq -e . .github/falconet.json" {
+	if got.String() != "MISSING      6. the config does not parse: \".github/falconet.json is not valid JSON: invalid character '}' looking for beginning of value\"\n             check it: jq -e . .github/falconet.json" {
 		t.Errorf("%q", got.String())
 	}
 	if got := ConfigLine("", errors.New("x")); !strings.Contains(got.Hint, ".github/falconet.json") {
@@ -490,11 +419,11 @@ func TestPromptLines(t *testing.T) {
 		{"implement", "../../prompts/implement.md", false, false},
 	}))
 	want := []string{
-		"ok           7. prompts.implement names prompts/implement.md, which exists",
-		"MISSING      7. prompts.pause_needs_info names prompts/ask.md, which does not exist\n             copy the shipped prompt into the repository and point the key at the copy (README step 7)",
-		"note         7. prompts.park_needs_info is not a prompt falconet reads (the two are implement and pause_needs_info)",
-		"MISSING      7. prompts.implement names /etc/passwd, which is not under the repository root\n             a prompt path is relative to the repository root (README step 7)",
-		"MISSING      7. prompts.implement names ../../prompts/implement.md, which is not under the repository root\n             a prompt path is relative to the repository root (README step 7)",
+		"ok           6. prompts.implement names prompts/implement.md, which exists",
+		"MISSING      6. prompts.pause_needs_info names prompts/ask.md, which does not exist\n             copy the shipped prompt into the repository and point the key at the copy (README step 6)",
+		"note         6. prompts.park_needs_info is not a prompt falconet reads (the two are implement and pause_needs_info)",
+		"MISSING      6. prompts.implement names /etc/passwd, which is not under the repository root\n             a prompt path is relative to the repository root (README step 6)",
+		"MISSING      6. prompts.implement names ../../prompts/implement.md, which is not under the repository root\n             a prompt path is relative to the repository root (README step 6)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("\n got %q\nwant %q", got, want)
@@ -504,7 +433,7 @@ func TestPromptLines(t *testing.T) {
 	}
 }
 
-// --- step 8 ----------------------------------------------------------------------
+// --- step 7 ----------------------------------------------------------------------
 
 const canonicalCaller = `name: infra requests
 
@@ -581,7 +510,7 @@ func TestParseCaller(t *testing.T) {
 	}
 }
 
-// The README's step 8 is the specification, and contract.test.sh holds it to
+// The README's step 7 is the specification, and contract.test.sh holds it to
 // falconet.yml; this holds RequiredPermissions and Reusable to it, so the
 // three cannot drift apart without one of the two tests saying so.
 func TestTheREADMEsCallerIsWhatDoctorAsksFor(t *testing.T) {
@@ -590,15 +519,15 @@ func TestTheREADMEsCallerIsWhatDoctorAsksFor(t *testing.T) {
 		t.Skip("no README beside the package")
 	}
 	text := string(raw)
-	start := strings.Index(text, "### 8.")
-	end := strings.Index(text, "### 9.")
+	start := strings.Index(text, "### 7.")
+	end := strings.Index(text, "### 8.")
 	if start < 0 || end < 0 {
-		t.Fatal("README step 8 not found")
+		t.Fatal("README step 7 not found")
 	}
 	step8 := text[start:end]
 	open := strings.Index(step8, "```yaml\n")
 	if open < 0 {
-		t.Fatal("no yaml block in step 8")
+		t.Fatal("no yaml block in step 7")
 	}
 	block := step8[open+len("```yaml\n"):]
 	block = block[:strings.Index(block, "```")]
@@ -607,7 +536,7 @@ func TestTheREADMEsCallerIsWhatDoctorAsksFor(t *testing.T) {
 		t.Errorf("the README's caller uses %s@main; parsed %+v", Reusable, c)
 	}
 	if !reflect.DeepEqual(c.Grants, RequiredPermissions) {
-		t.Errorf("README step 8 grants %v, doctor asks for %v", c.Grants, RequiredPermissions)
+		t.Errorf("README step 7 grants %v, doctor asks for %v", c.Grants, RequiredPermissions)
 	}
 	lines := WorkflowLines([]byte(block), true)
 	for _, l := range lines {
@@ -618,10 +547,10 @@ func TestTheREADMEsCallerIsWhatDoctorAsksFor(t *testing.T) {
 }
 
 func TestWorkflowLines(t *testing.T) {
-	const usesLine = "ok           8. it uses zetlen/falconet/.github/workflows/falconet.yml@a3ed1b3fcb49f4bf91792f3191790e95bd47a102"
-	const grants = "ok           8. permissions grants contents: write, issues: write, pull-requests: write"
-	const exists = "ok           8. .github/workflows/infra-requests.yml exists"
-	startup := "\n             the run would be a startup_failure: no jobs, no logs, nothing on the issue. Grant README step 8's permissions: block, verbatim"
+	const usesLine = "ok           7. it uses zetlen/falconet/.github/workflows/falconet.yml@a3ed1b3fcb49f4bf91792f3191790e95bd47a102"
+	const grants = "ok           7. permissions grants contents: write, issues: write, pull-requests: write"
+	const exists = "ok           7. .github/workflows/infra-requests.yml exists"
+	startup := "\n             the run would be a startup_failure: no jobs, no logs, nothing on the issue. Grant README step 7's permissions: block, verbatim"
 	sub := func(old, new string) string { return strings.Replace(canonicalCaller, old, new, 1) }
 	for _, tc := range []struct {
 		name   string
@@ -630,48 +559,48 @@ func TestWorkflowLines(t *testing.T) {
 		want   []string
 	}{
 		{"no file", "", false, []string{
-			"MISSING      8. .github/workflows/infra-requests.yml\n             write it from README step 8   (or: falconet init)"}},
+			"MISSING      7. .github/workflows/infra-requests.yml\n             write it from README step 7   (or: falconet init)"}},
 		{"the canonical caller", canonicalCaller, true, []string{exists, usesLine, grants}},
 		{"contents: read — the startup_failure the README opens with",
 			sub("contents: write", "contents: read"), true, []string{exists, usesLine,
-				"MISSING      8. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
+				"MISSING      7. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
 		{"two short, one absent",
 			sub("  contents: write\n  issues: write\n", "  contents: read\n"), true, []string{exists, usesLine,
-				"MISSING      8. permissions grants contents: read, issues: none, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
+				"MISSING      7. permissions grants contents: read, issues: none, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
 		{"no block at all",
 			sub("permissions:\n  contents: write\n  issues: write\n  pull-requests: write\n", ""), true, []string{exists, usesLine,
-				"MISSING      8. no top-level permissions: block, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
+				"MISSING      7. no top-level permissions: block, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
 		{"an empty mapping",
 			sub("permissions:\n  contents: write\n  issues: write\n  pull-requests: write\n", "permissions: {}\n"), true, []string{exists, usesLine,
-				"MISSING      8. permissions grants contents: none, issues: none, pull-requests: none, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
+				"MISSING      7. permissions grants contents: none, issues: none, pull-requests: none, and falconet's widest job declares contents: write, issues: write, pull-requests: write" + startup}},
 		{"read-all",
 			sub("permissions:\n  contents: write\n  issues: write\n  pull-requests: write\n", "permissions: read-all\n"), true, []string{exists, usesLine,
-				"MISSING      8. permissions: read-all grants none of contents: write, issues: write, pull-requests: write" + startup}},
+				"MISSING      7. permissions: read-all grants none of contents: write, issues: write, pull-requests: write" + startup}},
 		{"write-all is ok, and more than needed",
 			sub("permissions:\n  contents: write\n  issues: write\n  pull-requests: write\n", "permissions: write-all\n"), true, []string{exists, usesLine,
-				"ok           8. permissions: write-all grants contents: write, issues: write, pull-requests: write",
-				"note         8. write-all grants every permission, which is more than falconet needs; step 8's three lines are enough"}},
+				"ok           7. permissions: write-all grants contents: write, issues: write, pull-requests: write",
+				"note         7. write-all grants every permission, which is more than falconet needs; step 7's three lines are enough"}},
 		{"granting more is a note",
 			sub("  pull-requests: write\n", "  pull-requests: write\n  actions: read\n  id-token: write\n"), true, []string{exists, usesLine, grants,
-				"note         8. permissions also grants actions: read, id-token: write, which nothing in falconet needs"}},
+				"note         7. permissions also grants actions: read, id-token: write, which nothing in falconet needs"}},
 		{"@main is a note, not MISSING",
 			strings.ReplaceAll(canonicalCaller, "a3ed1b3fcb49f4bf91792f3191790e95bd47a102", "main"), true, []string{exists,
-				"ok           8. it uses zetlen/falconet/.github/workflows/falconet.yml@main",
-				"note         8. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request", grants}},
+				"ok           7. it uses zetlen/falconet/.github/workflows/falconet.yml@main",
+				"note         7. the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request", grants}},
 		// falconet-ref is no input since #19, and a reusable workflow rejects
 		// an input it does not declare at load: MISSING, whatever the value.
 		{"falconet-ref still passed, in step with uses:",
 			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref: a3ed1b3fcb49f4bf91792f3191790e95bd47a102\n"), true, []string{exists, usesLine,
-				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
+				"MISSING      7. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
 		{"falconet-ref still passed, as main",
 			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref: main\n"), true, []string{exists, usesLine,
-				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
+				"MISSING      7. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
 		{"falconet-ref still passed, empty",
 			sub("      issue: ${{ github.event.issue.number }}\n", "      issue: ${{ github.event.issue.number }}\n      falconet-ref:\n"), true, []string{exists, usesLine,
-				"MISSING      8. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
+				"MISSING      7. falconet-ref is no longer an input; remove it\n             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded", grants}},
 		{"no uses: line",
 			sub("uses: zetlen/falconet/.github/workflows/falconet.yml@a3ed1b3fcb49f4bf91792f3191790e95bd47a102", "uses: someone/else@v1"), true, []string{exists,
-				"MISSING      8. no uses: line names zetlen/falconet/.github/workflows/falconet.yml\n             jobs.falconet.uses: zetlen/falconet/.github/workflows/falconet.yml@<sha or tag>", grants}},
+				"MISSING      7. no uses: line names zetlen/falconet/.github/workflows/falconet.yml\n             jobs.falconet.uses: zetlen/falconet/.github/workflows/falconet.yml@<sha or tag>", grants}},
 	} {
 		got := strs(WorkflowLines([]byte(tc.text), tc.exists))
 		if !reflect.DeepEqual(got, tc.want) {

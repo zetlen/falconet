@@ -79,8 +79,8 @@ package main
 // `https://x-access-token:$GH_TOKEN@...` URL put it (issue #41):
 //
 //   - NOT in .git/config, where it used to sit for the rest of the job. That
-//     is the part that mattered: Validate runs `tofu plan` over .tf files an
-//     agent just wrote, and Review then hands a second agent Read over the
+//     is the part that mattered: the origin ran `tofu plan` over .tf files an
+//     agent had just written, and then handed a second agent Read over the
 //     same workspace. A `file("${path.module}/.git/config")` in agent-authored
 //     HCL, or a plain Read by the reviewer, found the token sitting there.
 //   - NOT in argv, because the helper string names `$GH_TOKEN` and never its

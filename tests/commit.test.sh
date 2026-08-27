@@ -22,9 +22,8 @@ export GIT_CONFIG_SYSTEM=/dev/null
 fake_token() { printf 'ghp_%s' '0123456789abcdefghijABCDEFGHIJ012345'; }
 
 # A checkout shaped like the pipeline's, mid-run: one base commit, a working
-# branch, an empty handoff directory, a `tofu` that records its arguments
-# instead of running, and a `gitleaks` that finds token-shaped strings and
-# nothing else.
+# branch, an empty handoff directory, and a `gitleaks` that finds
+# token-shaped strings and nothing else.
 new_checkout() { # name -> echoes the checkout path
   local base="$WORK/$1"
   mkdir -p "$base/repo/.falconet" "$base/repo/.github" "$base/bin"
@@ -36,12 +35,6 @@ new_checkout() { # name -> echoes the checkout path
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" switch -qc issue-1-thing
-
-  cat >"$base/bin/tofu" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$TOFU_CALLS"
-STUB
-  chmod +x "$base/bin/tofu"
 
   # Shaped like the real binary: it reads the text on stdin, honours the
   # --exit-code it was handed, and says what it found on STDERR only. Quiet on
@@ -67,8 +60,7 @@ STUB
 run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   local c="$1" g="$2"
   ( cd "$c/repo" \
-    && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
-       GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+    && GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
        "$FALCONET" commit --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
@@ -112,38 +104,11 @@ it "the body is filed for the pull-request description, without the subject"
 assert_eq "Because the requester asked for the thing." \
   "$(cat "$c/repo/.falconet/commit-body.md")" "commit-body.md"
 
-it "tofu fmt ran on the changed .tf file before the commit"
-assert_contains "$(cat "$c/tofu-calls.txt")" "fmt -- records-example-tech.tf" "tofu calls"
-
-it "tofu fmt was not run recursively"
-assert_not_contains "$(cat "$c/tofu-calls.txt")" "-recursive" "tofu calls"
-
 it "the handoff directory stays out of the commit"
 assert_not_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" ".falconet" "committed paths"
 
 it "and no failure-reason.txt is left behind on success"
 assert_file_missing "$c/repo/.falconet/failure-reason.txt"
-
-# --- tofu fmt's own stdout must not leak into the outcome word -------------
-#
-# The stub above only records its arguments; it never prints anything, so
-# nothing in the suite so far would catch `tofu fmt` behaving like the real
-# binary, which prints the reformatted file's name to STDOUT on success. This
-# stub imitates that.
-
-c="$(new_checkout stdout_purity)"
-cat >"$c/bin/tofu" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$TOFU_CALLS"
-printf '%s\n' "$*"
-STUB
-chmod +x "$c/bin/tofu"
-printf 'locals {\n  a = 9\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Reformat the thing\n\nBecause it needed it.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "tofu fmt's own stdout does not leak into the outcome word"
-assert_eq "success" "$out" "outcome"
 
 # --- a message with no body -------------------------------------------------
 
@@ -293,7 +258,7 @@ assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
 
 # --- a file named like a flag is still read ---------------------------------
 #
-# The tofu fmt step guards its path with `--` because an agent might create
+# `git add` guards its paths with `--` because an agent might create
 # `-check.tf`. The denylist has to read that file too: a guard that hands the
 # path to a tool which parses it as options has not looked at it, and the
 # construct inside goes through on the strength of a scan that never ran.
@@ -375,7 +340,7 @@ it "and no pull-request body is filed"
 assert_file_missing "$c/repo/.falconet/commit-body.md"
 
 # The .tf arm: the message is clean, so only the staged diff can catch this.
-# `tofu plan` prints .tf content into plan.txt, which becomes the PR body.
+# .tf content reaches the remote, and the plan bot echoes it on the PR.
 
 c="$(new_checkout leak_in_tf)"
 { printf 'locals {\n  a = "'; fake_token; printf '"\n}\n'; } \
@@ -395,8 +360,8 @@ assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
 
 # --- the scanner's own stdout must not leak into the outcome word -----------
 #
-# `gitleaks --verbose` prints its findings to STDOUT, exactly as `tofu fmt`
-# prints the file it reformatted. This stub imitates that. A run that printed
+# `gitleaks --verbose` prints its findings to STDOUT. This stub imitates
+# that. A run that printed
 # two lines here would fall through the workflow's `case "${OUTCOME}"` and
 # take neither the success nor the hand-over path — the failure a previous
 # change to this script actually shipped.
@@ -697,8 +662,7 @@ c="$(new_checkout default_handoff)"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
-           GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "with no --out-dir the handoff directory defaults to .falconet"
@@ -721,8 +685,7 @@ mkdir -p "$c/repo/.ci-handoff"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" \
-           GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "and handoff_dir in config moves it, which is how a consumer migrates"

@@ -1,7 +1,7 @@
 // Package github is falconet's own GitHub client: net/http against
 // GITHUB_API_URL, a token the caller hands in, and the handful of endpoints
 // the verbs need. It replaces `gh` (ADR-0006 D2), so the runtime dependency
-// set in CI becomes git, tofu, gitleaks and the binary — and on a
+// set in CI becomes git, gitleaks and the binary — and on a
 // workstation, the same.
 //
 // Nothing here retries, paginates or caches. A verb makes a call or three and

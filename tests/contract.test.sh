@@ -75,8 +75,9 @@ assert_not_contains "$implement_job" "steps.token.outputs.token" "implement job"
 
 # --- exactly one of each thing that must happen once -----------------------
 
-it "there is exactly one validate step"
-assert_eq 1 "$(grep -c 'verb: validate' <<<"$wf_code")" "validate steps"
+it "nothing plans: the plan bot on the pull request does that"
+assert_eq 0 "$(grep -c -E 'verb: (validate|assemble)|falconet plan-env|plan-env:' <<<"$wf_code")" "plan-side steps"
+assert_not_contains "$action_code" "setup-opentofu" "action"
 
 it "the branch is pushed exactly once"
 assert_eq 1 "$(grep -c 'verb: push' <<<"$wf_code")" "push steps"
@@ -108,7 +109,7 @@ pr_line="$(grep -n 'gh pr create' "$WF" | cut -d: -f1)"
 it "and only the install stands between restoring the branch and the push"
 publish_steps="$(sed -n 's/^      - name: //p' <<<"$publish_job")"
 assert_eq "Restore the branch
-Install falconet, tofu and gitleaks
+Install falconet and gitleaks
 Push" "$(grep -A2 '^Restore the branch$' <<<"$publish_steps")" "the three steps in order"
 
 it "the work is bundled before the agent job ends, so it outlives the runner"
@@ -121,14 +122,14 @@ passing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
 total="$(grep -c 'falconet pause' <<<"$wf_code")"
 assert_eq "$total" "$passing" "pause calls passing --branch"
 
-it "and there are four of them: three endings in publish and the containment"
-assert_eq 4 "$total" "pause calls"
+it "and there are three of them: two endings in publish and the containment"
+assert_eq 3 "$total" "pause calls"
 
 it "and the ones in publish read PUSHED_BRANCH rather than the branch prepare intended"
 # The branch that IS on the remote, set by the push verb; empty when nothing
 # was pushed, which pause takes as "no branch".
 publish_pauses="$(awk '/falconet pause/ { p = 1; buf = "" } p { buf = buf " " $0; if ($0 !~ /\\$/) { print buf; p = 0 } }' <<<"$publish_job")"
-assert_eq 3 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+assert_eq 2 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
 
 # Unset, not empty, when nothing was pushed — and the two hand-overs for a
 # question and a failure are exactly the paths with nothing to push. A bare
@@ -185,8 +186,10 @@ assert_contains "$wf" 'cat .falconet/commit-subject.txt' "workflow"
 it "and never from the issue title"
 assert_not_contains "$wf" "github.event.issue.title" "workflow"
 
-it "the whole plan goes in the body, assembled rather than quoted"
-assert_contains "$wf" "verb: assemble" "workflow"
+it "the body is the commit body and a Closes line, and no plan is quoted into it"
+assert_contains "$wf_code" 'cat .falconet/commit-body.md' "workflow"
+assert_contains "$wf_code" "Closes #" "workflow"
+assert_not_contains "$wf_code" "plan.txt" "workflow"
 
 it "and the label comes from the config every verb reads, through the binary"
 assert_contains "$wf_code" 'label="$(falconet config $FALCONET_CONFIG_FLAG get .labels.pr)"' "workflow"
@@ -252,7 +255,7 @@ assert_contains "$verb_decl" "required: false" "verb input"
 assert_contains "$verb_decl" "default: ''" "verb input"
 assert_contains "$action_code" "if: inputs.verb != ''" "the Run step"
 
-# "Check jq" lived here. The runner is asked for git, tofu, gitleaks and the
+# "Check jq" lived here. The runner is asked for git, gitleaks and the
 # binary, and for nothing else (ADR-0006 D2); the case below that greps both
 # files for jq is what replaced it.
 
@@ -284,7 +287,7 @@ unmet="$(awk '
 assert_eq "" "$unmet" "steps running falconet before their job installed it"
 
 it "and every job installs exactly once"
-assert_eq 4 "$(grep -c 'name: Install falconet, tofu and gitleaks' <<<"$wf_code")" "install steps"
+assert_eq 4 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
 
 # Two verbs read `git status`: prepare refuses a dirty tree, and commit
 # refuses every changed path outside the allowlist, untracked included. The
@@ -324,46 +327,6 @@ assert_not_contains "$wf" ".falconet-tool" "workflow"
 it "and writes it per clone, never into a file the commit verb could see"
 assert_contains "$wf" ".git/info/exclude" "workflow"
 assert_not_contains "$wf" ">> .gitignore" "workflow"
-
-# --- the planning credentials ----------------------------------------------
-#
-# One secret, loaded in the two jobs that run tofu and in neither of the
-# others. Where it is loaded is the invariant; what is in it is the
-# consumer's business.
-
-it "the jobs that run tofu load the planning credentials"
-assert_eq 2 "$(grep -c 'name: Credentials for the stacks that plan' <<<"$wf_code")" \
-  "credential-loading steps"
-
-it "through the binary, as a run step, so the masks reach the runner's stdout"
-# The action captures stdout into a step output, where ::add-mask:: would
-# mask nothing.
-assert_eq 2 "$(grep -c '^ *run: falconet plan-env$' <<<"$wf_code")" "plan-env run steps"
-
-it "and the agent's job is not one of them, which is the whole boundary"
-assert_not_contains "$implement_job" "plan-env" "implement job"
-
-it "the secret is optional, because a repository may need none"
-plan_env_decl="$(awk '/^      plan-env:/{f=1} f && /required:/{print; exit}' "$WF")"
-assert_contains "$plan_env_decl" "required: false" "plan-env declaration"
-
-it "the value travels by environment, never by template expression"
-assert_eq 2 "$(grep -c 'FALCONET_PLAN_ENV: ${{ secrets.plan-env }}' <<<"$wf_code")" \
-  "env-passed references"
-
-it "and into the env of the step that runs plan-env, each time"
-# Per step: the block that runs plan-env is the block that carries the env.
-assert_eq 2 "$(awk '
-  /^      - / { if (runs && has) n++; runs = 0; has = 0 }
-  /run: falconet plan-env/ { runs = 1 }
-  /FALCONET_PLAN_ENV: \$\{\{ secrets.plan-env \}\}/ { has = 1 }
-  END { if (runs && has) n++; print n + 0 }
-' <<<"$wf_code")" "plan-env steps carrying the secret in their env"
-
-# "and every line of it is masked before it can reach a log" lived here as a
-# grep of the workflow for ::add-mask:: while the step was bash in YAML. The
-# step is `falconet plan-env` now, and plan-env.test.sh holds the masks by
-# running it: one per non-empty line, before the value is written anywhere.
 
 # --- attacker-controlled text never reaches a shell ------------------------
 
@@ -465,7 +428,7 @@ assert_contains "$implement_job" "name: source-gate" "the implement job"
 
 it "and refuses a tree whose HEAD is not the base the gate recorded"
 # Every guard downstream compares against that commit. A silent mismatch
-# would have the agent editing one tree and the plan describing another.
+# would have the agent editing one tree and the reviewer reading another.
 assert_contains "$implement_job" 'shipped HEAD is not the base the gate recorded' \
   "the implement job"
 
@@ -546,8 +509,7 @@ assert_eq "" "$(awk '
 
 it "and every hand-off between jobs fails rather than upload nothing"
 # The three that are plumbing: the handoff out of gate, the source out of
-# gate, and the handoff out of implement. Not the plan artifact — a run that
-# parked before it planned has no plan, and that is not a failure.
+# gate, and the handoff out of implement.
 # Comments stripped: the prose above the first upload names the setting.
 assert_eq 3 "$(grep -c 'if-no-files-found: error' <<<"$wf_code")" \
   "uploads that fail on an empty result"
@@ -558,8 +520,8 @@ assert_eq 3 "$(grep -c 'if-no-files-found: error' <<<"$wf_code")" \
 # "pushed <branch> (<sha>)", and `git push -u` prints "branch 'x' set up to
 # track..." on stdout of its own — so the write was `name=value` with a
 # newline in the value, which is "Invalid format". The `publish` job had
-# already pushed the branch and then failed on the way out: no validate, no
-# pull request, an issue parked for a human, over a log line.
+# already pushed the branch and then failed on the way out: no pull
+# request, an issue parked for a human, over a log line.
 
 it "the wrapper writes its output with a delimiter, not name=value"
 assert_contains "$action" 'echo "outcome<<FALCONET_OUTCOME_EOF"' "action"

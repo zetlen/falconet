@@ -191,7 +191,7 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 //
 // Every stream gitleaks writes goes to Stderr — `-v` prints findings to
 // STDOUT, and the caller's stdout is a list of channel names it splices into
-// a comment. That is the same rule `tofu fmt` taught ci-commit-change.sh: a
+// a comment. That is the rule `tofu fmt` once taught ci-commit-change.sh: a
 // chatty subprocess in a program with a stdout contract is a bug waiting for
 // a release.
 func (s *Scanner) one(bin, label string, content []byte) (bool, error) {

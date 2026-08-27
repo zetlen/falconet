@@ -18,10 +18,9 @@
 # runs both. They need bash, git, jq, awk and python3 (stdlib only). GitHub
 # is tests/fixtures/fake-github.py, served on loopback with GITHUB_API_URL
 # pointing at it — no test file stubs `gh`; the files that once did put a
-# tripwire on PATH instead — tofu and gitleaks are bash stubs handed in
-# through $TOFU and $GITLEAKS, pushes land only in bare repositories under a
-# temp directory, and nothing touches the network, GitHub, OpenTofu or any
-# credential — which is why .github/workflows/ci.yml can run the whole suite
+# tripwire on PATH instead — gitleaks is a bash stub handed in through
+# $GITLEAKS, pushes land only in bare repositories under a temp directory,
+# and nothing touches the network, GitHub or any credential — which is why .github/workflows/ci.yml can run the whole suite
 # on every pull request from a GitHub-hosted runner. Run it locally too,
 # before changing anything under cmd/ or internal/: CI reports, and only the
 # `protecc main` ruleset decides whether a red report can be merged past.

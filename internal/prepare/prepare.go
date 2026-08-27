@@ -4,7 +4,7 @@
 // pull-request list; and the two things the ready path derives from the
 // snapshot without judgment, the request in markdown and the branch name.
 // The verb itself, cmd/falconet/prepare.go, is the flags, the files, git,
-// tofu, the GitHub calls and the exit code.
+// the GitHub calls and the exit code.
 //
 // Nothing here touches the filesystem or the network: the verb hands in the
 // labels, the state, the body, the event's three facts and the pull list, and

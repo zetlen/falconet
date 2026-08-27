@@ -1,19 +1,18 @@
 name: falconet
 description: >-
-  Turn a plain-language infrastructure request into a pull request carrying a
-  real plan, and stop there. This action is setup plus pass-through: it pins
-  the binaries the verbs need — OpenTofu, gitleaks, and falconet itself — and
-  then runs one verb, or runs nothing and leaves them on PATH.
+  Turn a plain-language infrastructure request into a pull request a person
+  can review, and stop there. This action is setup plus pass-through: it pins
+  the binaries the verbs need — gitleaks and falconet itself — and then runs
+  one verb, or runs nothing and leaves them on PATH.
 author: zetlen
 
 inputs:
   verb:
     description: >-
-      One of prepare, commit, push, validate, assemble; the unlisted prompt;
-      or doctor. Not pause and not plan-env: `args` is split on whitespace,
-      a pause preamble is a sentence, and plan-env's masks must reach the
-      runner's stdout directly — both run from PATH in the workflow's own
-      run: steps. Empty means setup only: the pinned binaries are installed
+      One of prepare, commit, push; the unlisted prompt; or doctor. Not
+      pause: `args` is split on whitespace and a pause preamble is a
+      sentence, so it runs from PATH in the workflow's own run: steps.
+      Empty means setup only: the pinned binaries are installed
       and no verb runs, which is how a job puts falconet on PATH before its
       first verb.
     required: false
@@ -56,12 +55,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Set up OpenTofu
-      if: inputs.setup == 'true'
-      uses: opentofu/setup-opentofu@v1
-      with:
-        tofu_wrapper: false
-
     # The BINARY, not gitleaks/gitleaks-action: the action's licence
     # distinguishes individual users from organisations and asks the second
     # kind for a key, and falconet would rather ship something a person can

@@ -2,15 +2,12 @@ package setup
 
 import (
 	"bytes"
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"testing/quick"
 
 	"github.com/zetlen/falconet/internal/doctor"
@@ -25,7 +22,7 @@ func check(t *testing.T, f any) {
 	}
 }
 
-// --- step 6: the labels ----------------------------------------------------------
+// --- step 5: the labels ----------------------------------------------------------
 
 func TestLabelsCreatesWhatIsMissingInReadmeOrder(t *testing.T) {
 	want := doctor.Labels{Queue: "infra-request", NeedsInfo: "needs-info", Human: "ready-for-human", PR: "needs-plan-review"}
@@ -83,169 +80,11 @@ func TestEveryLabelColourIsSixHexDigits(t *testing.T) {
 	}
 }
 
-// --- step 7: discovery, sorting, the config ------------------------------------
-
-func TestDiscoverStacks(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		tree fstest.MapFS
-		want []string
-	}{
-		{"two stacks and a docs directory", fstest.MapFS{
-			"dns/main.tf":       {},
-			"workspace/main.tf": {},
-			"docs/README.md":    {},
-		}, []string{"dns", "workspace"}},
-		{"nested stacks", fstest.MapFS{
-			"envs/prod/main.tf":    {},
-			"envs/staging/main.tf": {},
-			"envs/README.md":       {},
-		}, []string{"envs/prod", "envs/staging"}},
-		{"a directory with several .tf files is one stack", fstest.MapFS{
-			"dns/main.tf":    {},
-			"dns/records.tf": {},
-			"dns/guards.tf":  {},
-		}, []string{"dns"}},
-		{"a stack with a module inside it is two", fstest.MapFS{
-			"dns/main.tf":         {},
-			"dns/modules/zone.tf": {},
-			"dns/z.tf":            {},
-		}, []string{"dns", "dns/modules"}},
-		{".terraform, .git, node_modules and dot-directories are never stacks", fstest.MapFS{
-			"dns/main.tf":                         {},
-			"dns/.terraform/modules/x/main.tf":    {},
-			".git/main.tf":                        {},
-			"node_modules/pkg/main.tf":            {},
-			".hidden/main.tf":                     {},
-			"site/node_modules/other/main.tf":     {},
-			"workspace/.terraform.lock.hcl":       {},
-			"workspace/.terraform/providers/x.tf": {},
-		}, []string{"dns"}},
-		{"a .tf at the root is not a stack", fstest.MapFS{
-			"main.tf":     {},
-			"dns/main.tf": {},
-		}, []string{"dns"}},
-		{"only root .tf files is no stacks", fstest.MapFS{
-			"main.tf": {},
-			"vars.tf": {},
-		}, nil},
-		{"no .tf anywhere", fstest.MapFS{
-			"README.md":      {},
-			"docs/x.md":      {},
-			"dns/main.tf.j2": {},
-		}, nil},
-		{"a .tf directory name is not a file", fstest.MapFS{
-			"dns/thing.tf/inner.txt": {},
-		}, nil},
-	} {
-		got, err := DiscoverStacks(tc.tree)
-		if err != nil {
-			t.Errorf("%s: %v", tc.name, err)
-			continue
-		}
-		if len(got) == 0 && len(tc.want) == 0 {
-			continue
-		}
-		if !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-// The same walk over a real temporary tree, since os.DirFS is what the verb
-// hands in.
-func TestDiscoverStacksOnDisk(t *testing.T) {
-	root := t.TempDir()
-	for _, p := range []string{"dns/main.tf", "workspace/main.tf", "docs/README.md", ".terraform/x/main.tf", "dns/.terraform/providers/p.tf", "main.tf"} {
-		full := filepath.Join(root, p)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, err := DiscoverStacks(os.DirFS(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"dns", "workspace"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
-func TestSortStacks(t *testing.T) {
-	disc := []string{"dns", "site", "workspace"}
-	for _, tc := range []struct {
-		name         string
-		plan, val    []string
-		want         Stacks
-		unknown      bool
-		unsorted     []string
-		unknownNames string
-	}{
-		{"each named once", []string{"dns"}, []string{"workspace", "site"}, Stacks{[]string{"dns"}, []string{"workspace", "site"}}, false, nil, ""},
-		{"all planned", []string{"site", "dns", "workspace"}, nil, Stacks{[]string{"site", "dns", "workspace"}, nil}, false, nil, ""},
-		{"all validate-only", nil, disc, Stacks{nil, disc}, false, nil, ""},
-		{"a repeat in one list is one", []string{"dns", "dns"}, []string{"site", "workspace"}, Stacks{[]string{"dns"}, []string{"site", "workspace"}}, false, nil, ""},
-		{"one in neither", []string{"dns"}, []string{"site"}, Stacks{}, false, []string{"workspace"}, ""},
-		{"none named", nil, nil, Stacks{}, false, disc, ""},
-		{"a name nothing discovered", []string{"nosuch"}, disc, Stacks{}, true, nil, "nosuch"},
-		{"a name in both lists", []string{"dns"}, []string{"dns", "site", "workspace"}, Stacks{}, true, nil, "dns"},
-	} {
-		got, err := Sort(disc, tc.plan, tc.val)
-		var unknown *UnknownStackError
-		var unsorted *UnsortedError
-		switch {
-		case tc.unknown:
-			if !errors.As(err, &unknown) {
-				t.Errorf("%s: want an UnknownStackError, got %v", tc.name, err)
-			} else if !strings.Contains(unknown.Name, tc.unknownNames) || !strings.Contains(err.Error(), "dns, site, workspace") {
-				t.Errorf("%s: %v", tc.name, err)
-			}
-		case tc.unsorted != nil:
-			if !errors.As(err, &unsorted) {
-				t.Errorf("%s: want an UnsortedError, got %v", tc.name, err)
-			} else if !reflect.DeepEqual(unsorted.Names, tc.unsorted) {
-				t.Errorf("%s: unsorted %v, want %v", tc.name, unsorted.Names, tc.unsorted)
-			}
-		default:
-			if err != nil {
-				t.Errorf("%s: %v", tc.name, err)
-			} else if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
-			}
-		}
-	}
-}
-
-func TestSplitList(t *testing.T) {
-	for in, want := range map[string][]string{
-		"":                   nil,
-		"dns":                {"dns"},
-		"dns,workspace":      {"dns", "workspace"},
-		" dns , workspace/ ": {"dns", "workspace"},
-		",,dns,,":            {"dns"},
-		"envs/prod/":         {"envs/prod"},
-	} {
-		if got := SplitList(in); !reflect.DeepEqual(got, want) {
-			t.Errorf("SplitList(%q) = %v, want %v", in, got, want)
-		}
-	}
-}
+// --- step 5: the config ----------------------------------------------------------
 
 func TestConfigJSONIsExactlyTheReadmesShape(t *testing.T) {
-	got := string(ConfigJSON(Stacks{Plan: []string{"dns"}, ValidateOnly: []string{"workspace", "site"}}))
+	got := string(ConfigJSON())
 	want := `{
-  "stacks": {
-    "plan": [
-      "dns"
-    ],
-    "validate_only": [
-      "workspace",
-      "site"
-    ]
-  },
   "prompts": {
     "implement": "prompts/implement.md"
   }
@@ -254,58 +93,9 @@ func TestConfigJSONIsExactlyTheReadmesShape(t *testing.T) {
 	if got != want {
 		t.Errorf("\n got %q\nwant %q", got, want)
 	}
-	// Empty lists are [], never null: the schema reads a list.
-	empty := ConfigJSON(Stacks{})
-	if !strings.Contains(string(empty), `"plan": []`) || !strings.Contains(string(empty), `"validate_only": []`) {
-		t.Errorf("empty stacks: %s", empty)
-	}
-	var parsed struct {
-		Stacks struct {
-			Plan         []string `json:"plan"`
-			ValidateOnly []string `json:"validate_only"`
-		}
-		Prompts map[string]string
-	}
-	if err := json.Unmarshal(empty, &parsed); err != nil || parsed.Stacks.Plan == nil || parsed.Stacks.ValidateOnly == nil || parsed.Prompts["implement"] != PromptPath {
-		t.Errorf("the config does not round-trip: %v %+v", err, parsed)
-	}
 }
 
-// Whatever the lists, the file parses back to the same lists, ends in
-// exactly one newline, and is indented two spaces.
-func TestConfigJSONRoundTrips(t *testing.T) {
-	check(t, func(plan, val []string) bool {
-		for i := range plan {
-			plan[i] = "p" + plan[i]
-		}
-		for i := range val {
-			val[i] = "v" + val[i]
-		}
-		out := ConfigJSON(Stacks{Plan: plan, ValidateOnly: val})
-		if !bytes.HasSuffix(out, []byte("}\n")) || bytes.HasSuffix(out, []byte("\n\n")) {
-			return false
-		}
-		var parsed struct {
-			Stacks struct {
-				Plan         []string `json:"plan"`
-				ValidateOnly []string `json:"validate_only"`
-			} `json:"stacks"`
-		}
-		if err := json.Unmarshal(out, &parsed); err != nil {
-			return false
-		}
-		return reflect.DeepEqual(parsed.Stacks.Plan, orEmpty(plan)) && reflect.DeepEqual(parsed.Stacks.ValidateOnly, orEmpty(val))
-	})
-}
-
-func orEmpty(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
-}
-
-// --- step 8: the workflow ----------------------------------------------------------
+// --- step 7: the workflow ----------------------------------------------------------
 
 func TestWorkflowPinsTheUsesLineAndNothingElseNamesARef(t *testing.T) {
 	for _, ref := range []string{"main", "v0.1.0", "0123abcd"} {
@@ -325,7 +115,7 @@ func TestWorkflowPinsTheUsesLineAndNothingElseNamesARef(t *testing.T) {
 			t.Errorf("%s: doctor reads the caller as %+v", ref, c)
 		}
 		for _, secret := range []string{"app-id: ${{ secrets.FALCONET_APP_ID }}", "app-private-key: ${{ secrets.FALCONET_APP_PRIVATE_KEY }}",
-			"anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}", "plan-env: ${{ secrets.FALCONET_PLAN_ENV }}"} {
+			"anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}"} {
 			if !strings.Contains(wf, "      "+secret+"\n") {
 				t.Errorf("%s: no %q", ref, secret)
 			}
@@ -371,7 +161,7 @@ func TestWorkflowPermissionsAreWhatTheWidestJobDeclares(t *testing.T) {
 		}
 	}
 	if len(c.Grants) != 3 {
-		t.Errorf("the template grants %v, and step 8 is three lines", c.Grants)
+		t.Errorf("the template grants %v, and step 7 is three lines", c.Grants)
 	}
 	// And it is doctor's RequiredPermissions, which is what doctor checks a
 	// caller against: a template doctor would fault is not a template.
@@ -382,7 +172,7 @@ func TestWorkflowPermissionsAreWhatTheWidestJobDeclares(t *testing.T) {
 	}
 }
 
-// The README's step 8 block, read the way contract.test.sh reads it, is
+// The README's step 7 block, read the way contract.test.sh reads it, is
 // the template's block: the README is the specification, and the two say
 // the same thing or one of them is wrong.
 func TestWorkflowPermissionsMatchTheReadmesStep8(t *testing.T) {
@@ -393,9 +183,9 @@ func TestWorkflowPermissionsMatchTheReadmesStep8(t *testing.T) {
 	var caller []string
 	in := false
 	for _, line := range strings.Split(string(readme), "\n") {
-		if strings.HasPrefix(line, "### 8.") {
+		if strings.HasPrefix(line, "### 7.") {
 			in = true
-		} else if strings.HasPrefix(line, "### 9.") {
+		} else if strings.HasPrefix(line, "### 8.") {
 			break
 		}
 		if in {
@@ -415,7 +205,7 @@ func TestWorkflowPermissionsMatchTheReadmesStep8(t *testing.T) {
 		}
 	}
 	if len(perms) == 0 {
-		t.Fatal("README step 8 has no permissions block")
+		t.Fatal("README step 7 has no permissions block")
 	}
 	wf := string(Workflow("main"))
 	block := "permissions:\n" + strings.Join(perms, "\n") + "\n"

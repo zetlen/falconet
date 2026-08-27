@@ -12,7 +12,7 @@
 
 # stdout and stderr are captured separately throughout. "Prints usage" is not
 # the assertion — "prints usage WHERE A HUMAN SEES IT AND NOT INTO THE
-# OUTCOME" is, because five of the six verbs put a single word on stdout and
+# OUTCOME" is, because three of the four pipeline verbs put a single word on stdout and
 # a dispatcher that chattered there would corrupt every one of them.
 run() { # args... -> sets OUT ERR RC
   OUT="$("$FALCONET" "$@" 2>"$WORK/err")"; RC=$?
@@ -48,18 +48,20 @@ assert_eq "" "$OUT" "stdout"
 
 # --- the verb list ----------------------------------------------------------
 
-it "usage lists all six verbs"
+it "usage lists all four pipeline verbs"
 run --help
-for v in prepare commit push validate pause assemble; do
+for v in prepare commit push pause; do
   case "$ERR" in *"  $v "*) ;; *) echo "  FAIL  usage omits $v" ;; esac
 done
-assert_contains "$ERR" "assemble"
+assert_contains "$ERR" "pause"
+
+it "and the retired plan-side verbs are gone, not listed"
+for v in validate assemble plan-env; do
+  assert_not_contains "$ERR" "  $v " "usage"
+done
 
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
-
-it "and plan-env the same way: invoked by the workflow, not vocabulary"
-assert_not_contains "$ERR" "plan-env"
 
 it "park is gone, not aliased or listed"
 assert_not_contains "$ERR" "  park "
@@ -146,7 +148,7 @@ assert_eq 1 "$rc" "exit code"
 # --- the handoff directory is ignored ---------------------------------------
 #
 # First line of the defence, exactly as .ci-handoff/ was: a `git add -A`
-# cannot pick up an ignored path, and validate refuses a commit that force-adds
+# cannot pick up an ignored path, and commit refuses a commit that force-adds
 # it anyway.
 
 it "the handoff directory is gitignored"

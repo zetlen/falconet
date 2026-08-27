@@ -1,9 +1,9 @@
 # falconet's own tests, on every pull request and every push to main.
 #
-# The suite serves a fake GitHub API on loopback, stubs tofu and gitleaks with
-# bash scripts handed in through $TOFU and $GITLEAKS, pushes only into bare
-# repositories under a temp directory, and never touches the network, GitHub,
-# OpenTofu or any credential — which is why it can run here with no secrets
+# The suite serves a fake GitHub API on loopback, stubs gitleaks with a bash
+# script handed in through $GITLEAKS, pushes only into bare repositories
+# under a temp directory, and never touches the network, GitHub or any
+# credential — which is why it can run here with no secrets
 # and no permissions at all. It runs once, through the binary this job builds:
 # since #19 there is nothing else in the tree that can answer it.
 name: ci

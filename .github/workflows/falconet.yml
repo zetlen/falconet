@@ -10,9 +10,14 @@
 #   with `permissions: {}` and no secrets: block is not best-effort.
 #
 #   the SCRIPTED JOBS never run the agent. They hold the token and do the
-#   mechanics — the branch, the guards, the commit, the push, the plan, the
-#   pull request — none of which is judgment and none of which an agent
-#   should be able to skip, improvise, or be argued out of.
+#   mechanics — the branch, the guards, the commit, the push, the pull
+#   request — none of which is judgment and none of which an agent should
+#   be able to skip, improvise, or be argued out of.
+#
+#   the PLAN is somebody else's job. falconet opens the pull request and
+#   stops; the plan a reviewer reads is posted on it by the plan bot the
+#   repository already runs on every pull request (Atlantis, dflook's
+#   terraform-plan, …), from credentials that never enter this workflow.
 #
 # ---------------------------------------------------------------------------
 # Where falconet comes from
@@ -48,8 +53,8 @@
 #   1. `implement` uploads a git BUNDLE of the branch before it ends. The
 #      bundle outlives the runner, so the work is durable the instant it
 #      exists, which is what the incident was actually about.
-#   2. `publish`'s first verb is the push. Nothing is validated, assembled or
-#      posted before the branch is on the remote.
+#   2. `publish`'s first verb is the push. Nothing is posted before the
+#      branch is on the remote.
 #
 # So the work is never lost; there is a window of one job hand-off in which it
 # is durable as an artifact rather than as a branch. `contain` links the run —
@@ -93,15 +98,6 @@ on:
           Deliberately an API key, not a subscription token, so falconet's
           spend stays a separate number.
         required: true
-      plan-env:
-        description: >-
-          A JSON object of environment variables the stacks need in order to
-          init and plan — state backend keys, provider tokens, TF_VAR_*. For
-          example: {"AWS_ACCESS_KEY_ID": "...", "AWS_SECRET_ACCESS_KEY": "...",
-          "CLOUDFLARE_API_TOKEN": "..."}. One secret rather than a named input
-          per cloud, because a backend is an S3 key here and a service account
-          there. Omit it if the stacks plan without credentials.
-        required: false
 
 permissions: {}
 
@@ -153,11 +149,11 @@ jobs:
           mkdir -p .git/info
           printf '%s\n' .falconet/ >> .git/info/exclude
 
-      # No verb: this call installs falconet, tofu and gitleaks and stops. See
-      # the header for where the binary comes from. The action's own checkout
-      # is in the runner's action cache, not in this workspace, so nothing
-      # here is a path the verbs could trip over.
-      - name: Install falconet, tofu and gitleaks
+      # No verb: this call installs falconet and gitleaks and stops. See the
+      # header for where the binary comes from. The action's own checkout is
+      # in the runner's action cache, not in this workspace, so nothing here
+      # is a path the verbs could trip over.
+      - name: Install falconet and gitleaks
         uses: zetlen/falconet@v0.4.0
 
       # Eligibility is decided here and not in a job-level `if:`, because an
@@ -165,25 +161,6 @@ jobs:
       # config file. Gating there would fork eligibility into YAML-in-CI and
       # nothing-locally, for a project whose whole rule is one code path. The
       # cost is runner-seconds on ineligible events.
-      # One secret, masked and turned into ordinary environment variables, so
-      # that tofu sees what it would see on a workstation and no verb has to
-      # know the name of a cloud.
-      #
-      # Loaded in the two jobs that run tofu and NOWHERE ELSE. The agent job
-      # has permissions: {} and no token; a cloud credential in its
-      # environment would undo that, because the boundary is that judgment
-      # runs where publishing cannot. It sits as late in the job as it can,
-      # so the steps that do not need it do not have it.
-      #
-      # A `run:` step and not the action, on purpose: `falconet plan-env`
-      # prints `::add-mask::` for every line of every value, and the runner
-      # reads those commands off the step's own stdout. The action captures
-      # stdout into a step output, where a mask would mask nothing.
-      - name: Credentials for the stacks that plan
-        env:
-          FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
-        run: falconet plan-env
-
       - name: Prepare
         id: prepare
         uses: zetlen/falconet@v0.4.0
@@ -303,7 +280,7 @@ jobs:
       # a public release asset, with no token. That is the stronger form of
       # ADR-0005's sentence, and contract.test.sh holds it: zero
       # actions/checkout steps here, ever.
-      - name: Install falconet, tofu and gitleaks
+      - name: Install falconet and gitleaks
         uses: zetlen/falconet@v0.4.0
 
       - uses: actions/download-artifact@v4
@@ -390,13 +367,13 @@ jobs:
 
       # Every guard rides here: the path allowlist, the content denylist, the
       # secret scan over the agent's drafts and then over the staged change,
-      # per-file formatting, and a vetted-path-only `git add`. A refusal beats
-      # a question: a denied run commits nothing, so there is no committed
-      # work for needs-info's ordering to protect.
+      # and a vetted-path-only `git add`. A refusal beats a question: a
+      # denied run commits nothing, so there is no committed work for
+      # needs-info's ordering to protect.
       # `setup: false` claims an earlier step in THIS job installed the
       # binaries, and a job is a fresh runner: the install is this job's
-      # first step. commit needs `tofu fmt` and gitleaks, and the secret scan
-      # fails closed on a missing scanner.
+      # first step. commit needs gitleaks, and the secret scan fails closed
+      # on a missing scanner.
       - name: Commit
         id: commit
         uses: zetlen/falconet@v0.4.0
@@ -473,7 +450,7 @@ jobs:
         run: |
           set -euo pipefail
           # Fail closed. Every file the rest of this job reads — the commit
-          # body, the plan, the request — came out of that artifact, and a
+          # body, the subject, the request — came out of that artifact, and a
           # copy that quietly matched nothing is how a pushed branch turned
           # into a pull request that could not be assembled.
           test -f .falconet/branch.bundle \
@@ -489,7 +466,7 @@ jobs:
       # The one step between the branch and the remote: the push needs the
       # binary, and the binary is a download. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
-      - name: Install falconet, tofu and gitleaks
+      - name: Install falconet and gitleaks
         uses: zetlen/falconet@v0.4.0
 
       # Unconditional, and the first verb. Every run leaves its branch on the
@@ -505,62 +482,33 @@ jobs:
           setup: 'false'
           args: --branch ${{ needs.gate.outputs.branch }} --base-sha ${{ needs.gate.outputs.base_sha }}
 
-      # As in gate, and after the push for the same reason it is late there:
-      # the branch is already on the remote before this job holds a cloud
-      # credential at all. A `run:` step for gate's reason too: the masks
-      # must reach the runner's stdout, not a step output.
-      - name: Credentials for the stacks that plan
-        env:
-          FALCONET_PLAN_ENV: ${{ secrets.plan-env }}
-        run: falconet plan-env
-
-      - name: Validate
-        id: validate
-        if: needs.implement.outputs.outcome == 'success'
-        continue-on-error: true
-        uses: zetlen/falconet@v0.4.0
-        with:
-          verb: validate
-          setup: 'false'
-          args: --base ${{ needs.gate.outputs.base_sha }} ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
-
-      - uses: actions/upload-artifact@v4
-        if: needs.implement.outputs.outcome == 'success'
-        with:
-          name: tofu-plan-issue-${{ inputs.issue }}
-          path: .falconet/plan.txt
-          retention-days: 30
-          # Hidden path, as above. `ignore` stays: a run that paused before it
-          # planned has no plan to keep, and that is not a failure.
-          include-hidden-files: true
-          if-no-files-found: ignore
-
+      # The body is the commit body and a "Closes" line, and nothing else:
+      # no plan. The plan a reviewer reads is posted on the pull request by
+      # the repository's own plan bot, from credentials this workflow never
+      # holds — so a run that pushed a commit always reaches this step, and
+      # what a person is asked to look at is the change plus whatever the
+      # plan bot says about it.
       - name: Assemble the pull-request body
-        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
-        uses: zetlen/falconet@v0.4.0
-        with:
-          verb: assemble
-          setup: 'false'
-          args: >-
-            --body .falconet/commit-body.md
-            --plan .falconet/plan.txt
-            --issue ${{ inputs.issue }}
-            --out .falconet/pr.md
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        if: needs.implement.outputs.outcome == 'success'
+        env:
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          set -euo pipefail
+          { cat .falconet/commit-body.md; printf '\n\nCloses #%s\n' "$ISSUE"; } > .falconet/pr.md
 
       # The title comes from the commit subject the agent wrote, never from
       # the issue title. The agent's account of its own change is the thing a
       # human reviews it against.
       #
       # The label comes from the same config every verb reads, through the
-      # binary, so this step cannot drift from what prepare and validate
-      # resolved. $FALCONET_CONFIG_FLAG is the `--config FILE` the verb steps
-      # build from inputs.config, or nothing; unquoted so that nothing is no
+      # binary, so this step cannot drift from what prepare resolved.
+      # $FALCONET_CONFIG_FLAG is the `--config FILE` the verb steps build
+      # from inputs.config, or nothing; unquoted so that nothing is no
       # argument. Captured in its own assignment, so a config the binary
       # refuses fails this step here and loudly, not inside gh's argument
       # list.
       - name: Open the pull request
-        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'success'
+        if: needs.implement.outputs.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -624,23 +572,6 @@ jobs:
             --run-url "$RUN_URL" \
             --preamble "I wasn't able to prepare this change automatically. This one needs a person."
 
-      - name: Hand over — validation failed
-        if: needs.implement.outputs.outcome == 'success' && steps.validate.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          ISSUE: ${{ inputs.issue }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          falconet pause \
-            --issue "$ISSUE" \
-            --label ready-for-human \
-            --branch "${PUSHED_BRANCH:-}" \
-            --body .falconet/validation-failure.txt \
-            --body-title "validation output" \
-            --run-url "$RUN_URL" \
-            --preamble "I prepared this change, but it did not validate. This one needs a person."
-
   # =========================================================================
   # contain — a request never disappears into a green run that produced nothing
   # =========================================================================
@@ -663,7 +594,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 1 }
 
-      - name: Install falconet, tofu and gitleaks
+      - name: Install falconet and gitleaks
         uses: zetlen/falconet@v0.4.0
 
       # Terminal state, or pause. Closed, already paused, or an open PR across

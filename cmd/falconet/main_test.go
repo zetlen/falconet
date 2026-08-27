@@ -61,7 +61,7 @@ func TestKnownIsTheTwoLists(t *testing.T) {
 
 // Usage names every listed verb and none of the unlisted ones.
 // dispatcher.test.sh holds the same thing across the process boundary for
-// prompt and plan-env; this holds it for the lists as a whole, so a name
+// prompt and scan; this holds it for the lists as a whole, so a name
 // added to unlisted cannot be pasted into the usage text by habit.
 func TestUsageListsTheVerbsAndNotTheUnlisted(t *testing.T) {
 	for _, v := range verbs {

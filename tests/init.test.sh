@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# init.test.sh — README "Install it in your repository" steps 2–8, done by
+# init.test.sh — README "Install it in your repository" steps 2–7, done by
 # the second setup verb: the local files committed and never pushed (#10),
 # the labels first and the secrets in sealed boxes (#11). Step 3's App by
 # manifest (#12) has a browser half, and init-app.test.sh drives that; every
@@ -19,8 +19,7 @@
 # the plaintext's absence from every log is the other.
 #
 # stdin is never a terminal here, so every prompt path is exercised through
-# flags and stdin: the API key is piped, the plan env is a file, the stacks
-# are flags.
+# flags and stdin: the API key is piped.
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -50,9 +49,9 @@ export PATH
 
 # --- fixtures -----------------------------------------------------------------
 
-# A qualifying repository with nothing installed: two stack directories with
-# a .tf in each, a docs/ directory without, one clean commit on main, and
-# none of the files init writes.
+# A repository with nothing installed: two directories with a .tf in each,
+# a docs/ directory without, one clean commit on main, and none of the files
+# init writes.
 new_checkout() { # name -> echoes path
   local base="$WORK/$1"
   mkdir -p "$base/repo/dns" "$base/repo/workspace" "$base/repo/docs"
@@ -75,7 +74,7 @@ script() { # [rule-json ...]
   printf '[%s]\n' "$rules" >"$FAKE_GITHUB/responses.json"
 }
 all_labels='{"method":"GET","path":"/repos/zetlen/wayfinders-infra/labels","body":[{"name":"infra-request"},{"name":"needs-info"},{"name":"ready-for-human"},{"name":"needs-plan-review"}]}'
-all_secrets='{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":4,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"},{"name":"FALCONET_PLAN_ENV"}]}}'
+all_secrets='{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":3,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"},{"name":"ANTHROPIC_API_KEY"}]}}'
 
 : >"$WORK/empty"
 printf 'sk-ant-PLAINTEXT-KEY-MARKER' >"$WORK/key"
@@ -131,7 +130,7 @@ reusable="zetlen/falconet/.github/workflows/falconet.yml"
 
 c="$(new_checkout fresh)"
 before="$(head_of "$c")"
-( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty" --plan dns --validate-only workspace
+( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty"
   printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$OUT" >"$WORK/out"; printf '%s' "$ERR" >"$WORK/err2" )
 RC="$(cat "$WORK/rc")"; OUT="$(cat "$WORK/out")"; ERR="$(cat "$WORK/err2")"
 
@@ -160,25 +159,17 @@ assert_contains "$(git -C "$c/repo" log -1 --format=%b)" "prompts/implement.md" 
 it "step 2: .gitignore holds the handoff directory and nothing else"
 assert_eq ".falconet/" "$(cat "$c/repo/.gitignore")" ".gitignore"
 
-it "step 7: --plan dns --validate-only workspace lands in the JSON exactly"
+it "step 6: the config names the prompt override and nothing else"
 assert_eq '{
-  "stacks": {
-    "plan": [
-      "dns"
-    ],
-    "validate_only": [
-      "workspace"
-    ]
-  },
   "prompts": {
     "implement": "prompts/implement.md"
   }
 }' "$(cat "$c/repo/.github/falconet.json")" "config"
 
-it "step 7: the prompt copy is the shipped prompt, byte for byte"
+it "step 6: the prompt copy is the shipped prompt, byte for byte"
 assert_eq "$(cat "$REPO_ROOT/prompts/implement.md")" "$(cat "$c/repo/prompts/implement.md")" "prompt"
 
-it "step 8: the workflow's uses: line carries the binary's version (dev builds pin main)"
+it "step 7: the workflow's uses: line carries the binary's version (dev builds pin main)"
 assert_eq "    uses: $reusable@$ref" "$(grep -E '^ *uses: ' "$c/repo/.github/workflows/infra-requests.yml")" "uses line"
 
 it "and has no falconet-ref input: post-cutover, the binary is the one coordinate"
@@ -190,8 +181,8 @@ readme_perms="$(awk '/<!-- caller-workflow-template -->/ { s = 1; next } s && /<
 wf_perms="$(awk '/^permissions:/ { p = 1; next } p && /^[^[:space:]]/ { p = 0 } p' "$c/repo/.github/workflows/infra-requests.yml")"
 assert_eq "$readme_perms" "$wf_perms" "permissions block"
 
-it "and the four secrets lines"
-assert_eq 4 "$(grep -cE '^      (app-id|app-private-key|anthropic-api-key|plan-env): \$\{\{ secrets\.' "$c/repo/.github/workflows/infra-requests.yml")" "secrets lines"
+it "and the three secrets lines"
+assert_eq 3 "$(grep -cE '^      (app-id|app-private-key|anthropic-api-key): \$\{\{ secrets\.' "$c/repo/.github/workflows/infra-requests.yml")" "secrets lines"
 
 it "and the concurrency block"
 assert_contains "$(cat "$c/repo/.github/workflows/infra-requests.yml")" 'group: falconet-${{ github.event.issue.number }}' "workflow"
@@ -199,35 +190,34 @@ assert_contains "$(cat "$c/repo/.github/workflows/infra-requests.yml")" 'group: 
 it "the report is in doctor's format: one line per step, status word, step number"
 assert_line "$OUT" "ok           1. the working tree is clean"
 assert_line "$OUT" "done         2. .falconet/ added to .gitignore"
-assert_line "$OUT" "done         7. .github/falconet.json written (plan: dns; validate_only: workspace)"
-assert_line "$OUT" "done         7. prompts.implement names prompts/implement.md, copied from the shipped prompt"
-assert_line "$OUT" "done         8. .github/workflows/infra-requests.yml written (uses $reusable@$ref)"
+assert_line "$OUT" "done         6. .github/falconet.json written (prompts.implement: prompts/implement.md)"
+assert_line "$OUT" "done         6. prompts.implement names prompts/implement.md, copied from the shipped prompt"
+assert_line "$OUT" "done         7. .github/workflows/infra-requests.yml written (uses $reusable@$ref)"
 assert_line "$OUT" 'done         committed "Install falconet" (4 files)'
 
 it "and every line is in the column, or the summary, or the Left-for-you block"
-assert_eq 0 "$(grep -Ev '^(ok|done|skipped|MISSING|cannot tell|note) {1,11}([1-9]\. |[a-z])|^             [^ ]|^init: |^$|^Left for you:$|^  [0-9]+\. ' <<<"$OUT" | grep -c .)" \
+assert_eq 0 "$(grep -Ev '^(ok|done|skipped|MISSING|cannot tell|note) {1,11}([1-8]\. |[a-z])|^             [^ ]|^init: |^$|^Left for you:$|^  [0-9]+\. ' <<<"$OUT" | grep -c .)" \
   "lines outside the format"
 
 it "the remote checks say cannot tell once, and every remote step is skipped"
 assert_eq 1 "$(grep -c ' (no FALCONET_SETUP_TOKEN)$' <<<"$(grep '^cannot tell' <<<"$OUT")")" "cannot-tell lines"
-assert_line "$OUT" "skipped      6. the four labels (no FALCONET_SETUP_TOKEN)"
+assert_line "$OUT" "skipped      5. the four labels (no FALCONET_SETUP_TOKEN)"
 assert_line "$OUT" "skipped      4. secret ANTHROPIC_API_KEY (no FALCONET_SETUP_TOKEN)"
-assert_line "$OUT" "skipped      5. secret FALCONET_PLAN_ENV (no FALCONET_SETUP_TOKEN)"
 assert_line "$OUT" "skipped      3. secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (no FALCONET_SETUP_TOKEN)"
 
 it "and the summary counts them"
-assert_line "$OUT" "init: 1 ok, 5 done, 4 skipped, 0 missing, 1 cannot tell"
+assert_line "$OUT" "init: 1 ok, 5 done, 3 skipped, 0 missing, 1 cannot tell"
 
 it "Left for you: the push first, never run"
 assert_eq "  1. git push origin main" "$(grep -A1 '^Left for you:' <<<"$OUT" | tail -1)" "first item"
 
-it "then the App, the key, the plan env, the labels, the prompt's standing facts, the canary, and doctor — in that order"
-assert_eq "3 4 5 6 7 9 then" "$(sed -n '/^Left for you:/,$p' <<<"$OUT" | grep -E '^  [2-9]\. ' | sed -E 's/^  [0-9]+\. step ([0-9]) .*/\1/; s/^  [0-9]+\. then: .*/then/' | tr '\n' ' ' | sed 's/ $//')" "item order"
-assert_contains "$OUT" "step 7 — edit the standing-facts block in prompts/implement.md" "stdout"
-assert_contains "$OUT" "step 9 — file a canary issue" "stdout"
+it "then the App, the key, the labels, the prompt's standing facts, the canary, and doctor — in that order"
+assert_eq "3 4 5 6 8 then" "$(sed -n '/^Left for you:/,$p' <<<"$OUT" | grep -E '^  [2-9]\. ' | sed -E 's/^  [0-9]+\. step ([0-9]) .*/\1/; s/^  [0-9]+\. then: .*/then/' | tr '\n' ' ' | sed 's/ $//')" "item order"
+assert_contains "$OUT" "step 6 — edit the standing-facts block in prompts/implement.md" "stdout"
+assert_contains "$OUT" "step 8 — file a canary issue" "stdout"
 assert_contains "$OUT" "step 3 — the GitHub App" "stdout"
 assert_contains "$OUT" "falconet init --app-id <App ID> --app-key <the .pem>" "stdout"
-assert_eq "  8. then: falconet doctor" "$(tail -1 <<<"$OUT")" "last line"
+assert_eq "  7. then: falconet doctor" "$(tail -1 <<<"$OUT")" "last line"
 
 it "the permission table is on stderr, once, with init's column"
 assert_eq 1 "$(grep -c 'no FALCONET_SETUP_TOKEN in the environment' <<<"$ERR")" "hint count"
@@ -241,17 +231,13 @@ assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 script "$all_labels" "$all_secrets"
 DOUT="$( cd "$c/repo" && "$FALCONET" doctor 2>/dev/null )"; DRC=$?
 
-it "doctor afterwards reports steps 2, 7 and 8 ok"
+it "doctor afterwards reports steps 2, 6 and 7 ok"
 assert_line "$DOUT" "ok           2. .falconet/ is gitignored"
-assert_line "$DOUT" "ok           7. .github/falconet.json parses"
-assert_line "$DOUT" "ok           7. prompts.implement names prompts/implement.md, which exists"
-assert_line "$DOUT" "ok           8. .github/workflows/infra-requests.yml exists"
-assert_line "$DOUT" "ok           8. it uses $reusable@$ref"
-assert_line "$DOUT" "ok           8. permissions grants contents: write, issues: write, pull-requests: write"
-
-it "and the stacks init sorted"
-assert_line "$DOUT" "ok           1. stack dns (.stacks.plan) is a directory with .tf files"
-assert_line "$DOUT" "ok           1. stack workspace (.stacks.validate_only) is a directory with .tf files"
+assert_line "$DOUT" "ok           6. .github/falconet.json parses"
+assert_line "$DOUT" "ok           6. prompts.implement names prompts/implement.md, which exists"
+assert_line "$DOUT" "ok           7. .github/workflows/infra-requests.yml exists"
+assert_line "$DOUT" "ok           7. it uses $reusable@$ref"
+assert_line "$DOUT" "ok           7. permissions grants contents: write, issues: write, pull-requests: write"
 
 it "and, with the labels and secrets scripted as present, every check is ok"
 assert_eq 0 "$DRC" "doctor's exit code"
@@ -260,7 +246,7 @@ assert_eq 0 "$DRC" "doctor's exit code"
 
 script
 after="$(head_of "$c")"
-( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty" --plan dns --validate-only workspace
+( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty"
   printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$OUT" >"$WORK/out" )
 RC="$(cat "$WORK/rc")"; OUT="$(cat "$WORK/out")"
 
@@ -273,9 +259,9 @@ assert_eq "" "$(git -C "$c/repo" status --porcelain)" "status"
 
 it "and every local step reports ok, none done"
 assert_line "$OUT" "ok           2. .falconet/ is gitignored"
-assert_line "$OUT" "ok           7. .github/falconet.json parses"
-assert_line "$OUT" "ok           7. prompts.implement names prompts/implement.md, which exists"
-assert_line "$OUT" "ok           8. .github/workflows/infra-requests.yml exists"
+assert_line "$OUT" "ok           6. .github/falconet.json parses"
+assert_line "$OUT" "ok           6. prompts.implement names prompts/implement.md, which exists"
+assert_line "$OUT" "ok           7. .github/workflows/infra-requests.yml exists"
 assert_line "$OUT" "ok           nothing to commit: every file exists"
 assert_no_line_matching "$OUT" '^done' "stdout"
 
@@ -290,7 +276,7 @@ assert_not_contains "$OUT" "git push" "stdout"
 c="$(new_checkout dirty)"
 printf 'locals {\n  a = 99\n}\n' >"$c/repo/dns/main.tf"
 before="$(head_of "$c")"
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "a dirty tree is refused, exit 1, before anything else"
 assert_eq 1 "$RC" "exit code"
@@ -309,7 +295,7 @@ assert_eq "$before" "$(head_of "$c")" "HEAD"
 
 git -C "$c/repo" checkout -q -- dns/main.tf
 printf 'stray\n' >"$c/repo/stray.txt"
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "an untracked file counts as dirt, as it does for prepare"
 assert_eq 1 "$RC" "exit code"
@@ -319,7 +305,7 @@ assert_contains "$ERR" "?? stray.txt" "stderr"
 
 c="$(new_checkout full)"
 script
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "with a token, a fresh repository is exit 0"
 assert_eq 0 "$RC" "exit code"
@@ -346,10 +332,10 @@ needs-plan-review" "$(jq -r 'select(.method == "POST") | .body.name' "$FAKE_GITH
 assert_eq 4 "$(jq -r 'select(.method == "POST") | .body.color' "$FAKE_GITHUB/requests.jsonl" | grep -cE '^[0-9a-f]{6}$')" "colours"
 
 it "and the report says so"
-assert_line "$OUT" "done         6. label infra-request created"
-assert_line "$OUT" "done         6. label needs-info created"
-assert_line "$OUT" "done         6. label ready-for-human created"
-assert_line "$OUT" "done         6. label needs-plan-review created"
+assert_line "$OUT" "done         5. label infra-request created"
+assert_line "$OUT" "done         5. label needs-info created"
+assert_line "$OUT" "done         5. label ready-for-human created"
+assert_line "$OUT" "done         5. label needs-plan-review created"
 
 it "the public key is read, then ANTHROPIC_API_KEY is PUT with the key's id"
 assert_eq "568250167242549743" "$(jq -r 'select(.method == "PUT") | .body.key_id' "$FAKE_GITHUB/requests.jsonl")" "key_id"
@@ -372,13 +358,12 @@ assert_line "$OUT" "ok           1. the repository has issues enabled"
 assert_line "$OUT" "ok           1. allowed_actions is all"
 assert_line "$OUT" "note         1. default_workflow_permissions is read (fine: the caller workflow grants what it needs)"
 
-it "the plan env without --plan-env-file is skipped, and the App under --no-app"
-assert_line "$OUT" "skipped      5. secret FALCONET_PLAN_ENV (no --plan-env-file)"
+it "the App is skipped under --no-app"
 assert_line "$OUT" "skipped      3. secrets FALCONET_APP_ID and FALCONET_APP_PRIVATE_KEY (--no-app)"
 
 it "and the local files and the commit still happen"
 assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
-assert_line "$OUT" "init: 3 ok, 10 done, 2 skipped, 0 missing, 0 cannot tell"
+assert_line "$OUT" "init: 3 ok, 10 done, 1 skipped, 0 missing, 0 cannot tell"
 
 it "stderr is silent on a clean run with a token"
 assert_eq "" "$ERR" "stderr"
@@ -390,22 +375,22 @@ assert_eq "Bearer test-token" "$(jq -r '.headers.authorization' "$FAKE_GITHUB/re
 
 c="$(new_checkout labels)"
 script "$all_labels"
-i "$c" "$WORK/empty" --plan dns --validate-only workspace
+i "$c" "$WORK/empty"
 
 it "with all four labels existing, no POST"
 assert_eq 0 "$(grep -c '^POST' "$FAKE_GITHUB/requests.log")" "POSTs"
-assert_line "$OUT" "ok           6. label infra-request exists"
-assert_line "$OUT" "ok           6. label needs-plan-review exists"
+assert_line "$OUT" "ok           5. label infra-request exists"
+assert_line "$OUT" "ok           5. label needs-plan-review exists"
 
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/labels","body":[{"name":"infra-request"},{"name":"ready-for-human"},{"name":"needs-plan-review"}]}'
 ( cd "$c/repo" && git reset -q --hard HEAD~1 )
-i "$c" "$WORK/empty" --plan dns --validate-only workspace
+i "$c" "$WORK/empty"
 
 it "with three existing, one POST, naming the fourth"
 assert_eq 1 "$(grep -c '^POST' "$FAKE_GITHUB/requests.log")" "POSTs"
 assert_eq "needs-info" "$(jq -r 'select(.method == "POST") | .body.name' "$FAKE_GITHUB/requests.jsonl")" "created"
-assert_line "$OUT" "done         6. label needs-info created"
-assert_line "$OUT" "ok           6. label infra-request exists"
+assert_line "$OUT" "done         5. label needs-info created"
+assert_line "$OUT" "ok           5. label infra-request exists"
 
 it "an empty stdin is a skipped key, with step 4 left for you"
 assert_line "$OUT" "skipped      4. secret ANTHROPIC_API_KEY (nothing on stdin)"
@@ -415,75 +400,17 @@ assert_eq 0 "$(grep -c '^PUT' "$FAKE_GITHUB/requests.log")" "PUTs"
 it "a configured label name is what is created"
 ( cd "$c/repo" && git reset -q --hard HEAD~1 )
 mkdir -p "$c/repo/.github"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace"]},"labels":{"needs_info":"more-info-please"}}\n' >"$c/repo/.github/falconet.json"
+printf '{"labels":{"needs_info":"more-info-please"}}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/labels","body":[{"name":"infra-request"},{"name":"ready-for-human"},{"name":"needs-plan-review"}]}'
 i "$c" "$WORK/empty"
 assert_eq "more-info-please" "$(jq -r 'select(.method == "POST") | .body.name' "$FAKE_GITHUB/requests.jsonl")" "created"
 
-# --- the plan env ---------------------------------------------------------------------
-
-c="$(new_checkout planenv)"
-printf '{"AWS_ACCESS_KEY_ID": "AKIA-PLAINTEXT-ENV-MARKER", "TF_VAR_zone": "example.com"}\n' >"$c/planenv.json"
-script
-i "$c" "$WORK/empty" --plan dns --validate-only workspace --plan-env-file "$c/planenv.json"
-
-it "--plan-env-file with a valid object is PUT as FALCONET_PLAN_ENV"
-assert_eq 0 "$RC" "exit code"
-assert_contains "$(calls)" "PUT /repos/zetlen/wayfinders-infra/actions/secrets/FALCONET_PLAN_ENV" "API calls"
-assert_line "$OUT" "done         5. secret FALCONET_PLAN_ENV stored (sealed to key 568250167242549743)"
-
-it "sealed over the file's bytes exactly"
-assert_eq "$(( 48 + $(wc -c <"$c/planenv.json") ))" "$(sealed_len FALCONET_PLAN_ENV)" "sealed length"
-
-it "and the plaintext appears nowhere"
-assert_not_contains "$(cat "$FAKE_GITHUB/requests.log" "$FAKE_GITHUB/requests.jsonl")" "PLAINTEXT-ENV-MARKER" "requests"
-assert_not_contains "$OUT$ERR" "PLAINTEXT-ENV-MARKER" "stdout+stderr"
-
-for bad in '["AWS_KEY=PLAINTEXT-ENV-MARKER"]' '{"AWS_KEY": 12345, "X": "PLAINTEXT-ENV-MARKER"}' '{"bad-key": "PLAINTEXT-ENV-MARKER"}' '{"A": {"B": "PLAINTEXT-ENV-MARKER"}}' '{"A": "PLAINTEXT-ENV-MARKER" oops}'; do
-  c="$(new_checkout "bad-$(printf '%s' "$bad" | cksum | awk '{ print $1 }')")"
-  printf '%s\n' "$bad" >"$c/planenv.json"
-  before="$(head_of "$c")"
-  i "$c" "$WORK/key" --plan dns --validate-only workspace --plan-env-file "$c/planenv.json"
-
-  it "an invalid plan env ($bad) is exit 1"
-  assert_eq 1 "$RC" "exit code"
-
-  it "naming only the shape on stderr, with the plaintext absent from stdout, stderr and requests.log"
-  assert_contains "$ERR" "init: validation: FALCONET_PLAN_ENV" "stderr"
-  assert_not_contains "$OUT$ERR$(cat "$FAKE_GITHUB/requests.log" "$FAKE_GITHUB/requests.jsonl")" "PLAINTEXT-ENV-MARKER" "everything"
-
-  it "and refused before any write: no call, no file, no commit"
-  assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
-  assert_file_missing "$c/repo/.gitignore"
-  assert_eq "$before" "$(head_of "$c")" "HEAD"
-done
-
-it "the error names the key for a bad key, and the shape for a bad value"
-c="$(new_checkout badkey)"; printf '{"bad-key": "x"}\n' >"$c/planenv.json"
-i "$c" "$WORK/key" --plan-env-file "$c/planenv.json" --plan dns --validate-only workspace
-assert_contains "$ERR" 'key "bad-key" is not an environment-variable name' "stderr"
-printf '{"A": 1}\n' >"$c/planenv.json"
-i "$c" "$WORK/key" --plan-env-file "$c/planenv.json" --plan dns --validate-only workspace
-assert_contains "$ERR" 'value of A is a number, and every value must be a string' "stderr"
-
-it "an empty object is valid: no credentials is a statement"
-printf '{}\n' >"$c/planenv.json"
-i "$c" "$WORK/key" --plan-env-file "$c/planenv.json" --plan dns --validate-only workspace
-assert_eq 0 "$RC" "exit code"
-assert_contains "$(calls)" "PUT /repos/zetlen/wayfinders-infra/actions/secrets/FALCONET_PLAN_ENV" "API calls"
-
-it "with no planned stacks and no file, FALCONET_PLAN_ENV is a note, as doctor says"
-c="$(new_checkout noplan)"
-i "$c" "$WORK/empty" --validate-only dns,workspace
-assert_line "$OUT" "note         5. secret FALCONET_PLAN_ENV is not set (no planned stacks, so no planning environment is needed)"
-assert_not_contains "$OUT" "step 5 —" "stdout"
-
 # --- an existing secret ----------------------------------------------------------------
 
 c="$(new_checkout existing)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":1,"secrets":[{"name":"ANTHROPIC_API_KEY"}]}}'
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "an existing secret is not replaced, and no PUT is made"
 assert_line "$OUT" "ok           4. secret ANTHROPIC_API_KEY exists (not replaced; --replace-secrets would)"
@@ -491,7 +418,7 @@ assert_eq 0 "$(grep -c '^PUT' "$FAKE_GITHUB/requests.log")" "PUTs"
 assert_eq 0 "$(grep -c 'public-key' "$FAKE_GITHUB/requests.log")" "public-key reads: nothing to seal, nothing fetched"
 
 ( cd "$c/repo" && git reset -q --hard HEAD~1 )
-i "$c" "$WORK/key" --plan dns --validate-only workspace --replace-secrets
+i "$c" "$WORK/key" --replace-secrets
 
 it "--replace-secrets seals a new value over it"
 assert_line "$OUT" "done         4. secret ANTHROPIC_API_KEY replaced (sealed to key 568250167242549743)"
@@ -502,14 +429,14 @@ assert_contains "$(calls)" "PUT /repos/zetlen/wayfinders-infra/actions/secrets/A
 c="$(new_checkout refused)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets/public-key","status":403,"body":{"message":"Resource not accessible by personal access token"}}'
 before="$(head_of "$c")"
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "a 403 on the public key is exit 1"
 assert_eq 1 "$RC" "exit code"
 
 it "after the four label POSTs"
 assert_eq 4 "$(grep -c '^POST /repos/zetlen/wayfinders-infra/labels' "$FAKE_GITHUB/requests.log")" "label POSTs"
-assert_line "$OUT" "done         6. label needs-plan-review created"
+assert_line "$OUT" "done         5. label needs-plan-review created"
 
 it "before any PUT"
 assert_eq 0 "$(grep -c '^PUT' "$FAKE_GITHUB/requests.log")" "PUTs"
@@ -525,7 +452,7 @@ assert_contains "$ERR" "403" "stderr"
 assert_contains "$ERR" "the token needs Secrets: write" "stderr"
 
 script '{"method":"PUT","path":"/repos/zetlen/wayfinders-infra/actions/secrets/ANTHROPIC_API_KEY","status":403,"body":{"message":"Resource not accessible by personal access token"}}'
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "a 403 on the PUT is the same refusal"
 assert_eq 1 "$RC" "exit code"
@@ -534,7 +461,7 @@ assert_contains "$ERR" "the token needs Secrets: write" "stderr"
 assert_file_missing "$c/repo/.gitignore"
 
 script '{"method":"POST","path":"/repos/zetlen/wayfinders-infra/labels","status":403,"body":{"message":"Resource not accessible by personal access token"}}'
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "a 403 on a label names Issues: write, and stops before anything harder to undo"
 assert_eq 1 "$RC" "exit code"
@@ -545,7 +472,7 @@ assert_eq 0 "$(grep -c '^PUT\|public-key' "$FAKE_GITHUB/requests.log")" "secret 
 assert_file_missing "$c/repo/.gitignore"
 
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra","status":404,"body":{"message":"Not Found"}}'
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "a 404 on the repository is not found, or no access: exit 1 before any write"
 assert_eq 1 "$RC" "exit code"
@@ -555,7 +482,7 @@ assert_file_missing "$c/repo/.gitignore"
 
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra","body":{"name":"wayfinders-infra","full_name":"zetlen/wayfinders-infra","owner":{"login":"zetlen"},"private":true,"visibility":"private","has_issues":false,"default_branch":"main"}}' \
   '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/permissions","body":{"enabled":true,"allowed_actions":"local_only"}}'
-i "$c" "$WORK/key" --plan dns --validate-only workspace
+i "$c" "$WORK/key"
 
 it "issues disabled and a local_only policy are MISSING, reported and left for you, and do not stop the run"
 assert_eq 0 "$RC" "exit code"
@@ -565,7 +492,7 @@ assert_contains "$OUT" "step 1 — the repository has issues disabled: enable th
 assert_contains "$OUT" "step 1 — allowed_actions is local_only" "stdout"
 assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
 
-( export GITHUB_API_URL=http://127.0.0.1:1; i "$c" "$WORK/key" --plan dns --validate-only workspace; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$ERR" >"$WORK/err2" )
+( export GITHUB_API_URL=http://127.0.0.1:1; i "$c" "$WORK/key"; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$ERR" >"$WORK/err2" )
 
 it "an unreachable GITHUB_API_URL with a token is exit 1, not a crash and not a write"
 assert_eq 1 "$(cat "$WORK/rc")" "exit code"
@@ -576,7 +503,7 @@ assert_contains "$(cat "$WORK/err2")" "did not answer" "stderr"
 c="$(new_checkout app)"
 printf -- '-----BEGIN RSA PRIVATE KEY-----\nbm90IHJlYWxseSBhIGtleSBQRU0tUExBSU5URVhULU1BUktFUg==\n-----END RSA PRIVATE KEY-----\n' >"$c/app.pem"
 script
-i "$c" "$WORK/key" --plan dns --validate-only workspace --app-id 123 --app-key "$c/app.pem"
+i "$c" "$WORK/key" --app-id 123 --app-key "$c/app.pem"
 
 it "--app-id N --app-key FILE seals two more secrets"
 assert_eq 0 "$RC" "exit code"
@@ -610,7 +537,7 @@ assert_contains "$ERR" "is not a PEM private key" "stderr"
 assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
 script "$all_secrets"
-i "$c" "$WORK/empty" --plan dns --validate-only workspace
+i "$c" "$WORK/empty"
 
 it "with the App's secrets existing and no flags, both are ok"
 assert_line "$OUT" "ok           3. secret FALCONET_APP_ID exists (not replaced; --replace-secrets would)"
@@ -621,7 +548,7 @@ assert_eq 0 "$(grep -c '^PUT' "$FAKE_GITHUB/requests.log")" "PUTs"
 
 c="$(new_checkout nocommit)"
 before="$(head_of "$c")"
-( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty" --plan dns --validate-only workspace --no-commit; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$OUT" >"$WORK/out" )
+( unset FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty" --no-commit; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$OUT" >"$WORK/out" )
 RC="$(cat "$WORK/rc")"; OUT="$(cat "$WORK/out")"
 
 it "--no-commit leaves the four files staged and makes no commit"
@@ -636,102 +563,42 @@ it "and says so"
 assert_line "$OUT" "skipped      the commit (--no-commit): 4 files staged"
 assert_contains "$OUT" "git commit   (the files are staged; --no-commit left the commit to you), then git push origin main" "stdout"
 
-# --- a repository that does not qualify, and the stacks --------------------------------
-
-c="$(new_checkout notf)"
-rm "$c/repo/dns/main.tf" "$c/repo/workspace/main.tf"
-printf 'x\n' >"$c/repo/main.tf"
-git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "no stacks"
-before="$(head_of "$c")"
-i "$c" "$WORK/empty"
-
-it "a repository with no .tf in any subdirectory does not qualify: exit 1"
-assert_eq 1 "$RC" "exit code"
-assert_contains "$ERR" "does not qualify" "stderr"
-assert_contains "$ERR" "a .tf at the root is not a stack" "stderr"
-
-it "and nothing was written or called"
-assert_eq "$before" "$(head_of "$c")" "HEAD"
-assert_eq "" "$(git -C "$c/repo" status --porcelain)" "status"
-assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
-
-c="$(new_checkout stacks)"
-i "$c" "$WORK/empty" --plan nosuch --validate-only dns,workspace
-
-it "--plan naming a stack that was not discovered is usage, naming it and what was found"
-assert_eq 2 "$RC" "exit code"
-assert_contains "$ERR" "--plan names nosuch, which is not a directory with .tf files in it (found: dns, workspace)" "stderr"
-
-i "$c" "$WORK/empty" --plan dns --validate-only dns,workspace
-
-it "a stack in both lists is usage"
-assert_eq 2 "$RC" "exit code"
-
-mkdir -p "$c/repo/envs/prod" "$c/repo/dns/.terraform/modules/m" "$c/repo/node_modules/x"
-printf 'x\n' >"$c/repo/envs/prod/main.tf"; printf 'x\n' >"$c/repo/dns/.terraform/modules/m/main.tf"; printf 'x\n' >"$c/repo/node_modules/x/main.tf"
-git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "more"
-i "$c" "$WORK/empty" --plan dns,envs/prod --validate-only workspace/
-
-it "discovery is recursive, skips .terraform and node_modules, and a trailing slash is fine"
-assert_eq 0 "$RC" "exit code"
-assert_eq '    "plan": [
-      "dns",
-      "envs/prod"
-    ],' "$(grep -A3 '"plan"' "$c/repo/.github/falconet.json")" "plan list"
-
-c="$(new_checkout unsorted)"
-i "$c" "$WORK/empty" --plan dns
-
-it "a discovered stack named in neither flag goes to validate_only, the README's rule, and says so"
-assert_eq 0 "$RC" "exit code"
-assert_line "$OUT" "note         7. stack workspace is named in neither --plan nor --validate-only: validate_only, the README's rule for every other directory with .tf in it"
-assert_eq '    "validate_only": [
-      "workspace"
-    ]' "$(grep -A2 '"validate_only"' "$c/repo/.github/falconet.json")" "validate_only list"
-
 # --- an existing config is kept, never rewritten -----------------------------------------
 
 c="$(new_checkout kept)"
 mkdir -p "$c/repo/.github"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace","nope"]},"prompts":{"implement":"prompts/mine.md"}}\n' >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":"nope","prompts":{"implement":"prompts/mine.md"}}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
 i "$c" "$WORK/empty"
 
 it "an existing config is kept, and checked as doctor checks it"
 assert_eq 0 "$RC" "exit code"
-assert_line "$OUT" "ok           7. .github/falconet.json parses"
-assert_line "$OUT" "MISSING      1. stack nope (.stacks.validate_only) is not a directory"
-assert_contains "$OUT" "step 1 — stack nope (.stacks.validate_only) is not a directory: set .stacks.validate_only in .github/falconet.json" "stdout"
-assert_eq '{"stacks":{"plan":["dns"],"validate_only":["workspace","nope"]},"prompts":{"implement":"prompts/mine.md"}}' "$(cat "$c/repo/.github/falconet.json")" "config unchanged"
+assert_line "$OUT" "ok           6. .github/falconet.json parses"
+assert_line "$OUT" "done         2. nope/ added to .gitignore"
+assert_eq '{"handoff_dir":"nope","prompts":{"implement":"prompts/mine.md"}}' "$(cat "$c/repo/.github/falconet.json")" "config unchanged"
 
 it "and a prompts.implement naming a missing file gets the shipped prompt copied there"
-assert_line "$OUT" "done         7. prompts.implement names prompts/mine.md, copied from the shipped prompt"
+assert_line "$OUT" "done         6. prompts.implement names prompts/mine.md, copied from the shipped prompt"
 assert_eq "$(cat "$REPO_ROOT/prompts/implement.md")" "$(cat "$c/repo/prompts/mine.md")" "prompt copy"
-assert_contains "$OUT" "step 7 — edit the standing-facts block in prompts/mine.md" "stdout"
+assert_contains "$OUT" "step 6 — edit the standing-facts block in prompts/mine.md" "stdout"
 assert_eq ".github/workflows/infra-requests.yml
 .gitignore
 prompts/mine.md" "$(committed_files "$c")" "committed paths"
 
-it "--plan and --validate-only are not applied over an existing config"
-( cd "$c/repo" && git reset -q --hard HEAD~1 )
-i "$c" "$WORK/empty" --plan workspace --validate-only dns
-assert_eq 0 "$RC" "exit code"
-assert_eq '{"stacks":{"plan":["dns"],"validate_only":["workspace","nope"]},"prompts":{"implement":"prompts/mine.md"}}' "$(cat "$c/repo/.github/falconet.json")" "config unchanged"
-
 c="$(new_checkout unset)"
 mkdir -p "$c/repo/.github"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"labels":{"pr":"plan-please"}}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
 i "$c" "$WORK/empty"
 
 it "a config that does not set prompts.implement is a note, and the shipped prompt's standing facts are left for you"
-assert_line "$OUT" "note         7. prompts.implement is not set, so the shipped prompt is used, and its standing facts are the origin's"
-assert_contains "$OUT" "step 7 — prompts.implement is not set" "stdout"
+assert_line "$OUT" "note         6. prompts.implement is not set, so the shipped prompt is used, and its standing facts are the origin's"
+assert_contains "$OUT" "step 6 — prompts.implement is not set" "stdout"
 assert_file_missing "$c/repo/prompts/implement.md"
 
 c="$(new_checkout badcfg)"
 mkdir -p "$c/repo/.github"
-printf '{"stacks": {"plan": ["dns"],}\n' >"$c/repo/.github/falconet.json"
+printf '{"prompts": {"implement": "x",}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "bad config"
 i "$c" "$WORK/empty"
 
@@ -742,12 +609,12 @@ assert_contains "$ERR" "init never rewrites a config" "stderr"
 assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
 
 c="$(new_checkout alt)"
-printf '{"stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/alt.json"
+printf '{"labels":{"pr":"plan-please"}}\n' >"$c/alt.json"
 i "$c" "$WORK/empty" --config ../alt.json
 
-it "--config names the config, relative to the repository root as every verb's is, and step 7 writes nothing"
+it "--config names the config, relative to the repository root as every verb's is, and step 6 writes nothing"
 assert_eq 0 "$RC" "exit code"
-assert_line "$OUT" "ok           7. ../alt.json parses"
+assert_line "$OUT" "ok           6. ../alt.json parses"
 assert_file_missing "$c/repo/.github/falconet.json"
 assert_eq ".github/workflows/infra-requests.yml
 .gitignore" "$(committed_files "$c")" "committed paths"
@@ -757,7 +624,7 @@ assert_eq ".github/workflows/infra-requests.yml
 OUT="$( cd "$c/repo/dns" && "$FALCONET" init --config ../alt.json <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 it "and from a subdirectory the same relative --config names the same file"
 assert_eq 0 "$RC" "exit code"
-assert_line "$OUT" "ok           7. ../alt.json parses"
+assert_line "$OUT" "ok           6. ../alt.json parses"
 
 # --- a handoff_dir outside the tree ---------------------------------------------------------
 #
@@ -768,7 +635,7 @@ assert_line "$OUT" "ok           7. ../alt.json parses"
 
 c="$(new_checkout outside)"
 mkdir -p "$c/repo/.github"
-printf '{"handoff_dir":"/tmp/falconet-elsewhere-init","stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":"/tmp/falconet-elsewhere-init"}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
 i "$c" "$WORK/empty"
 
@@ -777,7 +644,7 @@ assert_eq 0 "$RC" "exit code"
 assert_line "$OUT" "note         2. /tmp/falconet-elsewhere-init is outside the repository, so nothing needs ignoring"
 assert_eq ".github/workflows/infra-requests.yml" "$(committed_files "$c")" "committed paths"
 
-# --- existing files: step 2 and step 8 ------------------------------------------------------
+# --- existing files: step 2 and step 7 ------------------------------------------------------
 
 c="$(new_checkout partial)"
 printf 'node_modules/' >"$c/repo/.gitignore"
@@ -785,22 +652,22 @@ mkdir -p "$c/repo/.github/workflows"
 sed -e 's/^  contents: write$/  contents: read/' "$WORK/fresh/repo/.github/workflows/infra-requests.yml" >"$c/repo/.github/workflows/infra-requests.yml"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "partial"
 cp "$c/repo/.github/workflows/infra-requests.yml" "$WORK/partial.yml"
-i "$c" "$WORK/empty" --plan dns --validate-only workspace
+i "$c" "$WORK/empty"
 
 it "a .gitignore without a trailing newline gets the entry on its own line"
 assert_eq "node_modules/
 .falconet/" "$(cat "$c/repo/.gitignore")" ".gitignore"
 
 it "an existing workflow is kept and checked as doctor checks it: contents: read is MISSING, left for you"
-assert_line "$OUT" "ok           8. .github/workflows/infra-requests.yml exists"
-assert_line "$OUT" "MISSING      8. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write"
-assert_contains "$OUT" "step 8 — permissions grants contents: read" "stdout"
+assert_line "$OUT" "ok           7. .github/workflows/infra-requests.yml exists"
+assert_line "$OUT" "MISSING      7. permissions grants contents: read, and falconet's widest job declares contents: write, issues: write, pull-requests: write"
+assert_contains "$OUT" "step 7 — permissions grants contents: read" "stdout"
 assert_eq "$(cat "$WORK/partial.yml")" "$(cat "$c/repo/.github/workflows/infra-requests.yml")" "file untouched"
 assert_eq 0 "$RC" "exit code: a MISSING init cannot fix is not a failure"
 
 c="$(new_checkout excluded)"
 printf '.falconet/\n' >>"$c/repo/.git/info/exclude"
-i "$c" "$WORK/empty" --plan dns --validate-only workspace
+i "$c" "$WORK/empty"
 
 it "a handoff directory ignored by .git/info/exclude is ok: git check-ignore is the check, as doctor's"
 assert_line "$OUT" "ok           2. .falconet/ is gitignored"
@@ -808,7 +675,7 @@ assert_file_missing "$c/repo/.gitignore"
 
 c="$(new_checkout handoff)"
 mkdir -p "$c/repo/.github"
-printf '{"handoff_dir":"scratch","stacks":{"plan":["dns"],"validate_only":["workspace"]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":"scratch"}\n' >"$c/repo/.github/falconet.json"
 git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "config"
 i "$c" "$WORK/empty"
 
@@ -819,7 +686,7 @@ assert_eq "scratch/" "$(cat "$c/repo/.gitignore")" ".gitignore"
 # --- from a subdirectory, and which repository -------------------------------------------------
 
 c="$(new_checkout subdir)"
-OUT="$( cd "$c/repo/dns" && "$FALCONET" init --plan dns --validate-only workspace <"$WORK/empty" 2>/dev/null )"; RC=$?
+OUT="$( cd "$c/repo/dns" && "$FALCONET" init <"$WORK/empty" 2>/dev/null )"; RC=$?
 
 it "from a subdirectory the files land at the root: the verb runs from there"
 assert_eq 0 "$RC" "exit code"
@@ -828,7 +695,7 @@ assert_file_missing "$c/repo/dns/.gitignore"
 
 c="$(new_checkout which)"
 script
-i "$c" "$WORK/empty" --repo other/place --plan dns --validate-only workspace
+i "$c" "$WORK/empty" --repo other/place
 
 it "--repo beats GITHUB_REPOSITORY"
 assert_contains "$(calls)" "POST /repos/other/place/labels" "API calls"
@@ -836,20 +703,20 @@ assert_not_contains "$(calls)" "wayfinders-infra" "API calls"
 
 c="$(new_checkout remote)"
 git -C "$c/repo" remote add origin https://github.com/someone/elsewhere.git
-( unset GITHUB_REPOSITORY; i "$c" "$WORK/empty" --plan dns --validate-only workspace; cp "$FAKE_GITHUB/requests.log" "$WORK/remote.log" )
+( unset GITHUB_REPOSITORY; i "$c" "$WORK/empty"; cp "$FAKE_GITHUB/requests.log" "$WORK/remote.log" )
 
 it "with no GITHUB_REPOSITORY the origin remote is the repository, as doctor reads it"
 assert_contains "$(awk '{ print $1, $2 }' "$WORK/remote.log")" "POST /repos/someone/elsewhere/labels" "API calls"
 
 c="$(new_checkout noremote)"
-( unset GITHUB_REPOSITORY; i "$c" "$WORK/empty" --plan dns --validate-only workspace; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$ERR" >"$WORK/err2" )
+( unset GITHUB_REPOSITORY; i "$c" "$WORK/empty"; printf '%s\n' "$RC" >"$WORK/rc"; printf '%s' "$ERR" >"$WORK/err2" )
 
 it "with a token and no way to name the repository, exit 1 before any write"
 assert_eq 1 "$(cat "$WORK/rc")" "exit code"
 assert_contains "$(cat "$WORK/err2")" "set GITHUB_REPOSITORY=owner/name" "stderr"
 assert_file_missing "$c/repo/.gitignore"
 
-( unset GITHUB_REPOSITORY FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty" --plan dns --validate-only workspace; printf '%s\n' "$RC" >"$WORK/rc" )
+( unset GITHUB_REPOSITORY FALCONET_SETUP_TOKEN; i "$c" "$WORK/empty"; printf '%s\n' "$RC" >"$WORK/rc" )
 
 it "but without a token the local steps do not need to know which repository"
 assert_eq 0 "$(cat "$WORK/rc")" "exit code"
@@ -857,14 +724,14 @@ assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
 
 it "GITHUB_TOKEN and GH_TOKEN are not fallbacks"
 c="$(new_checkout nofallback)"
-( unset FALCONET_SETUP_TOKEN; export GITHUB_TOKEN=actions-token GH_TOKEN=gh-token; i "$c" "$WORK/empty" --plan dns --validate-only workspace; printf '%s' "$OUT" >"$WORK/out" )
+( unset FALCONET_SETUP_TOKEN; export GITHUB_TOKEN=actions-token GH_TOKEN=gh-token; i "$c" "$WORK/empty"; printf '%s' "$OUT" >"$WORK/out" )
 assert_eq "" "$(cat "$FAKE_GITHUB/requests.log")" "API calls"
-assert_contains "$(cat "$WORK/out")" "skipped      6. the four labels (no FALCONET_SETUP_TOKEN)" "stdout"
+assert_contains "$(cat "$WORK/out")" "skipped      5. the four labels (no FALCONET_SETUP_TOKEN)" "stdout"
 
 # --- not a repository -------------------------------------------------------------------------
 
 mkdir -p "$WORK/plain/dns"; printf 'x\n' >"$WORK/plain/dns/main.tf"
-OUT="$( cd "$WORK/plain" && FALCONET_REPO="$WORK/plain" "$FALCONET" init --plan dns <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+OUT="$( cd "$WORK/plain" && FALCONET_REPO="$WORK/plain" "$FALCONET" init <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 
 it "outside a git repository is exit 1: there is nothing to commit into"
 assert_eq 1 "$RC" "exit code"
@@ -887,13 +754,13 @@ assert_eq 2 "$RC" "exit code"
 assert_contains "$ERR" "unknown argument: --bogus" "stderr"
 
 it "a flag without its value is a usage error"
-i "$c" "$WORK/empty" --plan-env-file
+i "$c" "$WORK/empty" --app-name
 assert_eq 2 "$RC" "exit code"
 i "$c" "$WORK/empty" --config
 assert_eq 2 "$RC" "exit code"
 
 it "a --repo that is not owner/name is a usage error"
-i "$c" "$WORK/empty" --repo nope --plan dns --validate-only workspace
+i "$c" "$WORK/empty" --repo nope
 assert_eq 2 "$RC" "exit code"
 
 it "a usage error makes no API call and writes nothing"

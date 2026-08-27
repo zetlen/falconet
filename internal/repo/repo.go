@@ -28,7 +28,7 @@ import (
 // directory, and is returned with symlinks resolved, as `pwd -P` would);
 // otherwise the enclosing git work tree; otherwise cwd itself. Not in a git
 // repository is not an error here — some verbs need one and say so in their
-// own words; assemble and prompt do not, and should still work.
+// own words; prompt does not, and should still work.
 func Root(cwd string) (string, error) {
 	if r := os.Getenv("FALCONET_REPO"); r != "" {
 		info, err := os.Stat(r)

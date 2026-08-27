@@ -239,8 +239,8 @@ writes, and the column says which level each needs:
   Permission       doctor   init    For
   Administration   read     read    step 1's actions/permissions checks
   Actions          read     read    the same
-  Secrets          read     write   steps 3–5, the four secrets
-  Issues           read     write   step 6's labels, and the canary
+  Secrets          read     write   steps 3–4, the three secrets
+  Issues           read     write   step 5's labels, and the canary
 
 A classic token needs the repo scope. GITHUB_TOKEN and GH_TOKEN are deliberately
 not read: in CI they are the Actions token, which cannot do this and must never
@@ -248,78 +248,6 @@ be asked to; on a laptop they are whatever someone set for something else.
 `
 
 // --- step 1: the repository qualifies ----------------------------------------
-
-// Stack is what the verb found on disk for one configured stack.
-type Stack struct {
-	// Key is the config key the name came from: "plan" or "validate_only".
-	Key  string
-	Name string
-	// IsDir is whether the name is a directory under the repository root.
-	IsDir bool
-	// TFFiles is how many `.tf` files it holds directly.
-	TFFiles int
-}
-
-// Stacks is README step 1's first bullet and step 7's check: each configured
-// stack is a directory with `.tf` in it. configFile is where the names came
-// from, for the hint.
-func Stacks(stacks []Stack, configFile string) []Line {
-	if configFile == "" {
-		configFile = ".github/falconet.json"
-	}
-	if len(stacks) == 0 {
-		return []Line{{Status: Note, Step: 1, Text: "no stacks are configured (.stacks.plan and .stacks.validate_only are both empty), so the repository's root modules are discovered instead"}}
-	}
-	var lines []Line
-	for _, s := range stacks {
-		subject := fmt.Sprintf("stack %s (.stacks.%s)", s.Name, s.Key)
-		hint := fmt.Sprintf("set .stacks.%s in %s to the directories your OpenTofu stacks live in", s.Key, configFile)
-		switch {
-		case !s.IsDir:
-			lines = append(lines, Line{Status: Missing, Step: 1, Text: subject + " is not a directory", Hint: hint})
-		case s.TFFiles == 0:
-			lines = append(lines, Line{Status: Missing, Step: 1, Text: subject + " has no .tf files", Hint: hint})
-		default:
-			lines = append(lines, Line{Status: OK, Step: 1, Text: subject + " is a directory with .tf files"})
-		}
-	}
-	return lines
-}
-
-// Undeclared is #23 as a repository sitting still, before a request lands in
-// it: a directory holding .tf files that the config names in NEITHER stack
-// list. falconet will not guess about one — it is not validated, it is not
-// planned, and a change that lands in it is refused rather than answered
-// with some other stack's plan — so this is the check that catches a new
-// stack when the config is next looked at rather than when a request finds
-// it. names are the directories, configFile is where the lists were read.
-func Undeclared(names []string, configFile string) []Line {
-	if configFile == "" {
-		configFile = ".github/falconet.json"
-	}
-	var lines []Line
-	for _, n := range names {
-		lines = append(lines, Line{Status: Missing, Step: 1,
-			Text: "directory " + n + " holds .tf files and is named in neither .stacks.plan nor .stacks.validate_only",
-			Hint: "add it to .stacks.plan in " + configFile + " if a human applies it from a pull request, or to .stacks.validate_only"})
-	}
-	return lines
-}
-
-// Discovered is step 1 for a repository whose config names no stacks at all.
-// There is nothing wrong with that — every root module in the tree is a
-// stack and every one of them is planned — but the report says so, because
-// "falconet found these on its own" and "you told falconet these" are
-// different answers to the same question and only one of them is a promise.
-func Discovered(names []string) []Line {
-	if len(names) == 0 {
-		return []Line{{Status: Missing, Step: 1,
-			Text: "no directory under the repository root holds .tf files, so there is nothing to validate or plan",
-			Hint: "each stack is its own subdirectory with its .tf files in it; a .tf at the root itself is not a stack"}}
-	}
-	return []Line{{Status: OK, Step: 1,
-		Text: "the config names no stacks, so every root module found is planned: " + strings.Join(names, ", ")}}
-}
 
 // Issues is `has_issues`: the queue is an issue, so a repository without
 // issues has no way in.
@@ -349,7 +277,6 @@ func (a Action) String() string {
 var RequiredActions = []Action{
 	{"zetlen", "falconet", ".github/workflows/falconet.yml"},
 	{"actions", "*", ""},
-	{"opentofu", "setup-opentofu", ""},
 	{"anthropics", "claude-code-action", ""},
 }
 
@@ -366,7 +293,7 @@ var githubOwned = []Action{
 // otherwise.
 func ActionsPolicy(p *github.ActionsPermissions, sel *github.SelectedActions) Line {
 	hint := "allow them: Settings → Actions → General → Actions permissions — all actions, or selected with " +
-		"zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"
+		"zetlen/falconet, actions/* and anthropics/claude-code-action"
 	if !p.Enabled {
 		return Line{Status: Missing, Step: 1, Text: "Actions are disabled for this repository", Hint: hint}
 	}
@@ -387,7 +314,7 @@ func ActionsPolicy(p *github.ActionsPermissions, sel *github.SelectedActions) Li
 			}
 		}
 		if len(uncovered) == 0 {
-			return Line{Status: OK, Step: 1, Text: "allowed_actions is selected, covering zetlen/falconet, actions/*, opentofu/setup-opentofu and anthropics/claude-code-action"}
+			return Line{Status: OK, Step: 1, Text: "allowed_actions is selected, covering zetlen/falconet, actions/* and anthropics/claude-code-action"}
 		}
 		hint = "add them: Settings → Actions → General → Allow specified actions and reusable workflows"
 		if sel.VerifiedAllowed {
@@ -436,7 +363,7 @@ func anyCovers(patterns []string, a Action) bool {
 // it does not say are assumed here, and both lean towards "covered": an
 // entry with no `@` admits every ref, and an entry with one admits whatever
 // ref it names (the operator pinned it on purpose; whether that pin matches
-// the caller's is the caller workflow's business, step 8). Names compare
+// the caller's is the caller workflow's business, step 7). Names compare
 // case-insensitively, as GitHub's do. An entry naming OWNER/REPOSITORY
 // alone also admits the reusable workflows under it: that is how the README
 // lists zetlen/falconet.
@@ -469,7 +396,7 @@ func globRegexp(pattern string) *regexp.Regexp {
 }
 
 // WorkflowPermissionsNote is `default_workflow_permissions`, which the
-// README says is fine either way: step 8's caller grants what it needs
+// README says is fine either way: step 7's caller grants what it needs
 // explicitly. A note, never MISSING.
 func WorkflowPermissionsNote(wp *github.WorkflowPermissions) Line {
 	why := "fine: the caller workflow grants what it needs"
@@ -506,49 +433,43 @@ func HandoffOutside(dir string) Line {
 	return Line{Status: Note, Step: 2, Text: dir + " is outside the repository, so nothing needs ignoring"}
 }
 
-// --- steps 3–5: the secrets -------------------------------------------------
+// --- steps 3–4: the secrets -------------------------------------------------
 
-// Secret is one of the four, and the step it is stored in.
+// Secret is one of the three, and the step it is stored in.
 type Secret struct {
 	Name string
 	Step int
 }
 
-// Secrets is the four, in README order.
+// Secrets is the three, in README order.
 var Secrets = []Secret{
 	{"FALCONET_APP_ID", 3},
 	{"FALCONET_APP_PRIVATE_KEY", 3},
 	{"ANTHROPIC_API_KEY", 4},
-	{"FALCONET_PLAN_ENV", 5},
 }
 
-// SecretLines is steps 3–5: each secret exists by name. A value is never
+// SecretLines is steps 3–4: each secret exists by name. A value is never
 // readable, and the line says so for the reader who wonders what was
-// checked. FALCONET_PLAN_ENV absent with no planned stacks is a note —
-// README step 5: "if every stack you plan needs no credentials at all, skip
-// this step" — which needs the config to have parsed (stacksKnown).
-func SecretLines(existing []string, plannedStacks int, stacksKnown bool) []Line {
+// checked.
+func SecretLines(existing []string) []Line {
 	lines := make([]Line, 0, len(Secrets))
 	for _, s := range Secrets {
-		lines = append(lines, SecretLine(s, existing, plannedStacks, stacksKnown))
+		lines = append(lines, SecretLine(s, existing))
 	}
 	return lines
 }
 
 // SecretLine is one of SecretLines.
-func SecretLine(s Secret, existing []string, plannedStacks int, stacksKnown bool) Line {
+func SecretLine(s Secret, existing []string) Line {
 	subject := "secret " + s.Name
-	switch {
-	case set(existing)[s.Name]:
+	if set(existing)[s.Name] {
 		return Line{Status: OK, Step: s.Step, Text: subject + " exists (a value can never be read back, so the name is the check)"}
-	case s.Name == "FALCONET_PLAN_ENV" && stacksKnown && plannedStacks == 0:
-		return Line{Status: Note, Step: s.Step, Text: subject + " is not set (no planned stacks, so no planning environment is needed)"}
 	}
 	return Line{Status: Missing, Step: s.Step, Text: subject,
 		Hint: fmt.Sprintf("store it: gh secret set %s   (or: falconet init)", s.Name)}
 }
 
-// --- step 6: the four labels ------------------------------------------------
+// --- step 5: the four labels ------------------------------------------------
 
 // Labels is the four from config, in README order: issue.queue_label,
 // labels.needs_info, labels.human, labels.pr.
@@ -561,7 +482,7 @@ func (l Labels) Names() []string {
 	return []string{l.Queue, l.NeedsInfo, l.Human, l.PR}
 }
 
-// LabelLines is step 6: each of the four exists, one line each, in the
+// LabelLines is step 5: each of the four exists, one line each, in the
 // README's order. Two config keys naming one label is two lines about it.
 func LabelLines(labels Labels, existing []string) []Line {
 	lines := make([]Line, 0, 4)
@@ -575,26 +496,26 @@ func LabelLines(labels Labels, existing []string) []Line {
 func LabelLine(name string, existing []string) Line {
 	subject := "label " + name
 	if set(existing)[name] {
-		return Line{Status: OK, Step: 6, Text: subject}
+		return Line{Status: OK, Step: 5, Text: subject}
 	}
-	return Line{Status: Missing, Step: 6, Text: subject,
+	return Line{Status: Missing, Step: 5, Text: subject,
 		Hint: fmt.Sprintf("create it: gh label create %s   (or: falconet init)", name)}
 }
 
-// --- step 7: the config ------------------------------------------------------
+// --- step 6: the config ------------------------------------------------------
 
-// ConfigLine is step 7's first check: the file parses. file is the path
+// ConfigLine is step 6's first check: the file parses. file is the path
 // config.Load read, or empty when none was found and the defaults stand
 // alone; err is config.Load's error, quoted as the MISSING line.
 func ConfigLine(file string, err error) Line {
 	if err != nil {
-		return Line{Status: Missing, Step: 7, Text: fmt.Sprintf("the config does not parse: %q", err.Error()),
+		return Line{Status: Missing, Step: 6, Text: fmt.Sprintf("the config does not parse: %q", err.Error()),
 			Hint: "check it: jq -e . " + orDefault(file, ".github/falconet.json")}
 	}
 	if file == "" {
-		return Line{Status: OK, Step: 7, Text: "no .github/falconet.json, so the defaults stand alone (they name the stacks this was extracted from)"}
+		return Line{Status: OK, Step: 6, Text: "no .github/falconet.json, so the defaults stand alone"}
 	}
-	return Line{Status: OK, Step: 7, Text: file + " parses"}
+	return Line{Status: OK, Step: 6, Text: file + " parses"}
 }
 
 // KnownPrompts are the prompt names falconet reads, as config keys.
@@ -610,7 +531,7 @@ type Prompt struct {
 	Exists bool
 }
 
-// PromptLines is step 7's other half: every `prompts.*` override names a
+// PromptLines is step 6's other half: every `prompts.*` override names a
 // file under the repository root that exists. Only the keys the file sets
 // are checked — a default is the shipped prompt, which the binary carries
 // (ADR-0006, #3) — and a key falconet does not read is a note, because
@@ -623,22 +544,22 @@ func PromptLines(prompts []Prompt) []Line {
 		subject := fmt.Sprintf("prompts.%s names %s", p.Key, p.Path)
 		switch {
 		case !known[p.Key]:
-			lines = append(lines, Line{Status: Note, Step: 7,
+			lines = append(lines, Line{Status: Note, Step: 6,
 				Text: fmt.Sprintf("prompts.%s is not a prompt falconet reads (the two are %s)", p.Key, strings.Join(KnownPrompts, " and "))})
 		case !p.Inside:
-			lines = append(lines, Line{Status: Missing, Step: 7, Text: subject + ", which is not under the repository root",
-				Hint: "a prompt path is relative to the repository root (README step 7)"})
+			lines = append(lines, Line{Status: Missing, Step: 6, Text: subject + ", which is not under the repository root",
+				Hint: "a prompt path is relative to the repository root (README step 6)"})
 		case !p.Exists:
-			lines = append(lines, Line{Status: Missing, Step: 7, Text: subject + ", which does not exist",
-				Hint: "copy the shipped prompt into the repository and point the key at the copy (README step 7)"})
+			lines = append(lines, Line{Status: Missing, Step: 6, Text: subject + ", which does not exist",
+				Hint: "copy the shipped prompt into the repository and point the key at the copy (README step 6)"})
 		default:
-			lines = append(lines, Line{Status: OK, Step: 7, Text: subject + ", which exists"})
+			lines = append(lines, Line{Status: OK, Step: 6, Text: subject + ", which exists"})
 		}
 	}
 	return lines
 }
 
-// --- step 8: the caller workflow -------------------------------------------
+// --- step 7: the caller workflow -------------------------------------------
 
 // WorkflowPath is where the caller lives, and Reusable is what it must use.
 const (
@@ -658,8 +579,8 @@ type Permission struct {
 // caller's token, never widen it, and the check happens when the file is
 // LOADED: grant less and the run is a startup_failure with no jobs, no logs
 // and nothing on the issue, which is the row the README's troubleshooting
-// table opens with. contract.test.sh holds README step 8 to falconet.yml;
-// this list is step 8's block, and drifts with it.
+// table opens with. contract.test.sh holds README step 7 to falconet.yml;
+// this list is step 7's block, and drifts with it.
 var RequiredPermissions = []Permission{
 	{"contents", "write"},
 	{"issues", "write"},
@@ -789,7 +710,7 @@ func level(s string) int {
 	return 0
 }
 
-// WorkflowLines is step 8: the caller exists; a `uses:` line names the
+// WorkflowLines is step 7: the caller exists; a `uses:` line names the
 // reusable workflow at some ref; it passes no input the workflow does not
 // declare; the top-level permissions: block grants at least
 // RequiredPermissions. Granting less is MISSING naming the permission;
@@ -798,24 +719,24 @@ func level(s string) int {
 // the file to exist first.
 func WorkflowLines(text []byte, exists bool) []Line {
 	if !exists {
-		return []Line{{Status: Missing, Step: 8, Text: WorkflowPath,
-			Hint: "write it from README step 8   (or: falconet init)"}}
+		return []Line{{Status: Missing, Step: 7, Text: WorkflowPath,
+			Hint: "write it from README step 7   (or: falconet init)"}}
 	}
-	lines := []Line{{Status: OK, Step: 8, Text: WorkflowPath + " exists"}}
+	lines := []Line{{Status: OK, Step: 7, Text: WorkflowPath + " exists"}}
 	c := ParseCaller(text)
 
 	// The uses: line.
 	switch {
 	case !c.HasUses:
-		lines = append(lines, Line{Status: Missing, Step: 8, Text: "no uses: line names " + Reusable,
+		lines = append(lines, Line{Status: Missing, Step: 7, Text: "no uses: line names " + Reusable,
 			Hint: "jobs.falconet.uses: " + Reusable + "@<sha or tag>"})
 	case c.Ref == "":
-		lines = append(lines, Line{Status: Missing, Step: 8, Text: "the uses: line names " + Reusable + " with no ref after the @",
+		lines = append(lines, Line{Status: Missing, Step: 7, Text: "the uses: line names " + Reusable + " with no ref after the @",
 			Hint: "jobs.falconet.uses: " + Reusable + "@<sha or tag>"})
 	default:
-		lines = append(lines, Line{Status: OK, Step: 8, Text: "it uses " + Reusable + "@" + c.Ref})
+		lines = append(lines, Line{Status: OK, Step: 7, Text: "it uses " + Reusable + "@" + c.Ref})
 		if c.Ref == "main" {
-			lines = append(lines, Line{Status: Note, Step: 8, Text: "the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"})
+			lines = append(lines, Line{Status: Note, Step: 7, Text: "the ref is main: unpinned — pin a SHA or tag once a canary has reached a pull request"})
 		}
 	}
 
@@ -829,23 +750,23 @@ func WorkflowLines(text []byte, exists bool) []Line {
 	// it is MISSING and not a note, whatever the value; the note that used to
 	// ask for the two refs to agree retired with the input.
 	if c.HasFalconetRef {
-		lines = append(lines, Line{Status: Missing, Step: 8, Text: "falconet-ref is no longer an input; remove it",
+		lines = append(lines, Line{Status: Missing, Step: 7, Text: "falconet-ref is no longer an input; remove it",
 			Hint: "the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded"})
 	}
 
 	// The permissions: block.
-	startup := "the run would be a startup_failure: no jobs, no logs, nothing on the issue. Grant README step 8's permissions: block, verbatim"
+	startup := "the run would be a startup_failure: no jobs, no logs, nothing on the issue. Grant README step 7's permissions: block, verbatim"
 	required := strings.Join(grantWords(RequiredPermissions), ", ")
 	switch {
 	case !c.HasPermissions:
-		lines = append(lines, Line{Status: Missing, Step: 8, Text: "no top-level permissions: block, and falconet's widest job declares " + required, Hint: startup})
+		lines = append(lines, Line{Status: Missing, Step: 7, Text: "no top-level permissions: block, and falconet's widest job declares " + required, Hint: startup})
 	case c.Inline == "write-all":
-		lines = append(lines, Line{Status: OK, Step: 8, Text: "permissions: write-all grants " + required})
-		lines = append(lines, Line{Status: Note, Step: 8, Text: "write-all grants every permission, which is more than falconet needs; step 8's three lines are enough"})
+		lines = append(lines, Line{Status: OK, Step: 7, Text: "permissions: write-all grants " + required})
+		lines = append(lines, Line{Status: Note, Step: 7, Text: "write-all grants every permission, which is more than falconet needs; step 7's three lines are enough"})
 	case c.Inline != "":
 		// read-all, or something else that is not a block: nothing here
 		// reaches write.
-		lines = append(lines, Line{Status: Missing, Step: 8,
+		lines = append(lines, Line{Status: Missing, Step: 7,
 			Text: fmt.Sprintf("permissions: %s grants none of %s", c.Inline, required), Hint: startup})
 	default:
 		got := map[string]string{}
@@ -864,13 +785,13 @@ func WorkflowLines(text []byte, exists bool) []Line {
 			}
 		}
 		if len(short) > 0 {
-			lines = append(lines, Line{Status: Missing, Step: 8,
+			lines = append(lines, Line{Status: Missing, Step: 7,
 				Text: fmt.Sprintf("permissions grants %s, and falconet's widest job declares %s", strings.Join(short, ", "), required), Hint: startup})
 		} else {
-			lines = append(lines, Line{Status: OK, Step: 8, Text: "permissions grants " + required})
+			lines = append(lines, Line{Status: OK, Step: 7, Text: "permissions grants " + required})
 		}
 		if len(extra) > 0 {
-			lines = append(lines, Line{Status: Note, Step: 8, Text: "permissions also grants " + strings.Join(extra, ", ") + ", which nothing in falconet needs"})
+			lines = append(lines, Line{Status: Note, Step: 7, Text: "permissions also grants " + strings.Join(extra, ", ") + ", which nothing in falconet needs"})
 		}
 	}
 	return lines

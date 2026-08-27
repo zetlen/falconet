@@ -40,8 +40,8 @@ without reading why it exists.** Two examples, both load-bearing:
 - PR #28 shipped a plan the agent had abridged by hand — literal
   "# ... omitted here for length" comments inside the fence — and the human
   who approved it was reading a summary of the evidence instead of the
-  evidence. So the PR body is assembled mechanically, refuses to abridge, and
-  truncates only on line boundaries with an explicit note.
+  evidence. So the PR body carries no plan and the prompt tells the agent not
+  to describe one: the plan bot's comment is the evidence, whole.
 - Run 32093607680 destroyed a prepared change when its runner was torn down,
   then parked the issue with a comment promising work that no longer existed
   anywhere. So the branch is pushed the moment a commit exists, not at the end,
@@ -72,23 +72,13 @@ operator. If you think one is wrong, say so and stop.
   allowlist is what refuses it. Any change that widens the toolset, or that
   lets the agent reach a path outside the allowlist, is a change to I5.
 
-- **Never narrow a plan with `-target`** (I1). falconet plans whole stacks or
-  it does not plan. A targeted plan does not show what an apply will do, and
-  the human at the end of this pipeline approves an untargeted apply — so it
-  would be a lie told to the one reader everything here exists for. It also
-  makes OpenTofu print `The -target option is not for routine use` into a log
-  an adopter is reading while deciding whether this tool is serious. The way
-  to plan less is to plan fewer stacks
-  ([register](docs/decisions.md#every-planned-stack-is-planned)). The same
-  goes for anything else that makes tofu report it is being used unusually:
-  the assumptions falconet makes about an OpenTofu repository are the
-  ordinary ones, held in `internal/stacks`, and a clever one belongs in the
-  register before it belongs in the code.
-
-- **The plan reaches the reviewer whole, and says which stack it is of**
-  (I2, I3). Assembly is mechanical and refuses to abridge; a change that
-  reaches nothing plannable gets a person, not a pull request carrying
-  somebody else's plan.
+- **falconet does not plan, and does not describe the plan** (I2, I3). The
+  repository's plan bot posts the plan on the pull request; the body carries
+  none and the agent is told not to guess at one. Do not add a plan, a
+  validate, a `tofu` call or a cloud credential back into the binary or the
+  workflow — that is the fifth of the tree removed on 2026-08-26
+  ([register](docs/decisions.md#falconet-does-not-plan)), and it reopens
+  only on the trigger written there.
 
 - **Every run ends somewhere a person can see** (I4). A pull request, a
   question for the requester, or a hand-off — and never a green run that
@@ -121,8 +111,8 @@ can point at in the present. Do not quietly build the other thing.
 
 - **`go test ./...`** — unit and property tests beside the guard logic
   (`testing`, `testing/quick`), for what the bash suite cannot see from
-  outside a process: truncation never splits a line and never exceeds its
-  budget, the fence outruns every backtick run, the denylist matches in
+  outside a process: a pause comment's truncation never splits a line and
+  never exceeds its budget, the fence outruns every backtick run, the denylist matches in
   config order, the config merge (objects recurse, arrays and scalars
   replace), the handoff directory, the repository root, the dispatcher's
   lists in step with what it implements. `go vet`, `staticcheck`,
@@ -144,10 +134,10 @@ GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
 it was asked, with `GITHUB_API_URL` pointing at it. No test
 file stubs `gh`; the files that once did put a tripwire on `PATH` instead,
 so a verb that shelled out to `gh` would fail loudly before the real one
-could carry a test token anywhere. `tofu` and `gitleaks` are bash stubs
-handed in through `$TOFU` and `$GITLEAKS`, and their argv is part of the
-contract. Pushes land only in bare repositories under a temp directory;
-nothing touches the network, GitHub, OpenTofu, or any credential. The suite
+could carry a test token anywhere. `gitleaks` is a bash stub handed in
+through `$GITLEAKS`, and its argv is part of the contract. Pushes land only
+in bare repositories under a temp directory; nothing touches the network,
+GitHub, or any credential. The suite
 needs bash, git, jq, awk and python3 stdlib. Adding a dependency to run the
 tests is a decision, not a convenience.
 
@@ -182,19 +172,12 @@ and watching it refuse. A new decision is a row and a section in the
 register, made in the same commit as the change; the reasoning that does not
 fit there goes in that commit's message. No new files go in `docs/history/`.
 
-## Two facts about tofu
+## One shell trap
 
-Not about shell — the binary speaks `os/exec`, and the shell traps the bash
-used to carry went with it — but true in any language:
-
-- **Never end a plan early.** A reader that stops early — `head`, `tail`, a
-  closed pipe — kills tofu before it releases its state lock. The plan goes
-  to a file, whole.
-- **Always pass `-no-color`** when the output lands in a file. Without it,
-  ANSI escapes are in the plan and whoever reads it next has to strip them.
-
-And one shell trap that survives, because two `run:` steps in the workflow
-still use `gh` (the pull request, and contain's check): **never `gh ... | grep -q`.** `grep -q` exits at the first
+The binary speaks `os/exec`, and the shell traps the bash used to carry
+went with it — except one, because two `run:` steps in the workflow still
+use `gh` (the pull request, and contain's check): **never `gh ... | grep
+-q`.** `grep -q` exits at the first
 match and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found*
 match into a non-zero pipeline — the exact opposite of the answer just
 computed. Capture the whole result, then inspect it.

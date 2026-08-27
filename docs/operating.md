@@ -4,13 +4,13 @@ What the operator does, what only the operator can do, and where the pieces
 live. This is not a contributor guide — see [Support](../README.md#support)
 for why there isn't one.
 
-## Three things an agent cannot do for you
+## Two things an agent cannot do for you
 
-All three are credentials. Ask for them when they're needed; do not attempt to
+Both are credentials. Ask for them when they're needed; do not attempt to
 create GitHub resources, register apps, or mint keys on the operator's behalf
 — not without the operator running `falconet init`, which is the one place
-two of the three are created, with the operator at the keyboard, and the
-third is stored. A fourth credential exists only to install the other three:
+one of the two is created, with the operator at the keyboard, and the other
+is stored. A third credential exists only to install those two:
 `FALCONET_SETUP_TOKEN`, a fine-grained personal access token the operator
 mints, scoped to the one repository with a seven-day expiry (README step 2).
 `init` writes through it and `doctor` reads through it; neither reads
@@ -38,15 +38,12 @@ separate number instead of disappearing into the operator's subscription.
 mints it; `init` reads it from a no-echo prompt, or from stdin — never from
 an argument — and seals it into the repository's secrets.
 
-**The environment the stacks plan in, as `plan-env`.** A JSON object of the
-variables `tofu init` and `tofu plan` need — backend keys, provider tokens,
-`TF_VAR_*` — stored as one repository secret in the consuming repository. The
-workflow masks each value and loads it into the two jobs that run tofu, and
-into neither of the other two: the agent's job holds no credential of any
-kind. Scope it to what falconet plans; it never applies, so it needs nothing
-that could. `init --plan-env-file` seals it from a file the operator names,
-kept outside the repository, and refuses the file unless it is a JSON object
-whose values are all strings.
+**No cloud credential at all.** falconet never plans, so no job of its
+holds a backend key or a provider token; the agent's job holds no credential
+of any kind. The plan bot the consuming repository runs on its pull requests
+(Atlantis, dflook) holds those, on its own side, and that is the operator's
+to configure — including making sure it plans the pull requests the App
+opens ([the register](decisions.md#falconet-does-not-plan)).
 
 ## Where things are
 
@@ -81,9 +78,9 @@ queue.
 Development *is* integration. There is no build-then-integrate phase — the
 orchestrator is Actions YAML and cannot run outside a consuming repository.
 `wayfinders-infra` consumed `falconet@main` from the first working commit and
-ran the one live run so far on it (2026-08-21, issue #106 → PR #108, on the
-bash); it pins a tag now, and the canary after v0.2.0 is the binary's first
-live run.
+ran the first live run on it (2026-08-21, issue #106 → PR #108, on the
+bash); it pins a tag now. It needs a plan bot on its pull requests before it
+takes the first release without planning (2026-08-26 onwards).
 
 ## What deliberately stayed behind
 

@@ -42,7 +42,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"handoff_dir":        s.HandoffDir,
 		"issue.queue_label":  s.Issue.QueueLabel,
 		"labels.human":       s.Labels.Human,
-		"plan.command":       s.Plan.Command,
 		"paths.allow[0]":     s.Paths.Allow[0],
 		"blocking_labels[3]": s.Issue.BlockingLabels[3],
 	}
@@ -50,7 +49,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 		"handoff_dir":        ".falconet",
 		"issue.queue_label":  "infra-request",
 		"labels.human":       "ready-for-human",
-		"plan.command":       "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false",
 		"paths.allow[0]":     "*.tf",
 		"blocking_labels[3]": "wontfix",
 	}
@@ -59,15 +57,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want[k])
 		}
 	}
-	// Neither stack list has a default (#23). The old ones named dns,
-	// workspace and site — the origin repository's own three — so a consumer
-	// whose directories were called anything else met "config .stacks.plan
-	// names \"dns\", which is not a directory" before it met anything of
-	// falconet's. Empty means "discover them", which is a real answer.
-	if len(s.Stacks.Plan) != 0 || len(s.Stacks.ValidateOnly) != 0 {
-		t.Errorf("stacks = %v / %v, want both empty", s.Stacks.Plan, s.Stacks.ValidateOnly)
-	}
-
 	// Order is load-bearing for the denylist: templatefile( before file(.
 	deny := s.Paths.DenyContent
 	tf, f := index(deny, "templatefile("), index(deny, "file(")
@@ -297,16 +286,5 @@ func TestRawStructured(t *testing.T) {
 	v := []any{"a", json.Number("1")}
 	if got := Raw(v); got != "[\n  \"a\",\n  1\n]" {
 		t.Errorf("structured values print as indented JSON; got %q", got)
-	}
-}
-
-func TestStackMissing(t *testing.T) {
-	bare(t)
-	cfg, _ := Load("")
-	msg := cfg.StackMissing("plan", "dns", "/repo")
-	for _, want := range []string{".stacks.plan", `"dns"`, "/repo", ".github/falconet.json"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("message lacks %q: %s", want, msg)
-		}
 	}
 }

@@ -13,7 +13,9 @@
 # the open pull-request list and any failure in responses.json, and reads
 # back what the verb asked for from requests.log. This file stubbed `gh`
 # until #17 moved the verb to the API, and the bash it used to answer for
-# went in #19. Green means through the binary.
+# went in #19. Green means through the binary. Nothing here runs tofu:
+# prepare stopped capturing a baseline plan when planning left falconet
+# (docs/decisions.md), and the handoff it lays out is git and GitHub only.
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -40,28 +42,6 @@ chmod +x "$WORK/no-gh/gh"
 PATH="$WORK/no-gh:$PATH"
 export PATH
 
-# init and plan answer separately: this stage runs both, and a stub that
-# failed them together would let "the baseline plan failed" pass on a run
-# where the plan never happened.
-make_tofu() { # path
-  cat >"$1" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$TOFU_CALLS"
-for a in "$@"; do
-  [[ "$a" == "init" ]] || continue
-  if [[ "${TOFU_INIT_RC:-0}" -ne 0 ]]; then
-    echo "Error: Failed to get existing workspaces: InvalidAccessKeyId" >&2
-    exit "$TOFU_INIT_RC"
-  fi
-  echo "OpenTofu has been successfully initialized!"
-  exit 0
-done
-printf 'No changes. Your infrastructure matches the configuration.\n'
-exit "${TOFU_RC:-0}"
-STUB
-  chmod +x "$1"
-}
-
 new_checkout() { # name -> echoes path
   local base="$WORK/$1"
   mkdir -p "$base/repo/.github" "$base/bin" "$base/repo/dns"
@@ -75,7 +55,6 @@ new_checkout() { # name -> echoes path
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" remote add origin "$base/origin.git"
   git -C "$base/repo" push -q origin main
-  make_tofu "$base/bin/tofu"
   printf '%s' "$base"
 }
 
@@ -126,9 +105,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   : >"$FAKE_GITHUB/requests.log"
   : >"$FAKE_GITHUB/requests.jsonl"
   OUT="$( cd "$c/repo" \
-    && TOFU="$c/bin/tofu" TOFU_CALLS="$c/tofu-calls.txt" TOFU_RC="${T_RC:-0}" \
-       TOFU_INIT_RC="${T_INIT_RC:-0}" \
-       GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
+    && GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
        GITHUB_TRIGGERING_ACTOR="${ACTOR:-}" \
        "$FALCONET" prepare --issue 42 "$@" 2>"$c/err" )"
   RC=$?
@@ -141,7 +118,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   return 0
 }
 reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; PULLS_RC=""; ISSUE_NULL=""
-          T_RC=""; T_INIT_RC=""; GH_ENV=""; RUN_ID=""; ACTOR=""; }
+          GH_ENV=""; RUN_ID=""; ACTOR=""; }
 reset
 
 ghlog() { cat "$1/requests.log" 2>/dev/null; }
@@ -318,10 +295,8 @@ it "and the comment thread, oldest first"
 assert_contains "$(hand "$c" request.md)" "### zetlen — 2026-08-01" "request.md"
 it "but never this pipeline's own acknowledgment"
 assert_not_contains "$(hand "$c" request.md)" "picked up and is being worked on" "request.md"
-it "the baseline plan is captured"
-assert_contains "$(hand "$c" plan-baseline.txt)" "No changes" "plan-baseline.txt"
-it "and the planner is never asked for color"
-assert_contains "$(cat "$c/tofu-calls.txt")" "-no-color" "tofu calls"
+it "and no plan is captured: planning is the plan bot's, on the pull request"
+assert_file_missing "$c/repo/.falconet/plan-baseline.txt"
 it "the claim is recorded"
 assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees" "API calls"
 it "and the requester is thanked, in the words that promise only what is true"
@@ -355,9 +330,8 @@ assert_contains "$(hand "$c" request.md)" '$(touch /tmp/pwned)' "request.md"
 it "and is not executed on the way"
 assert_file_missing "/tmp/pwned"
 
-# stdout is the outcome and nothing else. The baseline plan is a much bigger
-# chatterer than anything else in this pipeline.
-it "a chatty planner does not leak into the outcome word"
+# stdout is the outcome and nothing else.
+it "nothing else leaks into the outcome word"
 assert_eq "ready" "$OUT" "outcome"
 
 # --- the slug ---------------------------------------------------------------
@@ -585,66 +559,6 @@ it "and the run is still ready"
 assert_eq "ready" "$OUT" "outcome"
 
 # --- hard failures ----------------------------------------------------------
-
-c="$(new_checkout planfails)"; issue_json "$c/issue.json" "infra-request" "x"
-T_RC=1 p "$c"; reset
-it "a baseline plan that fails is fatal, because no agent time will fix main"
-assert_eq 1 "$RC" "exit code"
-it "and prints no outcome word"
-assert_eq "" "$OUT" "stdout"
-
-# --- the stacks it plans, it initialises first -------------------------------
-#
-# A runner is a fresh checkout with no .terraform/ in it, and `tofu plan`
-# there is "missing required providers".
-
-c="$(new_checkout initfirst)"; issue_json "$c/issue.json" "infra-request" "x"
-p "$c"
-it "the stack is initialised before it is planned"
-assert_contains "$(head -1 "$c/tofu-calls.txt")" "init -input=false" "first tofu call"
-
-it "and the plan still happens after it"
-assert_contains "$(cat "$c/tofu-calls.txt")" "plan -no-color" "tofu calls"
-
-c="$(new_checkout initfails)"; issue_json "$c/issue.json" "infra-request" "x"
-T_INIT_RC=1 p "$c"; reset
-it "an init that fails is fatal and says so as itself"
-assert_eq 1 "$RC" "exit code"
-it "and names the stack rather than leaving tofu's error unattributed"
-assert_contains "$ERR" "tofu init failed in dns/" "stderr"
-it "and passes tofu's own reason through, because that is the actionable half"
-assert_contains "$ERR" "InvalidAccessKeyId" "stderr"
-
-# Initialisation belongs to whoever drives the plan: a plan command that is
-# not tofu brings the stack up its own way.
-c="$(new_checkout initcustom)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '{"plan":{"command":"./plan.sh {stack}"}}\n' >"$c/repo/.github/falconet.json"
-printf '#!/usr/bin/env bash\necho "custom plan for $1"\n' >"$c/repo/plan.sh"
-chmod +x "$c/repo/plan.sh"
-git -C "$c/repo" add -A; git -C "$c/repo" commit -qm cfg
-git -C "$c/repo" push -q origin main
-p "$c"
-it "a plan command that is not tofu initialises itself"
-assert_eq "ready" "$OUT" "outcome"
-it "and falconet runs no tofu at all"
-assert_eq "" "$(cat "$c/tofu-calls.txt" 2>/dev/null)" "tofu calls"
-it "and the baseline is whatever that command printed"
-assert_contains "$(hand "$c" plan-baseline.txt)" "custom plan for" "plan-baseline.txt"
-
-# The defaults name three stacks, so a repository with different ones meets
-# this first.
-c="$(new_checkout nostack)"; issue_json "$c/issue.json" "infra-request" "x"
-printf '{"stacks":{"plan":["nowhere"],"validate_only":[]}}\n' \
-  >"$c/repo/.github/falconet.json"
-git -C "$c/repo" add -A; git -C "$c/repo" commit -qm cfg
-git -C "$c/repo" push -q origin main
-p "$c"
-it "a stack that is not a directory is fatal"
-assert_eq 1 "$RC" "exit code"
-it "and the message names the config key rather than leaving tofu to explain"
-assert_contains "$ERR" 'config .stacks.plan names "nowhere"' "stderr"
-it "and names the file to edit"
-assert_contains "$ERR" ".github/falconet.json" "stderr"
 
 c="$(new_checkout viewfails)"; issue_json "$c/issue.json" "infra-request" "x"
 VIEW_RC=1 p "$c"; reset

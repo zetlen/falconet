@@ -6,7 +6,7 @@ package main
 // The gate — the rules, their order, the two modes, and the record of why —
 // is internal/prepare, and so are the request's markdown and the branch
 // name. This file is the flags, the event file, the GitHub calls, the
-// clean-tree assertion, the handoff files, git and tofu, in the script's
+// clean-tree assertion, the handoff files and git, in the script's
 // order, and the exit code. It changes directory to the repository root and
 // stays there, as every verb that works on a tree does.
 //
@@ -26,7 +26,6 @@ package main
 //	issue.json          the one snapshot every later step reads
 //	ack.md              the comment posted to the requester (entry only)
 //	request.md          the request in markdown — both agents read this first
-//	plan-baseline.txt   what main already plans, before anyone touches it
 //	base-sha.txt        the commit this run started from
 //	branch.txt          the working branch
 //
@@ -50,8 +49,6 @@ import (
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/prepare"
 	"github.com/zetlen/falconet/internal/repo"
-	"github.com/zetlen/falconet/internal/stacks"
-	"github.com/zetlen/falconet/internal/validate"
 )
 
 const prepareUsageText = `prepare — decide whether an issue is this pipeline's to work, and if it is,
@@ -86,7 +83,6 @@ Outputs on the ready path, written into the handoff directory:
   issue.json          the one snapshot every later step reads
   ack.md              the comment posted to the requester (entry only)
   request.md          the request in markdown — both agents read this first
-  plan-baseline.txt   what main already plans, before anyone touches it
   base-sha.txt        the commit this run started from
   branch.txt          the working branch
 
@@ -99,11 +95,9 @@ costs no network and no credential. GITHUB_API_URL overrides the endpoint.
 
 Exit codes: 0 = an outcome was determined and printed
             1 = refused mechanically — a dirty tree, an issue that cannot
-                be read, a label that cannot be cleared, a stack that cannot
-                be planned; nothing is printed, stderr says why
+                be read, a label that cannot be cleared; nothing is printed,
+                stderr says why
             2 = usage error (including --help)
-
-$TOFU overrides the planner, for the tests.
 `
 
 func prepareUsage() int {
@@ -661,134 +655,8 @@ func runPrepare(args []string) int {
 		return die("falconet: %v", err)
 	}
 
-	// What main already plans, before anyone touches anything. Handing this
-	// to the implementing agent is what stops it trying to fix pre-existing
-	// drift, and it is what lets a reviewer tell this change's plan lines
-	// from main's.
-	//
-	// Hard-fails on purpose: if main itself cannot plan, no amount of agent
-	// time will fix it, and failing here costs nothing because no agent has
-	// run yet.
-	//
-	// The stacks, the init that comes first when tofu is the planner, and the
-	// plan's argv are internal/stacks, shared with validate so that the two
-	// verbs hand tofu the same thing; the baseline lands in one file, each
-	// stack's output under its own `## <stack>` heading — every one of them,
-	// including the only one (#23).
-	//
-	// Which stacks: the ones `stacks.plan` names, or — when the config names
-	// neither list — every root module discovery finds, which is the same
-	// answer validate resolves and the same one `init` writes a config from.
-	// This runs before anyone has touched anything, so unlike validate there
-	// is no change yet to narrow it by: the baseline is of everything a later
-	// change could be planned against, which is what makes it a baseline.
-	planPath := filepath.Join(out, "plan-baseline.txt")
-	baseline, err := os.Create(planPath)
-	if err != nil {
-		return die("falconet: cannot write %s: %v", planPath, err)
-	}
-	defer func() { _ = baseline.Close() }()
-	discovered, err := stacks.Discover(os.DirFS(root))
-	if err != nil {
-		return die("falconet: cannot read the repository's layout: %v", err)
-	}
-	planStacks := stacks.Resolve(discovered, cfg.Schema.Stacks.Plan, cfg.Schema.Stacks.ValidateOnly).Plan
-	initFirst := stacks.InitFirst(cfg.Schema.Plan.Command)
-	runner := stacks.Runner{Tofu: envOr("TOFU", "tofu"), RepoRoot: root}
-
-	scratchFile, err := os.CreateTemp("", "falconet-prepare-*")
-	if err != nil {
-		return die("falconet: cannot create a scratch file: %v", err)
-	}
-	scratch := scratchFile.Name()
-	_ = scratchFile.Close()
-	stackPlan := scratch + ".plan"
-	defer func() {
-		_ = os.Remove(scratch)
-		_ = os.Remove(stackPlan)
-	}()
-
-	for _, s := range planStacks {
-		if !isDir(runner.Dir(s)) {
-			return die("prepare: %s", cfg.StackMissing("plan", s, root))
-		}
-		if initFirst {
-			ok, err := runBaselineInit(runner, s, scratch)
-			if err != nil {
-				return die("falconet: %v", err)
-			}
-			if !ok {
-				say("prepare: tofu init failed in %s/ — the stack cannot be planned:", s)
-				if err := copyToStderr(scratch); err != nil {
-					return die("falconet: %v", err)
-				}
-				return 1
-			}
-		}
-		argv, err := runner.PlanCommand(cfg.Schema.Plan.Command, s)
-		if err != nil {
-			return die("falconet: %v (set plan.command in %s)", err, orDefault(cfg.File, ".github/falconet.json"))
-		}
-		// stdout to its own file, stderr to the scratch. See stacks.Run for
-		// why the plan is never a pipe into this process.
-		ok, err := runPlan(argv, stackPlan, scratch)
-		if err != nil {
-			return die("falconet: %v", err)
-		}
-		if !ok {
-			say("prepare: the baseline plan failed on %s/ — main does not plan cleanly:", s)
-			if err := copyToStderr(scratch); err != nil {
-				return die("falconet: %v", err)
-			}
-			return 1
-		}
-		planBytes, err := os.ReadFile(stackPlan)
-		if err != nil {
-			return die("falconet: cannot read %s: %v", stackPlan, err)
-		}
-		if _, err := baseline.WriteString(validate.PlanHeading(s)); err != nil {
-			return die("falconet: cannot write %s: %v", planPath, err)
-		}
-		if _, err := baseline.Write(planBytes); err != nil {
-			return die("falconet: cannot write %s: %v", planPath, err)
-		}
-	}
-	if err := baseline.Close(); err != nil {
-		return die("falconet: cannot write %s: %v", planPath, err)
-	}
-	written, err := os.ReadFile(planPath)
-	if err != nil {
-		return die("falconet: cannot read %s: %v", planPath, err)
-	}
-	say("baseline plan: %d lines", bytes.Count(written, []byte{'\n'}))
 	say("working branch %s from %s", branch, prefix(baseSHA, 7))
 
 	fmt.Println("ready")
 	return 0
-}
-
-// runBaselineInit runs `tofu init` in the stack with both streams into the scratch
-// file — truncated first — and returns whether it succeeded. A tofu that
-// could not be started at all has that written into the file as well, so the
-// failure names its cause; the error return is for the scratch file itself.
-func runBaselineInit(r stacks.Runner, stack, scratch string) (bool, error) {
-	f, err := os.OpenFile(scratch, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o600)
-	if err != nil {
-		return false, fmt.Errorf("cannot write %s: %v", scratch, err)
-	}
-	ok := toFile(f, stacks.Run(r.Init(stack, true), f, f))
-	if cerr := f.Close(); cerr != nil {
-		return false, fmt.Errorf("cannot write %s: %v", scratch, cerr)
-	}
-	return ok, nil
-}
-
-// copyToStderr is `cat FILE >&2`.
-func copyToStderr(path string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("cannot read %s: %v", path, err)
-	}
-	_, _ = os.Stderr.Write(b)
-	return nil
 }

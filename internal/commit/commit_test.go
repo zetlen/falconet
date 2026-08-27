@@ -501,7 +501,7 @@ func TestReasonsKeepGiveUpsLineStructure(t *testing.T) {
 		ReasonDeniedContent([]string{"a.tf: file()"}),
 		ReasonUnchanged(),
 		ReasonNoMessage([]string{"a.tf"}),
-		ReasonEmptyAfterFmt([]string{"a.tf"}),
+		ReasonEmptyStaged([]string{"a.tf"}),
 	} {
 		if !strings.HasSuffix(r, "\n") || strings.HasSuffix(r, "\n\n") {
 			t.Errorf("a reason must end in exactly one newline: %q", r)

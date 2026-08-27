@@ -53,12 +53,11 @@ it "the handoff directory defaults to .falconet"
 probe "$d" get .handoff_dir
 assert_eq ".falconet" "$OUT"
 
-it "the plan command carries the flags CI cannot run without"
+it "the plan-side keys are gone from the schema: the plan bot owns them"
 probe "$d" get .plan.command
-assert_contains "$OUT" "-refresh=false -lock=false"
-
-it "and -no-color, because ANSI escapes in a redirected plan are someone's afternoon"
-assert_contains "$OUT" "-no-color"
+assert_eq "null" "$OUT"
+probe "$d" get .stacks
+assert_eq "null" "$OUT"
 
 # --- discovery precedence ---------------------------------------------------
 

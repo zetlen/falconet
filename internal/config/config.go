@@ -70,13 +70,6 @@ const Defaults = `{
       "filebase64(",
       "file("
     ]
-  },
-  "stacks": {
-    "plan": [],
-    "validate_only": []
-  },
-  "plan": {
-    "command": "tofu -chdir={stack} plan -no-color -input=false -refresh=false -lock=false"
   }
 }`
 
@@ -105,23 +98,6 @@ type Schema struct {
 		// so it has to survive here.
 		DenyContent []string `json:"deny_content"`
 	} `json:"paths"`
-	// Stacks is the classification of the repository's root modules, and
-	// naming NEITHER list is a real answer rather than an empty one: it
-	// means "discover them", which is what internal/stacks.Resolve does
-	// with it. The defaults used to name dns, workspace and site — the
-	// origin repository's own three — so a consumer whose directories were
-	// called something else met "config .stacks.plan names \"dns\", which is
-	// not a directory" before it met anything of falconet's, and a consumer
-	// who never wrote a config got the origin's layout asserted over theirs
-	// (#23). A default that names somebody else's directories is not a
-	// default.
-	Stacks struct {
-		Plan         []string `json:"plan"`
-		ValidateOnly []string `json:"validate_only"`
-	} `json:"stacks"`
-	Plan struct {
-		Command string `json:"command"`
-	} `json:"plan"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
 	// because `falconet prompt <name>` looks names up dynamically. It has no
 	// default (#3): an absent key means the prompt embedded in the binary,
@@ -370,22 +346,6 @@ func Raw(v any) string {
 		}
 		return string(out)
 	}
-}
-
-// StackMissing is the message for a configured stack that is not a directory.
-//
-// The defaults name three stacks, so a repository with different ones meets
-// this before it meets anything else. OpenTofu's own message for a directory
-// it cannot enter names neither the config file nor the key that put the
-// value there; this one says the key, the file that was read, and what
-// belongs in it. Returned rather than printed: prepare dies with it and
-// validate puts it in the report a requester reads, which are different
-// streams.
-func (c *Config) StackMissing(key, stack, repoRoot string) string {
-	return fmt.Sprintf("config .stacks.%s names %q, which is not a directory in %s. "+
-		"Set .stacks.%s in %s to the directories your OpenTofu stacks live in.",
-		key, stack, orDefault(repoRoot, "this repository"), key,
-		orDefault(c.File, ".github/falconet.json"))
 }
 
 // Keys lists an object's keys, sorted, for callers that want to iterate

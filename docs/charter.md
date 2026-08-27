@@ -40,20 +40,23 @@ the one reader everything here exists for.
 
 ### I2 · The reviewer reads the evidence, not a summary of it
 
-The pull request body carries the plan **whole**, under a heading naming the
-stack it is a plan of. PR #28 shipped a plan the agent had shortened by hand —
-literal `# ... omitted here for length` inside the fence — and the human who
-approved it was reading a summary of the evidence instead of the evidence.
-Assembly is mechanical, refuses to abridge, and truncates only on line
-boundaries and only with a note saying it did.
+The evidence is the plan the repository's plan bot posts on the pull
+request, **whole** — never the agent's account of it. PR #28 shipped a plan
+the agent had shortened by hand — literal `# ... omitted here for length`
+inside the fence — and the human who approved it was reading a summary of
+the evidence instead of the evidence. So the pull-request body carries no
+plan at all, the agent is told not to describe one, and nothing of
+falconet's stands where a reviewer would mistake it for the bot's comment.
 
 ### I3 · The plan is of what the change touches
 
-A pull request carries plans of the stacks the change actually reaches, or
-there is no pull request. `wayfinders-infra#120` changed a database tier and
-got back `No changes. Your infrastructure matches the configuration.` — a true
-plan of somewhere else entirely. A plan of the wrong stack is worse than no
-plan, because it reads as reassurance.
+The change reaches the stacks the request is about, and the plan bot plans
+what the change touches. `wayfinders-infra#120` changed a database tier and
+got back `No changes. Your infrastructure matches the configuration.` — a
+true plan of somewhere else entirely. A plan of the wrong stack is worse than
+no plan, because it reads as reassurance. falconet's part is that the pull
+request is of the right change, on a branch the bot will plan; the bot's
+part is planning it, and a pull request nothing plans is not reviewable.
 
 ### I4 · Every run ends somewhere a person can see
 
@@ -101,7 +104,8 @@ starts demanding that the adopter manage more, the mechanism is what is wrong.
 
 Go. One static binary and a digest committed before the tag. A reusable
 workflow and a composite action. A GitHub App used purely as a credential.
-One JSON config file. Six verbs and a handoff directory. Every one of those
+One JSON config file. Four pipeline verbs and a handoff directory. The plan
+left to the repository's plan bot. Every one of those
 is a **means**: chosen for reasons, and the reasons are in
 [the decision register](decisions.md), which gives each one the invariant it
 serves and the observation that should retire it. How each was reached is in
@@ -126,7 +130,10 @@ address.
 ## Changing this document
 
 An invariant changes when the operator says it changes — not in the register,
-and never as the side effect of some other decision. A change that finds
+and never as the side effect of some other decision. It has happened once:
+on 2026-08-26 the operator took planning out of falconet, and I2 and I3 were
+narrowed above to what falconet still produces, with the plan itself owed by
+the repository's plan bot ([the register](decisions.md#falconet-does-not-plan)). A change that finds
 itself amending one has either found the wrong solution or found a real
 disagreement; either way it stops and asks. Means change all the time, as
 rows of the register, and keeping the two apart is the whole point.

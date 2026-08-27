@@ -175,7 +175,7 @@ print(h["alg"], h["typ"], p["iss"], p["exp"] - p["iat"], len(t))' "$1"
 
 c="$(new_checkout happy)"
 script "{\"method\":\"GET\",\"path\":\"$installation\",\"status\":404,\"body\":{\"message\":\"Not Found\"},\"times\":2}"
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 
 it "init listens on 127.0.0.1 and says where, on stderr"
 assert_contains "$(cat "$WORK/app.err")" "open this in a browser: http://127.0.0.1:" "stderr"
@@ -278,7 +278,7 @@ fetch "$URL" 2>/dev/null; assert_eq "" "$STATUS" "GET / after exit"
 
 c="$(new_checkout state)"
 script
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 callback "code=x&state=wrong"
 
 it "a redirect whose state is not the nonce is a 400 to the browser"
@@ -301,7 +301,7 @@ assert_eq 0 "$(grep -c "app-manifests/x/" "$FAKE_GITHUB/requests.log")" "convers
 assert_line "$OUT" "done         3. the GitHub App falconet-zetlen-wayfinders-infra (ID 12345) is registered, installed on zetlen/wayfinders-infra, and its two secrets are stored"
 
 c="$(new_checkout twice)"
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 callback "code=x&state=wrong"
 callback "code=y&state=alsowrong"
 finish_init
@@ -318,7 +318,7 @@ assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
 # --- no redirect within --app-timeout -----------------------------------------------
 
 c="$(new_checkout timeout)"
-start_init "$c" 2s --plan dns --validate-only workspace
+start_init "$c" 2s
 finish_init
 
 it "no redirect within --app-timeout: exit 0, the step skipped with the reason, the local steps done"
@@ -332,7 +332,7 @@ assert_eq "Install falconet" "$(git -C "$c/repo" log -1 --format=%s)" "subject"
 
 c="$(new_checkout retry)"
 script "{\"method\":\"POST\",\"path\":\"$conversion\",\"status\":401,\"body\":{\"message\":\"Requires authentication\"},\"times\":1}"
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 callback "code=testcode&state=$NONCE"
 finish_init
 
@@ -349,7 +349,7 @@ assert_contains "$ERR" "the conversion endpoint needed the setup token (a 401 wi
 c="$(new_checkout refused)"
 script "{\"method\":\"POST\",\"path\":\"$conversion\",\"status\":404,\"body\":{\"message\":\"Not Found\"}}"
 before="$(git -C "$c/repo" rev-parse HEAD)"
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 callback "code=testcode&state=$NONCE"
 finish_init
 
@@ -369,7 +369,7 @@ assert_eq "$before" "$(git -C "$c/repo" rev-parse HEAD)" "HEAD"
 
 c="$(new_checkout uninstalled)"
 script "{\"method\":\"GET\",\"path\":\"$installation\",\"status\":404,\"body\":{\"message\":\"Not Found\"}}"
-start_init "$c" 7s --plan dns --validate-only workspace
+start_init "$c" 7s
 callback "code=testcode&state=$NONCE"
 finish_init
 
@@ -392,7 +392,7 @@ assert_contains "$OUT" "1 cannot tell" "summary"
 c="$(new_checkout noapp)"
 script
 : >"$FAKE_GITHUB/requests.log"; : >"$FAKE_GITHUB/requests.jsonl"
-OUT="$( cd "$c/repo" && "$FALCONET" init --no-app --plan dns --validate-only workspace <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+OUT="$( cd "$c/repo" && "$FALCONET" init --no-app <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 ERR="$(cat "$WORK/err")"
 
 it "--no-app: no listener, no conversion, step 3 skipped and left for you in the README's words"
@@ -405,7 +405,7 @@ assert_contains "$OUT" "falconet init --app-id <App ID> --app-key <the .pem>" "s
 c="$(new_checkout byhand)"
 printf -- '-----BEGIN RSA PRIVATE KEY-----\nbm90IHJlYWxseSBhIGtleQ==\n-----END RSA PRIVATE KEY-----\n' >"$c/app.pem"
 : >"$FAKE_GITHUB/requests.log"; : >"$FAKE_GITHUB/requests.jsonl"
-OUT="$( cd "$c/repo" && "$FALCONET" init --plan dns --validate-only workspace --app-id 123 --app-key "$c/app.pem" <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+OUT="$( cd "$c/repo" && "$FALCONET" init --app-id 123 --app-key "$c/app.pem" <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 ERR="$(cat "$WORK/err")"
 
 it "--app-id and --app-key win: no listener, the flags' App sealed"
@@ -417,7 +417,7 @@ assert_eq 51 "$(sealed_len FALCONET_APP_ID)" "app id sealed length (48 + 3)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":2,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"}]}}'
 c="$(new_checkout existing)"
 : >"$FAKE_GITHUB/requests.log"
-OUT="$( cd "$c/repo" && "$FALCONET" init --plan dns --validate-only workspace <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+OUT="$( cd "$c/repo" && "$FALCONET" init <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 
 it "with the App's secrets existing, nothing is registered and both are ok"
 assert_eq 0 "$RC" "exit code"
@@ -428,7 +428,7 @@ assert_line "$OUT" "ok           3. secret FALCONET_APP_ID exists (not replaced;
 
 c="$(new_checkout org)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra","body":{"name":"wayfinders-infra","full_name":"zetlen/wayfinders-infra","owner":{"login":"zetlen","type":"Organization"},"html_url":"https://github.com/zetlen/wayfinders-infra","private":true,"visibility":"private","has_issues":true,"default_branch":"main"}}'
-start_init "$c" 40s --plan dns --validate-only workspace
+start_init "$c" 40s
 
 it "when the owner is an organisation, the form POSTs to the organisation's new-App page"
 assert_eq "https://github.com/organizations/zetlen/settings/apps/new?state=$NONCE" "$(action_of "$PAGE")" "form action"
@@ -441,7 +441,7 @@ assert_eq 0 "$RC" "exit code"
 
 c="$(new_checkout named)"
 script
-start_init "$c" 40s --plan dns --validate-only workspace --app-name "My Falconet"
+start_init "$c" 40s --app-name "My Falconet"
 
 it "--app-name is the manifest's name"
 assert_eq "My Falconet" "$(manifest_of "$PAGE" | jq -r .name)" "name"
@@ -450,7 +450,7 @@ finish_init
 assert_eq 0 "$RC" "exit code"
 
 c="$(new_checkout long)"
-start_init "$c" 40s --plan dns --validate-only workspace --repo zetlen/a-very-long-repository-name-indeed-yes
+start_init "$c" 40s --repo zetlen/a-very-long-repository-name-indeed-yes
 
 it "a default name over 34 characters is cut to 34, and stderr says so"
 assert_eq "falconet-zetlen-a-very-long-reposi" "$(manifest_of "$PAGE" | jq -r .name)" "name"
@@ -489,7 +489,7 @@ assert_contains "$("$FALCONET" init -h 2>&1)" "--no-browser" "usage"
 c="$(new_checkout keepapp)"
 script '{"method":"GET","path":"/repos/zetlen/wayfinders-infra/actions/secrets","body":{"total_count":2,"secrets":[{"name":"FALCONET_APP_ID"},{"name":"FALCONET_APP_PRIVATE_KEY"}]}}'
 : >"$FAKE_GITHUB/requests.log"; : >"$FAKE_GITHUB/requests.jsonl"
-OUT="$( cd "$c/repo" && "$FALCONET" init --replace-secrets --no-browser --app-timeout 3s --plan dns --validate-only workspace <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
+OUT="$( cd "$c/repo" && "$FALCONET" init --replace-secrets --no-browser --app-timeout 3s <"$WORK/empty" 2>"$WORK/err" )"; RC=$?
 
 it "--replace-secrets with the App's secrets present and no --app-name keeps the App, and says how to replace it"
 assert_eq 0 "$RC" "exit code"

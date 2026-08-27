@@ -20,7 +20,7 @@ a finding, not a formatting error.
 | The pipeline is falconet's own code, not `gh-aw` | I5, I6 | this repository acquires the threat model gh-aw is sized for: strangers triggering workflows | [below](#the-pipeline-is-falconets-own-code) |
 | One agent pass, holding nothing it could publish with | I5 | never for convenience — a second pass changes I5, and that goes to the operator | [below](#one-agent-pass-holding-nothing) |
 | No second, reviewing agent | I6 | a review harness clears the bar the first one failed: an independent, uncontaminated read of diff, message and plan, worth more than it costs | [below](#no-second-reviewing-agent) |
-| GitHub, Claude Code and OpenTofu are the platform | I6 | an adopter exists on another forge or harness — and there is one adopter | [below](#github-claude-code-and-opentofu-are-the-platform) |
+| GitHub and Claude Code are the platform; an OpenTofu repository is the shape | I6 | an adopter exists on another forge or harness — and there is one adopter | [below](#github-and-claude-code-are-the-platform) |
 | Stage-level verbs, one JSON config file | I6 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
 | Packaged as a reusable workflow plus a composite action | I6 | the credentials or setup it demands outgrow what an adopter can check in the README's steps | [below](#a-reusable-workflow-and-a-composite-action) |
 | Verbs never call each other; they leave files in `.falconet/` | I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
@@ -30,9 +30,7 @@ a finding, not a formatting error.
 | Setup is two verbs and a token the operator mints | I6 | `init` cannot do a step, and the manual path becomes the only path | [below](#setup-is-two-verbs-and-a-token) |
 | A GitHub App, registered purely as a credential | I4, I6 | GitHub offers an identity that needs no App, or registration stops fitting inside `init` | [below](#a-github-app-purely-as-a-credential) |
 | One release asset per target, digest in the tree before the tag | I6 | the build stops reproducing, or an adopter needs a target the four assets miss | [below](#one-release-asset-per-target) |
-| `plan-env` is one secret whose values are all static strings | I6 | a stack needs a credential that cannot be a static string — OIDC, workload identity | [below](#plan-env-is-one-secret-of-static-strings) |
-| Every planned stack is planned; the diff decides whether there is anything to plan, and whose fault a failure is | I3, I1 | a real repository layout appears that discovery reads wrongly | [below](#every-planned-stack-is-planned) |
-| Never narrow a plan with `-target` | I1 | never. This is I1 in mechanism form and it moves only when I1 does | [below](#never-narrow-a-plan-with--target) |
+| falconet does not plan; the repository's plan bot does | I1, I2, I3, I6 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
 
 ## The pipeline is falconet's own code
 
@@ -61,8 +59,8 @@ release asset, no token needed.
 
 The agent's grant is exactly `Read,Edit,Write,Grep,Glob`, capped at 40 turns.
 It edits files, writes `commit-msg.txt` (or `needs-info.md`), and stops. There
-is exactly one validate step and no repair loop: nothing feeds a failure back
-for another turn.
+is no repair loop: nothing feeds a guard's refusal, or the plan bot's verdict,
+back for another turn.
 
 ## No second, reviewing agent
 
@@ -72,23 +70,23 @@ unwired, was never called, and has been deleted; git has it. Any replacement
 must clear the bar the original set: an independent, uncontaminated read of
 diff, commit message and plan before a person is asked to look.
 
-## GitHub, Claude Code and OpenTofu are the platform
+## GitHub and Claude Code are the platform
 
 The agent pass runs on `anthropics/claude-code-action`; the workstation
 equivalent is `claude -p --allowedTools Read,Edit,Write,Grep,Glob`, a CLI the
 binary could spawn like any other. The GitHub client speaks GitHub only.
-`plan.command` is a string, so a terraform binary works, but the repository
-layout falconet discovers is an OpenTofu one. Forge- and harness-agnosticism
-are non-goals: adapters are code that pays off only when someone writes the
-second one.
+OpenTofu is no longer a runtime dependency — since 2026-08-26 the binary
+runs no `tofu` — but an OpenTofu or Terraform repository is still the shape
+served: `paths.allow` defaults to `*.tf`, and the content denylist names
+HCL constructs. Forge- and harness-agnosticism are non-goals: adapters are
+code that pays off only when someone writes the second one.
 
 ## Stage-level verbs, one JSON config file
 
-A thing is a public verb if and only if a caller invokes it directly — the six
-pipeline verbs (`prepare`, `commit`, `push`, `validate`, `pause`,
-`assemble`), three for a person (`doctor`, `init`, `version`). `prompt`,
-`config`, `scan` and `plan-env` exist unlisted: public in that they work, not
-vocabulary. Rejected: mirroring the origin's script names one-to-one (leaves
+A thing is a public verb if and only if a caller invokes it directly — the
+four pipeline verbs (`prepare`, `commit`, `push`, `pause`), three for a
+person (`doctor`, `init`, `version`). `prompt`, `config` and `scan` exist
+unlisted: public in that they work, not vocabulary. Rejected: mirroring the origin's script names one-to-one (leaves
 orchestration in YAML — two code paths) and grouping by domain (`issue park`,
 `git prepare` — a taxonomy at six verbs).
 
@@ -102,7 +100,7 @@ few runner-seconds; paid willingly.
 
 The config is one JSON file at `.github/falconet.json` (`--config`,
 `FALCONET_CONFIG`). Every key is optional, and the defaults name nothing of
-any particular repository's: `stacks` are empty, which means discover. JSON
+any particular repository's. JSON
 over YAML because it is strict and needs no `yq`; JSONC was weighed and
 brings nothing JSON lacks here. Prompt overrides are paths relative to the
 repository root; absent, the prompt embedded in the binary is used. The
@@ -116,7 +114,7 @@ prose.
 The boundaries between jobs are the security model: the agent's job holds no
 token, the scripted jobs never run the agent, and App installation tokens are
 minted per step in the jobs that need them. `action.yml` is setup plus
-pass-through — it pins and installs falconet, tofu and gitleaks, then runs one
+pass-through — it pins and installs falconet and gitleaks, then runs one
 verb — for a caller that wants a verb inside a workflow of its own. Nothing
 of falconet's is vendored into the adopter's tree; upgrading is moving a tag.
 
@@ -128,10 +126,10 @@ mechanism reporting a fault. The reopen trigger is that problem's size.
 
 They leave files for each other in `handoff_dir` (default `.falconet/`),
 written *inside* the consumer's checkout and untracked: `request.md`,
-`plan-baseline.txt`, `base-sha.txt`, `branch.txt` from `prepare`;
-`commit-msg.txt` or `needs-info.md` from the agent; `plan.txt`, `diff.patch`,
-`changed-files.txt`, `validation-failure.txt` from `validate`; `pr.md` from
-`assemble`. Every job that runs a verb writes `.falconet/` into
+`base-sha.txt`, `branch.txt` from `prepare`; `commit-msg.txt` or
+`needs-info.md` from the agent; `commit-subject.txt`, `commit-body.md` or
+`failure-reason.txt` from `commit`; `pr.md` from the workflow's own body
+step. Every job that runs a verb writes `.falconet/` into
 `.git/info/exclude` first, because `prepare` refuses a dirty tree and
 `commit` refuses any changed path outside the allowlist, and the consumer's
 `.gitignore` is not to be relied on. The same verb sequence therefore runs on
@@ -146,8 +144,8 @@ and every later `--branch` reads it, never `BRANCH`.
 ## Every assertion crosses a process boundary
 
 `tests/run.sh` spawns `$FALCONET <verb>` and reads stdout, the exit code and
-files on disk; GitHub is a loopback fake behind `GITHUB_API_URL`; `tofu` and
-`gitleaks` are stubs whose argv is part of the contract; pushes land in bare
+files on disk; GitHub is a loopback fake behind `GITHUB_API_URL`; `gitleaks`
+is a stub whose argv is part of the contract; pushes land in bare
 repositories under a temp directory. No test reaches inside its subject — it
 is what let the suite adjudicate the port from bash to Go unchanged, and it
 keeps the guards behind I2 and I5 adjudicable from outside. What cannot be
@@ -182,7 +180,7 @@ the porting commits names every departure from the bash.
 
 `net/http` against `GITHUB_API_URL` (the variable Actions sets;
 `https://api.github.com` otherwise), authenticating with `GH_TOKEN` then
-`GITHUB_TOKEN`. What a run needs in CI is git, tofu, gitleaks and the binary;
+`GITHUB_TOKEN`. What a run needs in CI is git, gitleaks and the binary;
 on a workstation, the same. The workflow's own `run:` steps still use `gh`
 for the pull request and contain's check, on GitHub's runner where it already
 is; the binary never does.
@@ -224,56 +222,33 @@ verb, the way it installs gitleaks. A workstation installs from the release
 page or with `go install`. No Homebrew tap, no `curl | sh`: the level of
 commitment [operating.md](operating.md) declines is still declined.
 
-## plan-env is one secret of static strings
+## falconet does not plan
 
-The jobs that plan get their cloud credentials from a single `plan-env`
-secret, a JSON object of string values, which `init` validates before sealing
-and `plan-env` prints into the environment. It sits as late in the job as it
-can and never reaches `implement`. [operating.md](operating.md) is the
-account of how the operator provides it.
+falconet opens the pull request and stops. The plan a reviewer reads is
+posted on it by the plan bot the repository already runs on every pull
+request — Atlantis, dflook's `terraform-plan`, whatever plans a person's
+pull requests — from credentials falconet never holds; the pull-request body
+is the agent's account of the change and a `Closes` line, and the prompt
+tells the agent not to describe the plan. Branch protection on the bot's
+status is what stands between the pull request and an apply.
 
-## Every planned stack is planned
+Until 2026-08-26 the binary did this itself: per-stack `init`, `validate`
+and `plan` with a config that classified stacks, a `plan-env` secret and a
+verb that masked it into the environment, a baseline plan in `prepare`, a
+body assembler that refused to abridge, and `tofu fmt` in `commit` — about
+2,400 lines, a fifth of the tree, plus three rows of this register. All of
+it reimplemented what the plan bots do, for one adopter that needs a plan
+bot on its human pull requests anyway. It was removed so that the successor
+maintainer inherits one bespoke thing (issue → sandboxed agent → guarded
+commit → pull request) and one standard thing, instead of a half of each.
+Git has the three retired rows: `plan-env is one secret of static strings`,
+`Every planned stack is planned`, `Never narrow a plan with -target`.
 
-`validate` initialises and validates every stack the repository has, and
-plans every stack in `stacks.plan`, each under a `## <stack>` heading —
-including the only one. The diff does not narrow which stacks are planned: a
-`source =` walk cannot see a `data "terraform_remote_state"` edge, so a
-diff-narrowed plan can silently omit a stack the change really moved (that
-was the first form of this decision, amended the same day). What the diff
-decides is whether there is anything to plan at all, and whose fault a
-failure is: a failed init, validate or plan in a stack the change does not
-reach is advisory — a line in the log and a named, missing plan in the body,
-never a failed run, so a stack whose bucket was unreachable for ten seconds
-does not block a request about a different stack — while any failure in a
-stack the change does reach stops everything, because that one is about this
-change.
-
-A change that reaches nothing plannable gets a person, not a pull request:
-**uncovered** (a `.tf` in a directory the config names in neither list, or at
-the repository root) and **unplanned** (only `validate_only` stacks reached)
-are both reported in words the requester can read, saying nothing is wrong
-with the request. `wayfinders-infra#120` changed a database tier and got back
-`No changes.` — a true plan of a stack the change did not touch, under no
-heading — which is the pull request this row exists to stop opening.
-
-The layout is discovered, and the config classifies it. A directory holding
-`.tf` files is a root module unless another directory names it as a local
-`source`; the repository root is never a stack; a change in a module reaches
-every stack that sources it, transitively, templates and data files included.
-Naming neither `stacks` list means discover and plan everything found; naming
-either makes the config authoritative, and a `.tf` directory in neither is
-`MISSING` in `doctor` and uncovered in a run. Module edges are read with a
-regular expression over `source = "./…"` and `"../…"`; `.tf.json` is not
-read. `init` writes its config from the same discovery a run uses, so the two
-cannot drift. These are the assumptions Atlantis, Terragrunt and Spacelift
-make of an ordinary OpenTofu repository, and falconet makes no cleverer ones.
-
-## Never narrow a plan with `-target`
-
-A targeted plan does not show what an apply will do, and the person at the
-end of this pipeline approves an untargeted apply. It also makes OpenTofu
-print `The -target option is not for routine use` into a log an adopter reads
-while deciding whether this tool is serious. The way to plan less is to plan
-fewer stacks. `plan.command` defaults to `-refresh=false -lock=false`, from a
-read-only state credential, and a consumer who wants a refreshing plan says
-so in one key; what the default does not contain, and will not, is `-target`.
+What moved with it: I2's whole-plan-in-the-body and I3's the-plan-is-of-what-
+the-change-touches are now the bot's to deliver, and the charter says so.
+What falconet still owes them is that the pull request is of the right
+change, opened where the bot will see it, with no account of the plan in it
+that a reviewer could mistake for the evidence. The cost, stated plainly:
+nothing validates or formats the change before the pull request, and
+`doctor` cannot see whether a plan bot is configured — the canary is the
+check.

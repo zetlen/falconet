@@ -1,5 +1,5 @@
 // falconet — turn a plain-language infrastructure request into a pull request
-// carrying a real plan, and stop there.
+// a person can review, and stop there.
 //
 // This is a dispatcher and nothing else. It resolves a verb and hands over,
 // so the verb owns its own stdout, its own exit code, and its own argument
@@ -8,15 +8,14 @@
 //
 //	falconet <verb> [args]
 //
-// The six verbs are the stages of the pipeline (docs/decisions.md).
+// The four pipeline verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
-// `prompt`, `plan-env`, `scan` and `config` are unlisted on purpose: public
-// in the sense that they work, not in the sense that they are vocabulary.
-// The first two are the workflow's plumbing — a prompt resolved without
-// heredocs in YAML, and one secret turned into masked environment — `scan`
-// is the commit verb's secret scan, and `config` is what the config file
-// resolves to. Each is reachable here so that the test suite spawns it
+// `prompt`, `scan` and `config` are unlisted on purpose: public in the
+// sense that they work, not in the sense that they are vocabulary. `prompt`
+// is the workflow's plumbing — a prompt resolved without heredocs in YAML —
+// `scan` is the commit verb's secret scan, and `config` is what the config
+// file resolves to. Each is reachable here so that the test suite spawns it
 // through the same door as every verb.
 //
 // Exit codes, uniform across every verb:
@@ -29,6 +28,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -46,12 +46,10 @@ var version = "dev"
 
 const usageText = `Usage: falconet <verb> [args]
 
-  prepare   gate an issue, assign it, open a branch, capture a baseline plan
+  prepare   gate an issue, assign it, open a branch, lay out the handoff
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
-  validate  validate and plan every configured stack, collecting failures
   pause     put an issue into a terminal state and say so where it will be read
-  assemble  build a pull-request body carrying the whole plan
   doctor    check a repository against the install steps, and say which are missing
   init      do the install steps: the labels, the secrets, the files, one commit
   version   print the version and the toolchain this binary was built with
@@ -63,8 +61,8 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // dispatcher's whole knowledge of what exists; a name in neither is a usage
 // error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "pause", "validate", "assemble", "doctor", "init", "version"}
-	unlisted = []string{"prompt", "plan-env", "scan", "config"}
+	verbs    = []string{"prepare", "commit", "push", "pause", "doctor", "init", "version"}
+	unlisted = []string{"prompt", "scan", "config"}
 )
 
 // native is what this binary answers for: one entry per name in the two
@@ -74,19 +72,16 @@ var (
 // them, so a verb that is known and not implemented is a build defect the
 // test refuses, never a runtime path.
 var native = map[string]func(args []string) int{
-	"version":  runVersion,
-	"prepare":  runPrepare,
-	"config":   runConfig,
-	"assemble": runAssemble,
-	"commit":   runCommit,
-	"scan":     runScan,
-	"push":     runPush,
-	"pause":    runPause,
-	"validate": runValidate,
-	"prompt":   runPrompt,
-	"plan-env": runPlanEnv,
-	"doctor":   runDoctor,
-	"init":     runInit,
+	"version": runVersion,
+	"prepare": runPrepare,
+	"config":  runConfig,
+	"commit":  runCommit,
+	"scan":    runScan,
+	"push":    runPush,
+	"pause":   runPause,
+	"prompt":  runPrompt,
+	"doctor":  runDoctor,
+	"init":    runInit,
 }
 
 func main() {
@@ -307,4 +302,14 @@ flags:
 		return configUsage()
 	}
 	return 0
+}
+
+// digits is what an issue number must be, whole. The number goes into
+// comments and bodies verbatim, so "a number" is a claim worth checking
+// rather than an assumption.
+var digits = regexp.MustCompile(`^[0-9]+$`)
+
+func isRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
