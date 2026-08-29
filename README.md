@@ -656,29 +656,33 @@ Every key, with its default:
 
 | Key | Default | What it is |
 | --- | --- | --- |
-| `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. |
-| `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Constructs refused anywhere in a changed `.tf`, in this order. |
+| `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
+| `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. |
 | `issue.queue_label` | `infra-request` | The label that makes an issue eligible. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
 | `issue.branch_prefix` | `issue-` | Branches are `<prefix><number>-<slug>`. |
 | `issue.in_flight_prefixes` | `["issue-", "claude/issue-"]` | An open PR from a branch with any of these prefixes and this number means "already in flight". |
 | `labels.needs_info` / `labels.human` / `labels.pr` | `needs-info` / `ready-for-human` / `needs-plan-review` | Step 5's labels, if you named them differently. |
-| `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. |
+| `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. Either is rendered by `falconet prompt implement`: `{handoff}`, `{workspace}`, `{allow}` and `{deny}` are substituted from this file. |
 | `prompts.pause_needs_info` | the shipped [`prompts/pause-needs-info.md`](prompts/pause-needs-info.md), embedded in the binary | Likewise, for the question posted back to a requester. |
 | `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
 
-**The one default that does not transfer is the prompt.** The shipped
-[`prompts/implement.md`](prompts/implement.md) carries a "standing facts"
-block describing the repository this came from — its registrar sandbox, its
-scratch tenant — and the copy embedded in the binary is that one. To change
-it, copy [the file](prompts/implement.md) into your repository as
+**The shipped prompt names nothing of any particular repository's.** It
+tells the agent what `paths.allow` and `paths.deny_content` say — the
+guard's own config, so what the agent is told it may touch is what the
+commit stage enforces — and binds it to your repository's `AGENTS.md` and
+README. Standing facts you want the agent to take as given (what is a
+sandbox and what is live, where each kind of thing lives, which files it
+must never weaken) go in `AGENTS.md`, where they bind a person too. A prompt
+of your own is for when the wording itself should differ: copy
+[the file](prompts/implement.md) into your repository as
 `prompts/implement.md` (which is what `init` does — byte for byte, so the
-two placeholders below stay placeholders), replace that block with what is
-true of yours, and point `prompts.implement` at the copy. `{handoff}` and
-`{workspace}` in it are substituted at run time, by `falconet prompt
-implement` — which is why that command's output is not the copy to commit:
-it has already put this machine's paths where the placeholders were.
+placeholders stay placeholders), edit it, and point `prompts.implement` at
+the copy. `{handoff}`, `{workspace}`, `{allow}` and `{deny}` in it are
+substituted at run time, by `falconet prompt implement` — which is why that
+command's output is not the copy to commit: it has already put this
+machine's paths and this file's lists where the placeholders were.
 
 **Check:** `jq -e . .github/falconet.json > /dev/null && echo parses`, and
 every `prompts.*` path names a file under the repository root — `doctor`'s
@@ -798,7 +802,7 @@ is a tag.
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted if it could be, and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
-| The PR's explanation talks about a sandbox or a tenant you do not have | The shipped prompt's standing facts are the origin's. | Step 6, `prompts.implement`. |
+| The PR's explanation talks about a sandbox or a tenant you do not have | `prompts.implement` names a copy of the shipped prompt from before it stopped carrying the origin's standing facts. | Step 6: edit the copy, or delete it and the key so the shipped prompt is used. |
 
 ### Known limits
 

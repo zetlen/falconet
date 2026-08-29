@@ -67,6 +67,49 @@ assert_eq 1 "$rc" "exit code"
 it "and says which prompt it could not find"
 assert_contains "$out" "custom/gone.md" "stderr"
 
+# --- the prompt says what the guards' config says ---------------------------
+
+# The shipped prompt once carried the repository falconet was extracted from:
+# its registrar sandbox, its scratch tenant, its file names, and a hand-written
+# `.tf` allowlist and HCL denylist that the config might not agree with. Every
+# adopter's agent was told about a sandbox it did not have. The prompt now
+# renders `paths.allow` at {allow} and `paths.deny_content` at {deny}, and
+# names nothing of any particular repository's.
+d="$(proj guards)"
+printf '{"paths":{"allow":["docs/*.md","config/**"],"deny_content":[]}}\n' >"$d/.github/falconet.json"
+out="$( cd "$d" && "$FALCONET" prompt implement --config "$d/.github/falconet.json" 2>&1 )"
+
+it "the allowlist the agent is told is the config's, as written"
+assert_contains "$out" '`docs/*.md` or `config/**`' "prompt"
+
+it "and not the default"
+assert_not_contains "$out" '*.tf' "prompt"
+
+it "an empty denylist leaves no sentence about refused content"
+assert_not_contains "$out" 'refuses a changed file' "prompt"
+
+it "and no placeholder behind"
+assert_not_contains "$out" '{deny}' "prompt"
+
+it "nothing of the origin repository is in the shipped prompt"
+assert_not_contains "$out" 'Namecheap' "prompt"
+
+it "not its site"
+assert_not_contains "$out" 'papernapkin' "prompt"
+
+it "not its file layout"
+assert_not_contains "$out" 'records-*.tf' "prompt"
+
+it "and not its tooling"
+assert_not_contains "$out" 'tofu' "prompt"
+
+it "with no config at all, the prompt names the default allowlist"
+out="$("$FALCONET" prompt implement)"
+assert_contains "$out" '`*.tf`' "prompt"
+
+it "and the default denylist, in config order"
+assert_contains "$out" '`data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(` or `file(`' "prompt"
+
 # --- printing a prompt is a read --------------------------------------------
 
 d="$(proj noside)"
