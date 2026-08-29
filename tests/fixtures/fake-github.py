@@ -27,29 +27,23 @@ What it answers:
 
     - a request with no Authorization header is 401, as GitHub's answer to an
       unauthenticated write is. A verb that forgot its token fails here
-      rather than in production. One route is excepted, below: the App
-      manifest conversion, whose whole point is that no credential exists
-      yet (OPEN_ROUTES); a responses.json rule can still script a 401 for it.
+      rather than in production.
     - DIR/responses.json, if present, is re-read on EVERY request: a list of
       {"method": "POST", "path": "/repos/o/r/issues/1/comments",
        "status": 500, "body": {...}, "headers": {"X-OAuth-Scopes": "repo"},
        "times": 2}
       objects, first match wins on method+path, every key optional. A test
-      writes it to script a specific issue, pull-request list, label list,
-      secret list, permissions or a failure, and removes it to let the next
-      call through. "headers" are sent with the answer: that is how a test
-      makes the fake look like a classic token's GitHub. "times" is how many
-      requests the rule answers before it stops matching — "404 twice, then
-      the default 200" is how a test watches a poll — counted in
-      DIR/responses.state, which is reset whenever responses.json's bytes
-      change, so a test that rewrites the rules starts every count over.
+      writes it to script a specific issue, pull-request list or a failure,
+      and removes it to let the next call through. "headers" are sent with
+      the answer. "times" is how many requests the rule answers before it
+      stops matching — "404 twice, then the default 200" is how a test
+      watches a poll — counted in DIR/responses.state, which is reset
+      whenever responses.json's bytes change, so a test that rewrites the
+      rules starts every count over.
     - otherwise the routes below, with bodies shaped like GitHub's. The
-      defaults are a private repository with issues enabled, Actions
-      allowing every action, a read-only default token, NO secrets and NO
-      labels (a test scripts the ones it wants to exist), and an empty
-      pull-request and comment list. GET …/issues/N has NO default and is
-      404 on purpose: a test that forgot to script its issue fails loudly
-      rather than passing on an invented one.
+      defaults are an empty pull-request and comment list. GET …/issues/N
+      has NO default and is 404 on purpose: a test that forgot to script its
+      issue fails loudly rather than passing on an invented one.
     - anything else is 404 {"message": "Not Found"}.
 
 The query string is recorded (requests.jsonl's "query") and ignored for
@@ -61,7 +55,6 @@ tests/lib.sh kills it anyway.
 """
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -72,85 +65,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-# The secrets public key is FIXED — 32 bytes, 1 through 32 — so a sealed
-# value a test records is reproducible, and the key id is the one GitHub's
-# own documentation uses as its example.
-PUBLIC_KEY = {
-    "key_id": "568250167242549743",
-    "key": base64.b64encode(bytes(range(1, 33))).decode("ascii"),
-}
-
-# The App's private key, as POST /app-manifests/{code}/conversions answers
-# it: a FIXED 2048-bit RSA key in the PKCS#1 form GitHub issues ("RSA
-# PRIVATE KEY"), generated once with `openssl genrsa -traditional 2048` while
-# building #12. It is a TEST KEY and nothing else: it has never been given to
-# GitHub, signs nothing but the JWTs a test watches init poll with, and is
-# committed as such. A test asserts that these bytes reach the fake only
-# sealed, and reach no file under the scratch directory at all.
-# Stored base64-encoded rather than as PEM text so that nothing which scans a
-# push for the shape of a private key trips over a fixture; the bytes are the
-# same, and TEST_PEM is the PEM.
-TEST_PEM = base64.b64decode(
-    """
-LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb2dJQkFBS0NBUUVBN08vUW9xeStN
-d0ZzVzMxUHZXOGlOa1l0SnI3RW40NEVtdDEydzFoK3lWUVUxRmVPCmxmV25vTGQxVW0rTXBmbkxB
-aEJJVWdOZ2MvYWlhS1dwUTV6QS9LVXNIY3RpNUM0cmdIaUtQUjJYK2NMMjUyYXkKNzM2NUZkSkFz
-Y09lZzVpVVlqa2FibUljcmhtVERabGUzbzdUdVUzQ1VGVW1UbVhhQkQrdmQ2T2F5aVBqVmk1OQpw
-VUMxZTFuQllVbDhXVjNCdGk0SlR1a0luQ0N1K1YvQXpZZkhDcVdhRkFNalVPVHIzVE4velVnaUhN
-aEdZVHpBCkJSUTR1akRWVkxGVCtqcktNZHRZa2J1bmpTdDl3VnQxdTlielcxT2dRaXlDUHUydUxD
-Ynd1Y0FpbUppejBvajAKZGMvelU3ZUV0SGVaaDFNN1VZajY2aDdQUFpxY0V0YVdkckJqS3dJREFR
-QUJBb0lCQUFpaHJleVhOWENmUHliUQpHRjBTMU9DOFNyM01HbGFqc2xnLzlDa21xcXZEOCtST2Nr
-UFZTSytLcjJ2NjQxbFNrY28zOUtLRU8vbk5oTm9pCkd0bjdObTZkeDg4b0R5aTM0OTdReFZ4M25R
-Yzh5b2pnaldrN0tSdjU1bUJ6ZTIxWTNDTDk2SkFYNCtxVnhPMHMKWnEvZDdTbWxnd3d4SmUyYU9V
-aUpWMmVZM3JVNWFvVDh2M1A0WFNqZ1RXOFRMZmUzdWJ2aDRRK1dzSlZDVTRXbwpGeWFEdVN6YnBY
-RWhiZnFDTDFLdXcyL0RRQTZ4WEpwek52QTFha2IwTTRJZW82cjlrcjJtK2pMeHZCUWZsdDZmCkFN
-QmpoaE5jdXlPRXpBSjY3OU0wSHJBUGRjWGFsMTQyUEVYOHNwSlZnQWZTWUVZUGgrMW8zZXBjdTRz
-YWdkL0EKRGhmaFVEa0NnWUVBL295Nyt6Z0NoL252VHdqbk1GOXozN3pTbzRnL1hBdWowZTdUQXYz
-U1hScnhMTVBQMTE4TApBc2h3MnVxcTZuclhJWTQwQmFPSHY1UlNmRGVEemRMbmtQb2NYUmUzVTdZ
-M1BKWEsyVHVpWC9GUzlzUzFRT3RFCkVvY0VTSmp3YUVUNUVhY0xxU1JGRUsyUWh1RG9qZFRBOHJp
-MDBkK3FZd0RGWURXbUhjRnNxY2tDZ1lFQTdrbGsKVHYwb25KQ2xWV2haTFpiRFpPSm1FcEtodUpS
-QUZ4ci9LOTNnT3RzVlJkTWkwMjRwUm05TmZPTXZFQktYTkMxLwpmZW9QNFJBb1pCK3VpZVIvZTVE
-aFhTckkzbVBHdlA0ZGR4ZEJqY3dHNzBSU1hkOWg4dWxJYVdIVDM3YnR1U01kCllnYkJrRm14YndX
-Skkxanp3S1JTNjA3bTh3bUZNVlFPVmt1MkgxTUNnWUFKMnBiWVZjVzdUOUNVeGFwMWMreC8KWjhi
-YnI4V01JYU00MkQ3dzZiU0FDQy8zNUtpaUZMclBZOFVDcEh6elVNZ05NMzBPRHRPTmRnZHZhWksv
-bi85NAozRVhHME1rM0EySEdCYUp4b0Y1YnluTEV2TDZyZ2JBRDY1Z2QyMVhMSTRoa3g0dXJBNDFz
-NU5zb2JZSnpJeDVKCkJ4OXcxSEM3SG1lRm51NE1UdFdQQ1FLQmdIMmU1MmpWQWJINGQ1RWRIOVp1
-NHJldXUwMFRUSHE0ZlVreERGRWQKK1haTnhWczRRZVhnNzVXWVcrdDVBWGlodEdEbms0elg5bU1h
-VjVEaE91eXJMNkgrOFRCaXU5NnlEelhYYWNVOAoxMnhmb1ZCR1huM3FwQUtoaFhFNUI2K3JDb3hO
-dk5ITzZnQ2xxR3IxS2lVZVlmS3ZMcCtxeXdwWmZJUlM0ZlFRCm1nVE5Bb0dBYzAwMjFmRDJmWnNz
-R2c1Qkk1ekJDM2s2NXE1YmoycEhtd2trbTBoeTBUMjVhdjFPOUYrRnVMWEgKc3hYRDVUYWdzVVNl
-ZXlRcEhhbEU1NmNOOC9QREpZWm5WdVBTcm1JVXRDVGg3RktHNDdJMFJESUZIWkZGWWt6bgpxWTNJ
-MzgyeEJNdEdtQjk5RFcyU09mTElNTU4zK2h3VzBBNHJiN2xJWElCbnBUTForRjA9Ci0tLS0tRU5E
-IFJTQSBQUklWQVRFIEtFWS0tLS0t
-    """
-).decode("ascii")
-
-# The App the conversion registers, and the installation of it the poll
-# waits for. Fixed, so a test can name them.
-APP = {
-    "id": 12345,
-    "slug": "falconet-zetlen-wayfinders-infra",
-    "name": "falconet-zetlen-wayfinders-infra",
-    "node_id": "A_kwDOAAAAAc4AAAAB",
-    "client_id": "Iv1.0123456789abcdef",
-    "owner": {"login": "zetlen", "type": "User"},
-    "html_url": "https://github.com/apps/falconet-zetlen-wayfinders-infra",
-    "external_url": "https://github.com/zetlen/wayfinders-infra",
-    "permissions": {"contents": "write", "issues": "write", "pull_requests": "write"},
-    "events": [],
-    # The two a verb must discard unused: neither is the credential.
-    "client_secret": "CLIENT-SECRET-MARKER-0123456789",
-    "webhook_secret": "WEBHOOK-SECRET-MARKER-0123456789",
-    "pem": TEST_PEM,
-}
-
-# Routes that answer WITHOUT an Authorization header, the one exception to
-# the 401 rule: the manifest conversion is the bootstrap of a credential,
-# and the documentation lists no token for it. init tries it without a
-# token first and a test asserts that it did; a responses.json rule is still
-# consulted, so a test can script the 401 that would send init back with
-# the setup token.
-OPEN_ROUTES = [
+ROUTES = [
     ("POST", r"^/app-manifests/([^/]+)/conversions$"),
 ]
 
@@ -159,14 +74,6 @@ ROUTES = [
     # parsed body and returns (status, body).
     #
     # --- reads -------------------------------------------------------------
-    ("GET", r"^/repos/([^/]+)/([^/]+)$",
-     lambda m, b: (200, {
-         "name": m[2], "full_name": f"{m[1]}/{m[2]}",
-         "owner": {"login": m[1], "type": "User"},
-         "html_url": f"https://github.com/{m[1]}/{m[2]}",
-         "private": True, "visibility": "private", "has_issues": True,
-         "default_branch": "main",
-     })),
     # GET …/issues/N: deliberately no route (404) — see the docstring.
     ("GET", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
      lambda m, b: (200, [])),
@@ -174,34 +81,7 @@ ROUTES = [
      lambda m, b: (200, [])),
     ("GET", r"^/user$",
      lambda m, b: (200, {"login": "fake-user", "type": "User"})),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions$",
-     lambda m, b: (200, {"enabled": True, "allowed_actions": "all"})),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions/selected-actions$",
-     lambda m, b: (200, {"github_owned_allowed": True, "verified_allowed": False,
-                         "patterns_allowed": []})),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/permissions/workflow$",
-     lambda m, b: (200, {"default_workflow_permissions": "read",
-                         "can_approve_pull_request_reviews": False})),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/secrets$",
-     lambda m, b: (200, {"total_count": 0, "secrets": []})),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/actions/secrets/public-key$",
-     lambda m, b: (200, dict(PUBLIC_KEY))),
-    ("GET", r"^/repos/([^/]+)/([^/]+)/labels$",
-     lambda m, b: (200, [])),
-    # The App's installation on the repository: installed, by default. A
-    # test scripts a 404 — with "times" — to watch init wait for the click.
-    ("GET", r"^/repos/([^/]+)/([^/]+)/installation$",
-     lambda m, b: (200, {
-         "id": 777, "app_id": APP["id"], "target_type": "User",
-         "account": {"login": m[1], "type": "User"},
-         "repository_selection": "selected",
-         "permissions": APP["permissions"], "events": [],
-     })),
     # --- writes ------------------------------------------------------------
-    # The manifest conversion: the App, its private key included. See
-    # OPEN_ROUTES for why this answers without a token.
-    ("POST", r"^/app-manifests/([^/]+)/conversions$",
-     lambda m, b: (201, dict(APP))),
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
      lambda m, b: (201, {
          "id": 1,
@@ -221,15 +101,6 @@ ROUTES = [
          "assignees": [{"login": login} for login in (b or {}).get("assignees", [])]
          if isinstance(b, dict) else [],
      })),
-    ("POST", r"^/repos/([^/]+)/([^/]+)/labels$",
-     lambda m, b: (201, {
-         "id": 1,
-         "name": (b or {}).get("name") if isinstance(b, dict) else None,
-         "color": (b or {}).get("color", "ededed") if isinstance(b, dict) else "ededed",
-         "description": (b or {}).get("description", "") if isinstance(b, dict) else "",
-     })),
-    ("PUT", r"^/repos/([^/]+)/([^/]+)/actions/secrets/([^/]+)$",
-     lambda m, b: (201, {})),
 ]
 
 
@@ -319,9 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         })
 
         extra = {}
-        open_route = any(m == method and re.match(pattern, path)
-                         for m, pattern in OPEN_ROUTES)
-        if not self.headers.get("Authorization") and not open_route:
+        if not self.headers.get("Authorization"):
             status, answer = 401, {"message": "Requires authentication"}
         else:
             found = self.state.scripted(method, path)

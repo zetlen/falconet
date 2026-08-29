@@ -9,7 +9,7 @@ author: zetlen
 inputs:
   verb:
     description: >-
-      One of prepare, commit, push; the unlisted prompt; or doctor. Not
+      One of prepare, commit, push, or the unlisted prompt. Not
       pause: `args` is split on whitespace and a pause preamble is a
       sentence, so it runs from PATH in the workflow's own run: steps.
       Empty means setup only: the pinned binaries are installed

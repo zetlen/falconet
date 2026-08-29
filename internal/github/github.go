@@ -47,27 +47,12 @@ func APIURLFromEnv() string {
 }
 
 // TokenFromEnv is $GH_TOKEN, or $GITHUB_TOKEN, or empty — the two names the
-// workflow hands the verbs (ADR-0006 D2). Setup's credential is a different
-// variable with a different name on purpose (D4), and is not looked for here.
+// workflow hands the verbs (ADR-0006 D2).
 func TokenFromEnv() string {
 	if t := os.Getenv("GH_TOKEN"); t != "" {
 		return t
 	}
 	return os.Getenv("GITHUB_TOKEN")
-}
-
-// SetupTokenFromEnv is $FALCONET_SETUP_TOKEN, or empty. Setup's credential
-// (ADR-0006 D4) is a token the operator mints — a fine-grained personal
-// access token scoped to the one repository, with a seven-day expiry — and
-// this is the only name it is read under.
-//
-// GITHUB_TOKEN and GH_TOKEN are deliberately NOT fallbacks. In CI they are
-// the Actions token, which cannot do what setup does and must never be asked
-// to; on a laptop they are whatever someone set for something else. A setup
-// credential is powerful and short-lived, and its name should say which kind
-// it is.
-func SetupTokenFromEnv() string {
-	return os.Getenv("FALCONET_SETUP_TOKEN")
 }
 
 // ServerHostFromEnv is the host of $GITHUB_SERVER_URL — the variable Actions
@@ -182,12 +167,11 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, e.Reason())
+	return fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, e.reason())
 }
 
-// Reason is the status and GitHub's message, without the request — what a
-// report line that already names the check wants to quote.
-func (e *Error) Reason() string {
+// reason is GitHub's message, or what stands in for one.
+func (e *Error) reason() string {
 	what := e.Message
 	switch {
 	case e.Status == http.StatusNotFound:
@@ -201,27 +185,17 @@ func (e *Error) Reason() string {
 // Do makes one request. in, when not nil, is sent as JSON; out, when not
 // nil, is filled from a JSON response. Any status outside 2xx is an *Error.
 func (c *Client) Do(method, path string, in, out any) error {
-	_, err := c.Request(method, path, in, out)
-	return err
-}
-
-// Request is Do, handing back the response headers as well. They are
-// returned whenever GitHub answered at all — beside an *Error too — and are
-// nil only when no response arrived. doctor reads X-OAuth-Scopes from them:
-// a classic token reports its scopes there, a fine-grained token reports
-// nothing, and a refusal carries the header just as an answer does.
-func (c *Client) Request(method, path string, in, out any) (http.Header, error) {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
 		if err != nil {
-			return nil, fmt.Errorf("%s %s: encoding the request: %v", method, path, err)
+			return fmt.Errorf("%s %s: encoding the request: %v", method, path, err)
 		}
 		body = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequest(method, c.BaseURL+path, body)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %v", method, path, err)
+		return fmt.Errorf("%s %s: %v", method, path, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -235,22 +209,22 @@ func (c *Client) Request(method, path string, in, out any) (http.Header, error) 
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %v", method, path, err)
+		return fmt.Errorf("%s %s: %v", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return resp.Header, fmt.Errorf("%s %s: reading the response: %v", method, path, err)
+		return fmt.Errorf("%s %s: reading the response: %v", method, path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return resp.Header, &Error{Method: method, Path: path, Status: resp.StatusCode, Message: message(raw)}
+		return &Error{Method: method, Path: path, Status: resp.StatusCode, Message: message(raw)}
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
-			return resp.Header, fmt.Errorf("%s %s: decoding the response: %v", method, path, err)
+			return fmt.Errorf("%s %s: decoding the response: %v", method, path, err)
 		}
 	}
-	return resp.Header, nil
+	return nil
 }
 
 // message is the "message" field of an error response, or nothing.
@@ -305,8 +279,7 @@ type User struct {
 	Type  string `json:"type"`
 }
 
-// Label is a repository label. Color and Description are optional on the
-// way in (CreateLabel) and absent from nothing on the way out.
+// Label is a repository label, as an issue carries it.
 type Label struct {
 	Name        string `json:"name"`
 	Color       string `json:"color,omitempty"`
@@ -344,57 +317,9 @@ type PullRequest struct {
 	} `json:"head"`
 }
 
-// Repository is the repository object: the fields README step 1 checks, and
-// html_url, which the App manifest names as the App's homepage (step 3).
-type Repository struct {
-	Name          string `json:"name"`
-	FullName      string `json:"full_name"`
-	HTMLURL       string `json:"html_url"`
-	Owner         User   `json:"owner"`
-	Private       bool   `json:"private"`
-	Visibility    string `json:"visibility"`
-	HasIssues     bool   `json:"has_issues"`
-	DefaultBranch string `json:"default_branch"`
-}
-
-// ActionsPermissions is the repository's Actions policy: whether Actions is
-// enabled, and which actions may run — "all", "local_only" or "selected".
-type ActionsPermissions struct {
-	Enabled        bool   `json:"enabled"`
-	AllowedActions string `json:"allowed_actions"`
-}
-
-// SelectedActions is what "selected" allows: GitHub's own, verified
-// creators', and a list of patterns.
-type SelectedActions struct {
-	GithubOwnedAllowed bool     `json:"github_owned_allowed"`
-	VerifiedAllowed    bool     `json:"verified_allowed"`
-	PatternsAllowed    []string `json:"patterns_allowed"`
-}
-
-// WorkflowPermissions is the default GITHUB_TOKEN grant — "read" or "write".
-type WorkflowPermissions struct {
-	DefaultWorkflowPermissions   string `json:"default_workflow_permissions"`
-	CanApprovePullRequestReviews bool   `json:"can_approve_pull_request_reviews"`
-}
-
-// Secret is a repository secret, by name only: a value is never readable.
-type Secret struct {
-	Name string `json:"name"`
-}
-
-// PublicKey is the repository's secrets public key, which a value is sealed
-// to before it is PUT. KeyID travels with the sealed value.
-type PublicKey struct {
-	KeyID string `json:"key_id"`
-	Key   string `json:"key"`
-}
-
-// RepoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped.
-// Exported for the callers that build the repository request by hand to read
-// its headers (doctor and init), so that every call spells the repository
-// the same way.
-func RepoPath(owner, name, rest string) string {
+// repoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped,
+// so that every call spells the repository the same way.
+func repoPath(owner, name, rest string) string {
 	return fmt.Sprintf("/repos/%s/%s%s", url.PathEscape(owner), url.PathEscape(name), rest)
 }
 
@@ -448,7 +373,7 @@ func (c *Client) ListIssueCommentsRaw(owner, name string, number int) (json.RawM
 // pull request is not read.
 func (c *Client) ListOpenPulls(owner, name string) ([]PullRequest, error) {
 	var out []PullRequest
-	if err := c.Do("GET", RepoPath(owner, name, "/pulls?state=open&per_page=100"), nil, &out); err != nil {
+	if err := c.Do("GET", repoPath(owner, name, "/pulls?state=open&per_page=100"), nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -463,75 +388,6 @@ func (c *Client) GetAuthenticatedUser() (*User, error) {
 	return &out, nil
 }
 
-// GetRepository is GET /repos/{owner}/{name}.
-func (c *Client) GetRepository(owner, name string) (*Repository, error) {
-	var out Repository
-	if err := c.Do("GET", RepoPath(owner, name, ""), nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetActionsPermissions is GET /repos/{owner}/{name}/actions/permissions.
-func (c *Client) GetActionsPermissions(owner, name string) (*ActionsPermissions, error) {
-	var out ActionsPermissions
-	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions"), nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetSelectedActions is GET /repos/{owner}/{name}/actions/permissions/selected-actions,
-// which only means something when AllowedActions is "selected".
-func (c *Client) GetSelectedActions(owner, name string) (*SelectedActions, error) {
-	var out SelectedActions
-	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions/selected-actions"), nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetWorkflowPermissions is GET /repos/{owner}/{name}/actions/permissions/workflow.
-func (c *Client) GetWorkflowPermissions(owner, name string) (*WorkflowPermissions, error) {
-	var out WorkflowPermissions
-	if err := c.Do("GET", RepoPath(owner, name, "/actions/permissions/workflow"), nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ListSecrets is GET /repos/{owner}/{name}/actions/secrets, one page of 100
-// names (values are never readable). The 101st secret is not read.
-func (c *Client) ListSecrets(owner, name string) ([]Secret, error) {
-	var out struct {
-		TotalCount int      `json:"total_count"`
-		Secrets    []Secret `json:"secrets"`
-	}
-	if err := c.Do("GET", RepoPath(owner, name, "/actions/secrets?per_page=100"), nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Secrets, nil
-}
-
-// GetSecretsPublicKey is GET /repos/{owner}/{name}/actions/secrets/public-key.
-func (c *Client) GetSecretsPublicKey(owner, name string) (*PublicKey, error) {
-	var out PublicKey
-	if err := c.Do("GET", RepoPath(owner, name, "/actions/secrets/public-key"), nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ListLabels is GET /repos/{owner}/{name}/labels, one page of 100. The 101st
-// label is not read.
-func (c *Client) ListLabels(owner, name string) ([]Label, error) {
-	var out []Label
-	if err := c.Do("GET", RepoPath(owner, name, "/labels?per_page=100"), nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // --- writes ----------------------------------------------------------------
 
 // RemoveIssueLabel is DELETE /repos/{owner}/{name}/issues/{number}/labels/{label}.
@@ -543,18 +399,4 @@ func (c *Client) RemoveIssueLabel(owner, name string, number int, label string) 
 func (c *Client) AddIssueAssignees(owner, name string, number int, logins []string) error {
 	return c.Do("POST", issuePath(owner, name, number, "assignees"),
 		map[string][]string{"assignees": logins}, nil)
-}
-
-// CreateLabel is POST /repos/{owner}/{name}/labels. A label that already
-// exists is a 422 from GitHub, which the caller decides about.
-func (c *Client) CreateLabel(owner, name string, label Label) error {
-	return c.Do("POST", RepoPath(owner, name, "/labels"), label, nil)
-}
-
-// PutSecret is PUT /repos/{owner}/{name}/actions/secrets/{secret}: the value,
-// already sealed to the repository's public key and base64-encoded, and the
-// key's id. Creating and updating are the same call.
-func (c *Client) PutSecret(owner, name, secret, encryptedValue, keyID string) error {
-	return c.Do("PUT", RepoPath(owner, name, "/actions/secrets/"+url.PathEscape(secret)),
-		map[string]string{"encrypted_value": encryptedValue, "key_id": keyID}, nil)
 }
