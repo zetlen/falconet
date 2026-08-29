@@ -9,38 +9,25 @@
 # worked the same queue — the case name says which one is encoded and why.
 #
 # GitHub is tests/fixtures/fake-github.py on loopback, with GITHUB_API_URL
-# pointing at it (ADR-0006 D2): a case scripts the issue, its comment thread,
-# the open pull-request list and any failure in responses.json, and reads
-# back what the verb asked for from requests.log. This file stubbed `gh`
-# until #17 moved the verb to the API, and the bash it used to answer for
-# went in #19. Green means through the binary. Nothing here runs tofu:
-# prepare stopped capturing a baseline plan when planning left falconet
-# (docs/decisions.md), and the handoff it lays out is git and GitHub only.
+# pointing at it: the verb shells out to `gh api` with full URLs built from
+# that variable. A case scripts the issue, its comment thread, the open
+# pull-request list and any failure in responses.json, and reads back what
+# the verb asked for from requests.log. Green means through the binary.
+# Nothing here runs tofu: prepare stopped capturing a baseline plan when
+# planning left falconet (docs/decisions.md), and the handoff it lays out
+# is git and GitHub only.
 
 # shellcheck source=tests/lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
-# --- the fake API, and no gh ------------------------------------------------
+# --- the fake API -------------------------------------------------------------
 
 fake_github
 export GH_TOKEN=test-token
 export GITHUB_REPOSITORY=zetlen/wayfinders-infra
 export GITHUB_SERVER_URL=https://github.com
-
-# Not a stub: a tripwire, as pause.test.sh has. A prepare that still shells
-# out to gh must fail here, loudly, and before the real gh on this machine
-# could carry the fake token above to the real GitHub.
-mkdir -p "$WORK/no-gh"
-cat >"$WORK/no-gh/gh" <<'TRIPWIRE'
-#!/usr/bin/env bash
-echo "gh: prepare.test.sh no longer stubs gh — the subject must speak GITHUB_API_URL" >&2
-exit 1
-TRIPWIRE
-chmod +x "$WORK/no-gh/gh"
-PATH="$WORK/no-gh:$PATH"
-export PATH
 
 new_checkout() { # name -> echoes path
   local base="$WORK/$1"

@@ -244,10 +244,9 @@ func TestPathAllowedIsAny(t *testing.T) {
 
 // --- the denylist ------------------------------------------------------------
 
-// TestDenyPatternDefaultsInOrder pins every default entry to the ERE the
-// sed-and-substitution produced for it, measured on 2026-08-22, in the order
-// the config carries them.
-func TestDenyPatternDefaultsInOrder(t *testing.T) {
+// TestDefaultDenyContentIsEmpty confirms paths.deny_content has no default —
+// the operator names what to deny, or nothing is denied.
+func TestDefaultDenyContentIsEmpty(t *testing.T) {
 	var defaults struct {
 		Paths struct {
 			DenyContent []string `json:"deny_content"`
@@ -256,7 +255,17 @@ func TestDenyPatternDefaultsInOrder(t *testing.T) {
 	if err := json.Unmarshal([]byte(config.Defaults), &defaults); err != nil {
 		t.Fatal(err)
 	}
-	want := []struct{ literal, pattern string }{
+	if len(defaults.Paths.DenyContent) != 0 {
+		t.Fatalf("the defaults carry %d entries, want 0", len(defaults.Paths.DenyContent))
+	}
+}
+
+// TestDenyPatternProducesTheExpectedERE pins each HCL construct — the ones
+// the README documents as presets — to the pattern the sed-and-substitution
+// produced for it, measured on 2026-08-22. These are no longer defaults but
+// are still the documented HCL preset an operator copies in.
+func TestDenyPatternProducesTheExpectedERE(t *testing.T) {
+	for _, w := range []struct{ literal, pattern string }{
 		{`data "external"`, `data[[:space:]]*[[:space:]]*"[[:space:]]*external[[:space:]]*"[[:space:]]*`},
 		{`provisioner`, `provisioner`},
 		{`local-exec`, `local-exec`},
@@ -264,14 +273,7 @@ func TestDenyPatternDefaultsInOrder(t *testing.T) {
 		{`templatefile(`, `templatefile[[:space:]]*\(`},
 		{`filebase64(`, `filebase64[[:space:]]*\(`},
 		{`file(`, `file[[:space:]]*\(`},
-	}
-	if len(defaults.Paths.DenyContent) != len(want) {
-		t.Fatalf("the defaults carry %d entries, this table %d", len(defaults.Paths.DenyContent), len(want))
-	}
-	for i, w := range want {
-		if defaults.Paths.DenyContent[i] != w.literal {
-			t.Errorf("default %d is %q, want %q — the order is load-bearing", i, defaults.Paths.DenyContent[i], w.literal)
-		}
+	} {
 		if got := DenyPattern(w.literal); got != w.pattern {
 			t.Errorf("DenyPattern(%q)\n got %s\nwant %s", w.literal, got, w.pattern)
 		}
@@ -304,18 +306,21 @@ func TestDenyLabel(t *testing.T) {
 	}
 }
 
-func defaultPolicy(t *testing.T) *Policy {
+// hclDenylist is the HCL denylist the README documents as a preset. The
+// defaults no longer carry it, but these tests pin its pattern behaviour.
+var hclDenylist = []string{
+	`data "external"`,
+	"provisioner",
+	"local-exec",
+	"remote-exec",
+	"templatefile(",
+	"filebase64(",
+	"file(",
+}
+
+func hclPolicy(t *testing.T) *Policy {
 	t.Helper()
-	var defaults struct {
-		Paths struct {
-			Allow       []string `json:"allow"`
-			DenyContent []string `json:"deny_content"`
-		} `json:"paths"`
-	}
-	if err := json.Unmarshal([]byte(config.Defaults), &defaults); err != nil {
-		t.Fatal(err)
-	}
-	p, err := NewPolicy(defaults.Paths.Allow, defaults.Paths.DenyContent)
+	p, err := NewPolicy([]string{"*"}, hclDenylist)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +328,7 @@ func defaultPolicy(t *testing.T) *Policy {
 }
 
 func TestDenylistFirstMatchInConfigOrder(t *testing.T) {
-	p := defaultPolicy(t)
+	p := hclPolicy(t)
 	cases := []struct {
 		content string
 		want    string
@@ -357,7 +362,7 @@ func TestDenylistFirstMatchInConfigOrder(t *testing.T) {
 // a block header in HCL, and the guard never refused it; the port must not
 // start to.
 func TestDenylistMatchesPerLine(t *testing.T) {
-	p := defaultPolicy(t)
+	p := hclPolicy(t)
 	for _, content := range []string{
 		"data\n\"external\"\n",
 		"templatefile\n(\"x\")\n",
@@ -370,7 +375,7 @@ func TestDenylistMatchesPerLine(t *testing.T) {
 }
 
 func TestConfiguredDenylistReplaces(t *testing.T) {
-	p, err := NewPolicy(nil, []string{"jsondecode("})
+	p, err := NewPolicy([]string{"*"}, []string{"jsondecode("})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +394,7 @@ func TestDenyPatternMatchesItsOwnLiteral(t *testing.T) {
 		if s == "" || strings.ContainsRune(s, '\n') {
 			return true
 		}
-		p, err := NewPolicy(nil, []string{s})
+		p, err := NewPolicy([]string{"*"}, []string{s})
 		if err != nil {
 			return false
 		}

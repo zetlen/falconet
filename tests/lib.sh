@@ -85,12 +85,12 @@ summary() {
   return "$TESTS_FAILED"
 }
 
-# A GitHub API on loopback, for the verbs that have stopped shelling out to
-# `gh` (ADR-0006 D2): tests/fixtures/fake-github.py, which answers from
-# fixtures and writes down what it was asked. Exports GITHUB_API_URL pointing
-# at it and FAKE_GITHUB as the directory it records into; see the fixture's
-# header for the files. Started once per test file, and killed with the
-# scratch directory.
+# A GitHub API on loopback: tests/fixtures/fake-github.py, which answers from
+# fixtures and writes down what it was asked. The verbs shell out to `gh api`
+# with full URLs built from GITHUB_API_URL, so `gh` sends its requests here.
+# Exports GITHUB_API_URL pointing at it and FAKE_GITHUB as the directory it
+# records into; see the fixture's header for the files. Started once per test
+# file, and killed with the scratch directory.
 fake_github() {
   FAKE_GITHUB="$WORK/fake-github"
   mkdir -p "$FAKE_GITHUB"

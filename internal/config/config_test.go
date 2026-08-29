@@ -38,30 +38,28 @@ func TestDefaultsStandAlone(t *testing.T) {
 		t.Errorf("File = %q, want empty: nothing was read", cfg.File)
 	}
 	s := cfg.Schema
+	if len(s.Paths.Allow) != 0 {
+		t.Errorf("paths.allow has %d entries, want 0 (no default)", len(s.Paths.Allow))
+	}
+	if len(s.Paths.DenyContent) != 0 {
+		t.Errorf("paths.deny_content has %d entries, want 0 (no default)", len(s.Paths.DenyContent))
+	}
 	checks := map[string]string{
 		"handoff_dir":        s.HandoffDir,
 		"issue.queue_label":  s.Issue.QueueLabel,
 		"labels.human":       s.Labels.Human,
-		"paths.allow[0]":     s.Paths.Allow[0],
 		"blocking_labels[3]": s.Issue.BlockingLabels[3],
 	}
 	want := map[string]string{
 		"handoff_dir":        ".falconet",
 		"issue.queue_label":  "infra-request",
 		"labels.human":       "ready-for-human",
-		"paths.allow[0]":     "*.tf",
 		"blocking_labels[3]": "wontfix",
 	}
 	for k, got := range checks {
 		if got != want[k] {
 			t.Errorf("%s = %q, want %q", k, got, want[k])
 		}
-	}
-	// Order is load-bearing for the denylist: templatefile( before file(.
-	deny := s.Paths.DenyContent
-	tf, f := index(deny, "templatefile("), index(deny, "file(")
-	if tf < 0 || f < 0 || tf > f {
-		t.Errorf("deny_content order: templatefile( at %d, file( at %d in %v", tf, f, deny)
 	}
 	// prompts has no default (#3). The old one named a path relative to the
 	// consumer's repository, which made the default an override and the

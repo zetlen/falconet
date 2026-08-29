@@ -132,26 +132,17 @@ it "because an allowlist that grows by accident is not an allowlist"
 assert_not_contains "$OUT" "*.tf
 "
 
-# --- deny_content order is load-bearing -------------------------------------
+# --- deny_content has no default; order is load-bearing ---------------------
 #
 # templatefile( must be tested before file(, or a templatefile() call is
 # reported as file(): the right refusal naming the wrong construct. Nothing
 # downstream can recover the distinction, so it has to survive the config.
 
-d="$(proj denyorder)"
+d="$(proj denydefault)"
 
-it "the default denylist arrives in order"
+it "the default denylist is empty"
 probe "$d" array .paths.deny_content
-assert_contains "$OUT" 'data "external"'
-
-it "and templatefile( comes before file("
-tf="$(line_of 'templatefile(' "$OUT")"
-f="$(line_of 'file(' "$OUT")"
-if [ -n "$tf" ] && [ -n "$f" ] && [ "$tf" -lt "$f" ]; then
-  assert_eq "before" "before" "templatefile( at $tf, file( at $f"
-else
-  assert_eq "templatefile( before file(" "templatefile=$tf file=$f" "denylist order"
-fi
+assert_eq "" "$OUT" "paths.deny_content"
 
 d="$(proj denycustom)"
 printf '{"paths":{"deny_content":["zzz(","aaa("]}}\n' > "$d/.github/falconet.json"

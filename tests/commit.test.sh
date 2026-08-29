@@ -32,6 +32,10 @@ new_checkout() { # name -> echoes the checkout path
   git -C "$base/repo" config user.name ci
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
   printf '.falconet/\n' >"$base/repo/.gitignore"
+  # paths.allow has no default; every checkout needs one.
+  cat >"$base/repo/.github/falconet.json" <<'CFG'
+{"paths":{"allow":["*.tf"],"deny_content":["data \"external\"","provisioner","local-exec","remote-exec","templatefile(","filebase64(","file("]}}
+CFG
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" switch -qc issue-1-thing
@@ -625,7 +629,7 @@ it "nor is whitespace around the quotes of a data \"external\" block"
 assert_eq "failure" "$out" "outcome"
 
 c="$(new_checkout denylist_configured)"
-printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
 printf '.falconet/\n' >"$c/repo/.gitignore"
 git -C "$c/repo" add .github/falconet.json .gitignore
 git -C "$c/repo" commit -qm "configure falconet"
@@ -640,7 +644,7 @@ it "and is named in the reason"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "jsondecode()" "failure reason"
 
 c="$(new_checkout denylist_replaced)"
-printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
 printf '.falconet/\n' >"$c/repo/.gitignore"
 git -C "$c/repo" add .github/falconet.json .gitignore
 git -C "$c/repo" commit -qm "configure falconet"
@@ -670,7 +674,7 @@ assert_eq "success" "$out" "outcome"
 assert_eq "Add the thing" "$(cat "$c/repo/.falconet/commit-subject.txt" 2>/dev/null)"
 
 c="$(new_checkout configured_handoff)"
-printf '{"handoff_dir":".ci-handoff"}\n' >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":".ci-handoff","paths":{"allow":["*.tf"]}}\n' >"$c/repo/.github/falconet.json"
 # Moving handoff_dir means gitignoring the new location too. Without this the
 # handoff files themselves show up as untracked non-.tf paths and the
 # allowlist refuses them — correctly, which is what makes it a foot-gun worth

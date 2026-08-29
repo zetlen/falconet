@@ -1,8 +1,8 @@
-// Package github is falconet's own GitHub client: net/http against
-// GITHUB_API_URL, a token the caller hands in, and the handful of endpoints
-// the verbs need. It replaces `gh` (ADR-0006 D2), so the runtime dependency
-// set in CI becomes git, gitleaks and the binary — and on a
-// workstation, the same.
+// Package github is falconet's adapter to the GitHub API: an interface the
+// verbs depend on, the types GitHub answers with, and the handful of
+// environment and URL helpers a verb needs to find its repository and its
+// token. The one implementation shells out to the `gh` CLI (ghcli.go);
+// nothing in the verbs knows that.
 //
 // Nothing here retries, paginates or caches. A verb makes a call or three and
 // reports each result, and a call that fails is an error carrying the status
@@ -14,23 +14,20 @@
 // A 404 from GitHub means "not found" OR "no access": a private repository
 // answers a token without permission exactly as it answers a name that does
 // not exist, by design. The error says both, because both are true of what
-// the caller knows (ADR-0005).
+// the caller knows.
 //
 // The test suite points GITHUB_API_URL at tests/fixtures/fake-github.py, a
 // loopback server that answers from fixtures and records what it was asked;
-// this package's own tests use net/http/httptest the same way.
+// the gh adapter sends to that URL the same way it sends to api.github.com.
 package github
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"time"
 )
 
 // DefaultAPIURL is api.github.com, which is what Actions sets GITHUB_API_URL
@@ -47,7 +44,7 @@ func APIURLFromEnv() string {
 }
 
 // TokenFromEnv is $GH_TOKEN, or $GITHUB_TOKEN, or empty — the two names the
-// workflow hands the verbs (ADR-0006 D2).
+// workflow hands the verbs, and the two names `gh` reads.
 func TokenFromEnv() string {
 	if t := os.Getenv("GH_TOKEN"); t != "" {
 		return t
@@ -140,22 +137,19 @@ func repoWord(s string) bool {
 	return true
 }
 
-// Client is one API endpoint and one token.
-type Client struct {
-	BaseURL string
-	Token   string
-	HTTP    *http.Client
-}
-
-// New is a client for baseURL, authenticating with token. The timeout is per
-// request: a verb that is parking an issue must not hang a job on a call
-// that will never answer.
-func New(baseURL, token string) *Client {
-	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   token,
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
-	}
+// Client is the adapter: the verbs talk to GitHub through it.
+type Client interface {
+	GetIssue(owner, name string, number int) (*Issue, error)
+	GetIssueRaw(owner, name string, number int) (json.RawMessage, error)
+	ListIssueComments(owner, name string, number int) ([]IssueComment, error)
+	ListIssueCommentsRaw(owner, name string, number int) (json.RawMessage, error)
+	ListOpenPulls(owner, name string) ([]PullRequest, error)
+	GetAuthenticatedUser() (*User, error)
+	CreateIssueComment(owner, name string, number int, body string) error
+	AddIssueLabels(owner, name string, number int, labels []string) error
+	RemoveIssueLabel(owner, name string, number int, label string) error
+	AddIssueAssignees(owner, name string, number int, logins []string) error
+	RemoveIssueAssignees(owner, name string, number int, logins []string) error
 }
 
 // Error is GitHub saying no: the status it answered and the message it sent.
@@ -170,7 +164,6 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s %s: %d %s", e.Method, e.Path, e.Status, e.reason())
 }
 
-// reason is GitHub's message, or what stands in for one.
 func (e *Error) reason() string {
 	what := e.Message
 	switch {
@@ -180,89 +173,6 @@ func (e *Error) reason() string {
 		what = http.StatusText(e.Status)
 	}
 	return what
-}
-
-// Do makes one request. in, when not nil, is sent as JSON; out, when not
-// nil, is filled from a JSON response. Any status outside 2xx is an *Error.
-func (c *Client) Do(method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		raw, err := json.Marshal(in)
-		if err != nil {
-			return fmt.Errorf("%s %s: encoding the request: %v", method, path, err)
-		}
-		body = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequest(method, c.BaseURL+path, body)
-	if err != nil {
-		return fmt.Errorf("%s %s: %v", method, path, err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "falconet")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %v", method, path, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("%s %s: reading the response: %v", method, path, err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &Error{Method: method, Path: path, Status: resp.StatusCode, Message: message(raw)}
-	}
-	if out != nil && len(raw) > 0 {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("%s %s: decoding the response: %v", method, path, err)
-		}
-	}
-	return nil
-}
-
-// message is the "message" field of an error response, or nothing.
-func message(raw []byte) string {
-	var v struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return ""
-	}
-	return v.Message
-}
-
-func issuePath(owner, name string, number int, rest string) string {
-	if rest != "" {
-		rest = "/" + rest
-	}
-	return fmt.Sprintf("/repos/%s/%s/issues/%d%s",
-		url.PathEscape(owner), url.PathEscape(name), number, rest)
-}
-
-// CreateIssueComment is POST /repos/{owner}/{name}/issues/{number}/comments.
-func (c *Client) CreateIssueComment(owner, name string, number int, body string) error {
-	return c.Do("POST", issuePath(owner, name, number, "comments"),
-		map[string]string{"body": body}, nil)
-}
-
-// AddIssueLabels is POST /repos/{owner}/{name}/issues/{number}/labels: the
-// labels are added to whatever the issue already carries.
-func (c *Client) AddIssueLabels(owner, name string, number int, labels []string) error {
-	return c.Do("POST", issuePath(owner, name, number, "labels"),
-		map[string][]string{"labels": labels}, nil)
-}
-
-// RemoveIssueAssignees is DELETE /repos/{owner}/{name}/issues/{number}/assignees.
-func (c *Client) RemoveIssueAssignees(owner, name string, number int, logins []string) error {
-	return c.Do("DELETE", issuePath(owner, name, number, "assignees"),
-		map[string][]string{"assignees": logins}, nil)
 }
 
 // --- the shapes GitHub answers with ------------------------------------------
@@ -317,86 +227,29 @@ type PullRequest struct {
 	} `json:"head"`
 }
 
-// repoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped,
+// IssuePath builds /repos/{owner}/{name}/issues/{number}[/rest], with owner
+// and name path-escaped.
+func IssuePath(owner, name string, number int, rest string) string {
+	if rest != "" {
+		rest = "/" + rest
+	}
+	return fmt.Sprintf("/repos/%s/%s/issues/%d%s",
+		url.PathEscape(owner), url.PathEscape(name), number, rest)
+}
+
+// RepoPath is /repos/{owner}/{name}{rest}, with owner and name path-escaped,
 // so that every call spells the repository the same way.
-func repoPath(owner, name, rest string) string {
+func RepoPath(owner, name, rest string) string {
 	return fmt.Sprintf("/repos/%s/%s%s", url.PathEscape(owner), url.PathEscape(name), rest)
 }
 
-// --- reads -----------------------------------------------------------------
-
-// GetIssue is GET /repos/{owner}/{name}/issues/{number}.
-func (c *Client) GetIssue(owner, name string, number int) (*Issue, error) {
-	var out Issue
-	if err := c.Do("GET", issuePath(owner, name, number, ""), nil, &out); err != nil {
-		return nil, err
+// Message extracts the "message" field from a JSON error response, or "".
+func Message(raw []byte) string {
+	var v struct {
+		Message string `json:"message"`
 	}
-	return &out, nil
-}
-
-// GetIssueRaw is GetIssue's answer as GitHub sent it, undecoded. prepare
-// writes the issue down as the one snapshot every later step reads, and a
-// snapshot is the whole object rather than the fields this package happens
-// to type; the caller decodes its typed view from the same bytes, so both
-// views come from one fetch.
-func (c *Client) GetIssueRaw(owner, name string, number int) (json.RawMessage, error) {
-	var out json.RawMessage
-	if err := c.Do("GET", issuePath(owner, name, number, ""), nil, &out); err != nil {
-		return nil, err
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
 	}
-	return out, nil
-}
-
-// ListIssueComments is GET /repos/{owner}/{name}/issues/{number}/comments,
-// one page of 100 in creation order. The 101st comment is not read.
-func (c *Client) ListIssueComments(owner, name string, number int) ([]IssueComment, error) {
-	var out []IssueComment
-	if err := c.Do("GET", issuePath(owner, name, number, "comments?per_page=100"), nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// ListIssueCommentsRaw is ListIssueComments's answer as GitHub sent it, for
-// the same snapshot GetIssueRaw serves. One page of 100; the 101st comment is
-// not read.
-func (c *Client) ListIssueCommentsRaw(owner, name string, number int) (json.RawMessage, error) {
-	var out json.RawMessage
-	if err := c.Do("GET", issuePath(owner, name, number, "comments?per_page=100"), nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// ListOpenPulls is GET /repos/{owner}/{name}/pulls?state=open, one page of
-// 100 — wider than the 30 `gh pr list` read by default, and the 101st open
-// pull request is not read.
-func (c *Client) ListOpenPulls(owner, name string) ([]PullRequest, error) {
-	var out []PullRequest
-	if err := c.Do("GET", repoPath(owner, name, "/pulls?state=open&per_page=100"), nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// GetAuthenticatedUser is GET /user: whose token this is.
-func (c *Client) GetAuthenticatedUser() (*User, error) {
-	var out User
-	if err := c.Do("GET", "/user", nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// --- writes ----------------------------------------------------------------
-
-// RemoveIssueLabel is DELETE /repos/{owner}/{name}/issues/{number}/labels/{label}.
-func (c *Client) RemoveIssueLabel(owner, name string, number int, label string) error {
-	return c.Do("DELETE", issuePath(owner, name, number, "labels/"+url.PathEscape(label)), nil, nil)
-}
-
-// AddIssueAssignees is POST /repos/{owner}/{name}/issues/{number}/assignees.
-func (c *Client) AddIssueAssignees(owner, name string, number int, logins []string) error {
-	return c.Do("POST", issuePath(owner, name, number, "assignees"),
-		map[string][]string{"assignees": logins}, nil)
+	return v.Message
 }

@@ -11,8 +11,7 @@ something.
 A decision is not a rule — it is a choice with a shelf life, and the **Reopen
 when** column is the shelf life, written by whoever made the choice, before
 they had a stake in defending it. If you can point at a row's trigger in the
-present, that row is open. Say so, and change the row. Two rows below are
-open now, and say so.
+present, that row is open. Say so, and change the row.
 
 The Serves column cites the README's five principles by position: `I1` is
 the first, `I5` the fifth. `docslint` holds that every row cites a
@@ -24,17 +23,17 @@ a finding, not a formatting error.
 | Decision | Serves | Reopen when | Record |
 | --- | --- | --- | --- |
 | The pipeline is falconet's own code, not `gh-aw` | I2 | this repository acquires the threat model gh-aw is sized for: strangers triggering workflows | [below](#the-pipeline-is-falconets-own-code) |
-| One agent pass; the check loop is permitted and not built | I2, I3 | **open** — the loop is built, and then this row says what feeds back and how many times; anything fed back that is not a check's output goes to the operator | [below](#one-agent-pass-the-check-loop-is-not-built) |
+| A `check` verb and a caller-owned loop | I2, I3 | a check the verb can run requires something the agent job cannot provide (a credential, a service, network access) and cannot be moved out of the critical path | [below](#a-check-verb-and-a-caller-owned-loop) |
 | No second, reviewing agent | I5 | a review harness clears the bar the first one failed: an independent, uncontaminated read of diff and message, worth more than it costs — and its verdict is never in the pull request where a reviewer could mistake it for evidence | [below](#no-second-reviewing-agent) |
 | GitHub and Claude Code are the platform | I2 | an adopter exists on another forge or harness | [below](#github-and-claude-code-are-the-platform) |
-| The config defaults are the origin's: `*.tf` and the HCL denylist | I3 | **open** — the pilot repository is no longer an OpenTofu one; the operator names the neutral default | [below](#the-config-defaults-are-the-origins) |
+| No default for the path allowlist or the content denylist | I3 | an adopter cannot set the allowlist before the first run, and the cost of one required field outweighs the cost of a default the operator did not choose | [below](#no-default-for-the-path-allowlist-or-the-content-denylist) |
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
 | Packaged as a reusable workflow plus a composite action | I2 | the credentials or setup it demands outgrow the README's eight steps | [below](#a-reusable-workflow-and-a-composite-action) |
 | Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
 | Every assertion crosses a process boundary | I2, I3 | a property cannot be observed from outside a process — and then it is a Go unit test beside the guard | [below](#every-assertion-crosses-a-process-boundary) |
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
-| falconet's own GitHub client, trimmed to what three verbs call | I1, I4 | the operator would rather one HTTP path than two — the workflow's own steps already use `gh` — or a verb needs more of the API than the client has | [below](#falconets-own-github-client) |
+| The verbs talk to GitHub through a `Client` adapter backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-backed-by-gh) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
 | The binary is `go install`ed at the caller's ref | I2, I3 | a job's compile time, or the module proxy's availability, starts costing more than a prebuilt asset would | [below](#the-binary-is-go-installed-at-the-callers-ref) |
 | falconet does not plan; the repository's plan bot does | I5 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
@@ -51,7 +50,7 @@ human merge at the end of everything — the README's non-goal, stated as a
 threat model. So the pipeline became its own project rather than a rented
 approximation.
 
-## One agent pass; the check loop is not built
+## A `check` verb and a caller-owned loop
 
 The `implement` job runs with `permissions: {}` and no secret but the model
 key. It is handed its own `GITHUB_TOKEN` only so the action does not mint one
@@ -67,21 +66,30 @@ module, no token needed.
 
 The agent's grant is exactly `Read,Edit,Write,Grep,Glob`, capped at 40 turns.
 It edits files, writes `commit-msg.txt` (or `needs-info.md`), and stops.
-Today nothing feeds anything back for another turn: `contract.test.sh` holds
-that `commit` runs once.
 
-**This row is open.** On 2026-08-29 the operator wrote the bounded check loop
-into principle 3: the repository's own checks may send a run back to step 1
-with the failure attached, a bounded number of times; a guard's refusal never
-may, because a guard the agent can iterate against is an oracle. Until 08-29
-this row said *never for convenience — a second pass changes the sandbox
-principle, and that goes to the operator*; it went, and the operator said
-yes to one kind of second pass. Building it is the next change to this row,
-and the row then records what feeds back (the check's output, in the handoff
-directory, into a fresh context), the cap, and what happens at the cap
-(commit the guard-clean work, push, hand off naming the branch and the
-failure — principle 4). A loop fed a guard refusal, or the plan bot's
-verdict, is not this decision and goes to the operator.
+`falconet check` is a verb that runs an operator-configured command (the
+repository's tests, linter, whatever the operator names in `falconet.json`),
+records its output into the handoff directory, and exits 0 (pass) or 1
+(fail). It does not loop, re-invoke the agent, or decide what happens next.
+The iteration is the caller's: in CI, a loop in the workflow's `run:` block
+that re-invokes the agent action on failure, capped at the configured max;
+on a workstation, a shell loop. The verb is CI-agnostic; the iteration
+policy is the caller's idiom.
+
+What feeds back is the check's output and nothing else. A guard refusal
+(path allowlist, content denylist, rename, secret scan) is terminal — a
+guard the agent can iterate against is an oracle, not a guard (principle 3).
+At the cap: commit the guard-clean work, push, hand off naming the branch
+and the failure (principle 4). Each iteration is a fresh agent context: the
+agent sees the tree with its prior edits, the check failure in the handoff
+directory, and the request, but not its prior conversation.
+
+Rejected: a workflow-level loop across jobs (push, wait for the PR's real
+checks, re-enter `implement` with the failure) — it uses the repo's actual
+CI checks, but each iteration waits for the full CI pipeline, and the
+orchestration is complex. The check verb is the faster feedback path; the
+PR's own checks still run after the final push, as they always did, and a
+failure there is a human's.
 
 ## No second, reviewing agent
 
@@ -110,26 +118,29 @@ half's trigger fired; the shipped prompt no longer names an IaC tool (the
 prompt row), and what remains of the shape is the config defaults, which
 have a row of their own, open.
 
-## The config defaults are the origin's
+## No default for the path allowlist or the content denylist
 
-`paths.allow` defaults to `["*.tf"]` and `paths.deny_content` to the seven
-HCL constructs that make a plan execute code or read a file. Both are the
-origin repository's, kept as defaults because a default that names nothing
-is a default an adopter must set before the first run, and the origin was
-the only adopter.
+Both default to empty. `commit` refuses to run when `paths.allow` has no
+entries — an allowlist the operator did not write is a choice made for them,
+and a default that silently admits `*.tf` in a Pulumi repository is exactly
+that.
 
-**This row is open.** The origin is gone and the next repository is a Pulumi
-one, where a string denylist over a program is a tripwire and not a wall,
-because `pulumi preview` executes whatever the file says. The operator
-decides the neutral default. The two honest candidates: `paths.allow` with
-no default, so `prepare` refuses to run until the config names an allowlist
-(an allowlist the operator did not write is a choice made for them), with
-the HCL and TypeScript denylists shipped as documented presets to copy in;
-or the defaults as they are, with the README saying whose they are. Whichever
-it is, the recommended shape for a repository whose program is code is that
-the agent edits a data surface the program reads — YAML or JSON under an
-allowlist of its own — and the program stays a person's; pure data has no
-denylist to get wrong.
+Before 2026-08-29 both defaulted to the origin repository's values:
+`["*.tf"]` and the seven HCL constructs that make a plan execute code or read
+a file. Those were kept because the origin was the only adopter, and a
+default that names nothing is a default an adopter must set before the first
+run. The origin retired, and the next repository is a Pulumi one, where a
+string denylist over a program is a tripwire and not a wall — `pulumi
+preview` executes whatever the file says. So the operator names both, or
+names nothing and runs without a denylist, which is the honest position for
+a repository whose program is code. The recommended shape for such a
+repository is that the agent edits a data surface the program reads — YAML
+or JSON under an allowlist of its own — and the program stays a person's;
+pure data has no denylist to get wrong.
+
+Rejected: keeping the `*.tf` default with documentation saying whose it is
+— a default an adopter must understand to override is a default that will
+not be overridden.
 
 ## The shipped prompt says what the config says
 
@@ -247,24 +258,27 @@ read a guard cold, and the guards are the product). The incident comment
 above each guard moved into Go verbatim; `git log` on the porting commits
 names every departure from the bash.
 
-## falconet's own GitHub client
+## The GitHub adapter backed by gh
 
-`net/http` against `GITHUB_API_URL` (the variable Actions sets;
-`https://api.github.com` otherwise), authenticating with `GH_TOKEN` then
-`GITHUB_TOKEN`. About 827 lines after 2026-08-29, when everything
-only `init` and `doctor` called was deleted with them: what is left is what
-`prepare` needs to assemble the request (principle 1) and `pause` needs to
-end a run where a person can see it (principle 4). What a run needs in CI is
-git, gitleaks and the binary; on a workstation, the same. The workflow's own
-`run:` steps use `gh` for the pull request and contain's check, on GitHub's
-runner where it already is; the binary never does.
+`internal/github` defines a `Client` interface — the eleven methods
+`prepare` and `pause` need — and `GH`, the one implementation, shells out
+to `gh api -i` with full URLs built from `GITHUB_API_URL`. The token
+(`GH_TOKEN` then `GITHUB_TOKEN`) is passed explicitly via `-H` so that
+non-github.com hosts — the test server, GitHub Enterprise Server — are
+authenticated the same way github.com is. The verbs depend on the interface;
+nothing in a verb knows the implementation is `gh`.
 
-The reason the client was falconet's own — no `gh`, no `jq` on a
-workstation — served the retired adoption principle, and the install's own
-steps use `gh` on the operator's machine anyway. So two HTTP paths remain
-for one forge, and the decision the operator has not yet made is whether
-the binary shells out to `gh` like the workflow does. The reopen trigger is
-that choice.
+Before 2026-08-29 the binary had its own `net/http` client (about 400 lines).
+The reason it was bespoke — no `gh` dependency on a workstation — served
+the retired adoption principle, and the install's own steps used `gh` on the
+operator's machine anyway. Two HTTP paths for one forge was one too many: the
+workflow's `run:` steps already shelled out to `gh` for the pull request and
+contain's check, and the binary now does the same, through a clean adapter
+boundary. What a run needs in CI is git, gitleaks, `gh` and the binary; on
+a workstation, the same. Rejected: keeping the `net/http` client as a second
+implementation behind the same interface — two implementations agreeing by
+convention is the disease, and there is no second consumer to justify
+the cost.
 
 ## A GitHub App, purely as a credential
 

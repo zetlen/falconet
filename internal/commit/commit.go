@@ -110,7 +110,9 @@ type denyEntry struct {
 
 // NewPolicy compiles paths.allow and paths.deny_content. An empty entry in
 // either is skipped, as it always was; an entry that cannot be compiled is an
-// error, because a rule that silently matches nothing is not a rule.
+// error, because a rule that silently matches nothing is not a rule. An empty
+// paths.allow — no non-empty entries — is refused: an allowlist with nothing
+// in it admits nothing, and the operator must name what the agent may touch.
 func NewPolicy(allow, denyContent []string) (*Policy, error) {
 	p := &Policy{}
 	for _, glob := range allow {
@@ -123,6 +125,9 @@ func NewPolicy(allow, denyContent []string) (*Policy, error) {
 		}
 		p.Allow = append(p.Allow, glob)
 		p.allow = append(p.allow, re)
+	}
+	if len(p.Allow) == 0 {
+		return nil, fmt.Errorf("paths.allow is empty — set it in .github/falconet.json to name the paths the agent may change")
 	}
 	for _, literal := range denyContent {
 		if literal == "" {

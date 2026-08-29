@@ -103,12 +103,10 @@ assert_not_contains "$out" 'records-*.tf' "prompt"
 it "and not its tooling"
 assert_not_contains "$out" 'tofu' "prompt"
 
-it "with no config at all, the prompt names the default allowlist"
+it "with no config at all, the prompt has no allowlist or denylist"
 out="$("$FALCONET" prompt implement)"
-assert_contains "$out" '`*.tf`' "prompt"
-
-it "and the default denylist, in config order"
-assert_contains "$out" '`data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(` or `file(`' "prompt"
+assert_not_contains "$out" '*.tf' "prompt"
+assert_not_contains "$out" 'data "external"' "prompt"
 
 # --- printing a prompt is a read --------------------------------------------
 

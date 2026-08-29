@@ -119,12 +119,13 @@ assert_contains "$ERR" "unknown argument"
 # out loud, because it is the property and not a side effect.
 
 PROJ="$WORK/elsewhere"
-mkdir -p "$PROJ/dns"
+mkdir -p "$PROJ/dns" "$PROJ/.github"
 git init -q -b main "$PROJ"
 git -C "$PROJ" config user.email ci@example.invalid
 git -C "$PROJ" config user.name ci
 printf 'locals {\n  a = 1\n}\n' >"$PROJ/dns/main.tf"
 printf '.falconet/\n' >"$PROJ/.gitignore"
+printf '{"paths":{"allow":["*.tf"]}}\n' >"$PROJ/.github/falconet.json"
 git -C "$PROJ" add -A
 git -C "$PROJ" commit -qm "base commit"
 

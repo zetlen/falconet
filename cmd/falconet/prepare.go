@@ -333,7 +333,7 @@ func runPrepare(args []string) int {
 	// them, never at startup: "no network at all" has to mean no credential
 	// either, and a workstation run that stops at the gate should not have
 	// to explain which repository it would have asked.
-	var client *github.Client
+	var client github.Client
 	var owner, name string
 	connect := func() error {
 		if client != nil {
@@ -348,7 +348,7 @@ func runPrepare(args []string) int {
 			return err
 		}
 		owner, name = o, n
-		client = github.New(github.APIURLFromEnv(), token)
+		client = github.NewGH(github.APIURLFromEnv(), token)
 		return nil
 	}
 	var snap *issueSnapshot

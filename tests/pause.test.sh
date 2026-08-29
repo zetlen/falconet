@@ -11,7 +11,7 @@
 #
 # GitHub is tests/fixtures/fake-github.py: a loopback server that answers
 # from fixtures and writes down what it was asked, with GITHUB_API_URL
-# pointing at it (ADR-0006 D2). Nothing here reaches GitHub or the network.
+# pointing at it. Nothing here reaches GitHub or the network.
 
 # The expected strings below are markdown: single-quoted backticks are code
 # spans in a GitHub comment, not command substitution.
@@ -28,20 +28,6 @@ export GH_TOKEN=test-token
 export GITHUB_SERVER_URL=https://github.com
 export GITHUB_REPOSITORY=zetlen/wayfinders-infra
 
-# Not a stub: a tripwire. This file used to answer for `gh` with a script on
-# PATH, and stopped when the verb (park, then) moved to the API (#15). A
-# falconet that still shells out to gh must fail here, loudly, and before
-# the real gh on this machine could carry the fake token above to the real
-# GitHub.
-mkdir -p "$WORK/no-gh"
-cat >"$WORK/no-gh/gh" <<'TRIPWIRE'
-#!/usr/bin/env bash
-echo "gh: pause.test.sh no longer stubs gh — the subject must speak GITHUB_API_URL" >&2
-exit 1
-TRIPWIRE
-chmod +x "$WORK/no-gh/gh"
-PATH="$WORK/no-gh:$PATH"
-export PATH
 
 pause() { # out-name -- args...
   # Runs pause, then leaves three files: $name.out, its stdout; $name.log,

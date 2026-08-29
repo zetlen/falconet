@@ -88,9 +88,9 @@ down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
 | --- | --- |
 | Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
 | Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
-| Check | the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan. **The bounded check loop is not built yet**; a run is one pass. |
+| Check | the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan. **`falconet check` is decided but not built yet** ([register](docs/decisions.md)): a verb that runs the operator's configured check command, with the caller owning the loop. |
 | Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off |
-| Open, in the register | whether the binary keeps its own GitHub client or shells out to `gh` as the workflow does; and what `paths.allow` defaults to now that the origin repository is gone — [two rows](docs/decisions.md) say so |
+| Not yet built | `falconet check` — the check verb and the bounded iteration loop ([register](docs/decisions.md)) |
 | Live runs | on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0; not yet in the post-2026-08-26 shape against a plan bot |
 
 [The decision register](docs/decisions.md) holds every live decision with the

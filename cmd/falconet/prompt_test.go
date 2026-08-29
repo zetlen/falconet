@@ -102,8 +102,6 @@ func TestTheShippedPromptRendersFromTheDefaults(t *testing.T) {
 	got := render(string(text), "/h", "/w", cfg.Schema.Paths.Allow, cfg.Schema.Paths.DenyContent)
 	for _, want := range []string{
 		"Scripts do the mechanics; you do the judgment.",
-		"files whose path matches `*.tf`.",
-		"contains `data \"external\"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(` or `file(`,",
 		"/h/request.md",
 		"/h/commit-msg.txt",
 		"/h/needs-info.md",
@@ -111,6 +109,14 @@ func TestTheShippedPromptRendersFromTheDefaults(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the rendered default prompt lacks %q", want)
 		}
+	}
+	// With empty defaults, the deny paragraph is dropped and no allowlist
+	// is named — the operator sets both in falconet.json.
+	if strings.Contains(got, "*.tf") {
+		t.Error("the rendered default prompt names *.tf, but paths.allow has no default")
+	}
+	if strings.Contains(got, `data "external"`) {
+		t.Error("the rendered default prompt names the HCL denylist, but paths.deny_content has no default")
 	}
 	for _, leftover := range []string{
 		"{handoff}", "{workspace}", "{allow}", "{deny}",

@@ -1,14 +1,14 @@
 // Package config is one JSON file, every key optional, with defaults that
-// reproduce the origin repository's behavior exactly.
+// let a consumer start without touching any key it does not need to change.
 //
 // The defaults live here as a JSON document rather than as a fallback at each
 // call site, and the user's file is merged OVER them the way jq's `*` merges:
 // objects recurse, and everything else — arrays included — is replaced
 // wholesale. That is deliberate. Setting paths.allow means "this list instead
-// of the default", never "these in addition to *.tf" — an allowlist that
-// grows by accident is not an allowlist. A default spelled at a call site
-// drifts from the schema in docs/decisions.md the first time
-// someone edits one and not the other.
+// of the default", never "these in addition" — an allowlist that grows by
+// accident is not an allowlist. A default spelled at a call site drifts from
+// the schema in docs/decisions.md the first time someone edits one and not
+// the other.
 //
 // Discovery, in precedence order:
 //
@@ -40,11 +40,13 @@ import (
 
 // Defaults is the schema with every default, as the JSON document the bash
 // config library carried. Every key in docs/decisions.md is here but one, so
-// a verb never has to ask whether a key is set. The one is prompts: its
+// a verb never has to ask whether a key is set. The two that have no default
+// are paths.allow (an allowlist the operator did not write is a choice made
+// for them — the commit verb refuses to run without one) and prompts (its
 // default was issue #3 — a path relative to the consumer's repository, which
 // made the default an override and the shipped prompt unreachable — and the
 // shipped prompts are embedded in the binary now, so an absent key means
-// exactly that. See Schema.Prompts.
+// exactly that). See Schema.Prompts and Schema.Paths.
 const Defaults = `{
   "handoff_dir": ".falconet",
   "issue": {
@@ -60,16 +62,8 @@ const Defaults = `{
     "pr": "needs-plan-review"
   },
   "paths": {
-    "allow": ["*.tf"],
-    "deny_content": [
-      "data \"external\"",
-      "provisioner",
-      "local-exec",
-      "remote-exec",
-      "templatefile(",
-      "filebase64(",
-      "file("
-    ]
+    "allow": [],
+    "deny_content": []
   }
 }`
 

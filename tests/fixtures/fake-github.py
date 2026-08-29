@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 fake-github.py — a GitHub REST API on loopback that answers from fixtures and
-writes down what it was asked. python3 stdlib only. This is the suite's one
-seam for every verb that has stopped shelling out to `gh` (ADR-0006 D2): the
-verb is spawned with GITHUB_API_URL pointing here, and a test reads back what
-it sent. Still a process boundary; still stdout, exit code, and files.
+writes down what it was asked. python3 stdlib only. The verbs shell out to
+`gh api` with full URLs built from GITHUB_API_URL, which points here; a test
+reads back what was sent. Still a process boundary; still stdout, exit code,
+and files.
 
     python3 tests/fixtures/fake-github.py --dir DIR [--port N]
 

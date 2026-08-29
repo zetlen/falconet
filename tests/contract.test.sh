@@ -270,9 +270,9 @@ assert_contains "$verb_decl" "required: false" "verb input"
 assert_contains "$verb_decl" "default: ''" "verb input"
 assert_contains "$action_code" "if: inputs.verb != ''" "the Run step"
 
-# "Check jq" lived here. The runner is asked for git, gitleaks and the
-# binary, and for nothing else (ADR-0006 D2); the case below that greps both
-# files for jq is what replaced it.
+# "Check jq" lived here. The runner is asked for git, gitleaks, gh and the
+# binary, and for nothing else; the case below that greps both files for jq
+# is what replaced it.
 
 # `setup: false` says "an earlier step in THIS job already installed them",
 # and a job is a fresh runner, so the claim is about the job and never about
