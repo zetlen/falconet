@@ -50,8 +50,6 @@ const usageText = `Usage: falconet <verb> [args]
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   pause     put an issue into a terminal state and say so where it will be read
-  doctor    check a repository against the install steps, and say which are missing
-  init      do the install steps: the labels, the secrets, the files, one commit
   version   print the version and the toolchain this binary was built with
 
 Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
@@ -61,7 +59,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // dispatcher's whole knowledge of what exists; a name in neither is a usage
 // error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "pause", "doctor", "init", "version"}
+	verbs    = []string{"prepare", "commit", "push", "pause", "version"}
 	unlisted = []string{"prompt", "scan", "config"}
 )
 
@@ -80,8 +78,6 @@ var native = map[string]func(args []string) int{
 	"push":    runPush,
 	"pause":   runPause,
 	"prompt":  runPrompt,
-	"doctor":  runDoctor,
-	"init":    runInit,
 }
 
 func main() {
@@ -146,8 +142,7 @@ func runVersion(args []string) int {
 
 // resolvedVersion is what this binary calls itself: the build-time stamp,
 // else the module version the go command recorded, else "dev". version
-// prints it; init pins the caller workflow's `uses:` to it (ADR-0006 D6:
-// one coordinate).
+// prints it.
 //
 // `go install github.com/zetlen/falconet/cmd/falconet@v0.1.0` is the
 // second install path ADR-0006 D6 names, and it accepts no ldflags: the

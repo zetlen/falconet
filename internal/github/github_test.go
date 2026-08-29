@@ -196,8 +196,8 @@ func TestTokenFromEnvPrefersGHToken(t *testing.T) {
 // --- the reads, the next writes, and what each asks for ------------------------
 
 // served is a GitHub that answers each path from a table and records what it
-// was asked, with whatever extra headers the test names.
-func served(t *testing.T, answers map[string]string, extra http.Header) (*Client, *[]recorded) {
+// was asked.
+func served(t *testing.T, answers map[string]string) (*Client, *[]recorded) {
 	t.Helper()
 	var seen []recorded
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,11 +207,6 @@ func served(t *testing.T, answers map[string]string, extra http.Header) (*Client
 			_ = json.Unmarshal(raw, &parsed)
 		}
 		seen = append(seen, recorded{r.Method, r.URL.RequestURI(), r.Header.Clone(), parsed})
-		for k, vs := range extra {
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
 		body, ok := answers[r.Method+" "+r.URL.RequestURI()]
 		if !ok {
 			w.WriteHeader(404)
@@ -231,15 +226,8 @@ func TestTheReadsAskTheEndpointsTheyDocumentAndDecodeGitHubsShapes(t *testing.T)
 		"GET /repos/o/r/issues/43":                       `{"number":43,"title":"a PR","pull_request":{"url":"https://api.github.invalid/repos/o/r/pulls/43"}}`,
 		"GET /repos/o/r/issues/42/comments?per_page=100": `[{"user":{"login":"zetlen"},"created_at":"2026-08-01T00:00:00Z","body":"bump"}]`,
 		"GET /repos/o/r/pulls?state=open&per_page=100":   `[{"number":7,"head":{"ref":"issue-42-add-mx"}}]`,
-		"GET /user":                          `{"login":"fake-user","type":"User"}`,
-		"GET /repos/o/r":                     `{"name":"r","full_name":"o/r","owner":{"login":"o"},"private":true,"visibility":"private","has_issues":true,"default_branch":"main"}`,
-		"GET /repos/o/r/actions/permissions": `{"enabled":true,"allowed_actions":"selected"}`,
-		"GET /repos/o/r/actions/permissions/selected-actions": `{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["zetlen/*"]}`,
-		"GET /repos/o/r/actions/permissions/workflow":         `{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}`,
-		"GET /repos/o/r/actions/secrets?per_page=100":         `{"total_count":2,"secrets":[{"name":"FALCONET_APP_ID","created_at":"x"},{"name":"ANTHROPIC_API_KEY"}]}`,
-		"GET /repos/o/r/actions/secrets/public-key":           `{"key_id":"568250167242549743","key":"AQIDBA=="}`,
-		"GET /repos/o/r/labels?per_page=100":                  `[{"name":"infra-request","color":"ededed","description":"queue"}]`,
-	}, nil)
+		"GET /user": `{"login":"fake-user","type":"User"}`,
+	})
 
 	issue, err := c.GetIssue("o", "r", 42)
 	if err != nil {
@@ -279,70 +267,12 @@ func TestTheReadsAskTheEndpointsTheyDocumentAndDecodeGitHubsShapes(t *testing.T)
 	if user.Login != "fake-user" || user.Type != "User" {
 		t.Errorf("user: %+v", *user)
 	}
-	repo, err := c.GetRepository("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repo.Name != "r" || repo.FullName != "o/r" || repo.Owner.Login != "o" || !repo.Private ||
-		repo.Visibility != "private" || !repo.HasIssues || repo.DefaultBranch != "main" {
-		t.Errorf("repository: %+v", *repo)
-	}
-	perms, err := c.GetActionsPermissions("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !perms.Enabled || perms.AllowedActions != "selected" {
-		t.Errorf("actions permissions: %+v", *perms)
-	}
-	sel, err := c.GetSelectedActions("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sel.GithubOwnedAllowed || sel.VerifiedAllowed || !reflect.DeepEqual(sel.PatternsAllowed, []string{"zetlen/*"}) {
-		t.Errorf("selected actions: %+v", *sel)
-	}
-	wp, err := c.GetWorkflowPermissions("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wp.DefaultWorkflowPermissions != "read" || wp.CanApprovePullRequestReviews {
-		t.Errorf("workflow permissions: %+v", *wp)
-	}
-	secrets, err := c.ListSecrets("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(secrets) != 2 || secrets[0].Name != "FALCONET_APP_ID" || secrets[1].Name != "ANTHROPIC_API_KEY" {
-		t.Errorf("secrets: %+v", secrets)
-	}
-	key, err := c.GetSecretsPublicKey("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key.KeyID != "568250167242549743" || key.Key != "AQIDBA==" {
-		t.Errorf("public key: %+v", *key)
-	}
-	labels, err := c.ListLabels("o", "r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(labels) != 1 || labels[0].Name != "infra-request" || labels[0].Color != "ededed" || labels[0].Description != "queue" {
-		t.Errorf("labels: %+v", labels)
-	}
-
 	want := []string{
 		"GET /repos/o/r/issues/42",
 		"GET /repos/o/r/issues/43",
 		"GET /repos/o/r/issues/42/comments?per_page=100",
 		"GET /repos/o/r/pulls?state=open&per_page=100",
 		"GET /user",
-		"GET /repos/o/r",
-		"GET /repos/o/r/actions/permissions",
-		"GET /repos/o/r/actions/permissions/selected-actions",
-		"GET /repos/o/r/actions/permissions/workflow",
-		"GET /repos/o/r/actions/secrets?per_page=100",
-		"GET /repos/o/r/actions/secrets/public-key",
-		"GET /repos/o/r/labels?per_page=100",
 	}
 	var got []string
 	for _, r := range *seen {
@@ -364,21 +294,9 @@ func TestTheNextWritesAreShapedLikeGitHubs(t *testing.T) {
 	if err := c.AddIssueAssignees("o", "r", 36, []string{"falconet[bot]"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.CreateLabel("o", "r", Label{Name: "needs-info", Color: "d93f0b", Description: "a question"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.CreateLabel("o", "r", Label{Name: "infra-request"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.PutSecret("o", "r", "FALCONET_APP_ID", "c2VhbGVk", "568250167242549743"); err != nil {
-		t.Fatal(err)
-	}
 	want := []recorded{
 		{"DELETE", "/repos/o/r/issues/36/labels/needs%20info", nil, nil},
 		{"POST", "/repos/o/r/issues/36/assignees", nil, map[string]any{"assignees": []any{"falconet[bot]"}}},
-		{"POST", "/repos/o/r/labels", nil, map[string]any{"name": "needs-info", "color": "d93f0b", "description": "a question"}},
-		{"POST", "/repos/o/r/labels", nil, map[string]any{"name": "infra-request"}},
-		{"PUT", "/repos/o/r/actions/secrets/FALCONET_APP_ID", nil, map[string]any{"encrypted_value": "c2VhbGVk", "key_id": "568250167242549743"}},
 	}
 	if len(*seen) != len(want) {
 		t.Fatalf("saw %d requests, want %d", len(*seen), len(want))
@@ -393,46 +311,6 @@ func TestTheNextWritesAreShapedLikeGitHubs(t *testing.T) {
 	}
 	if got := (*seen)[0].Path; got != "/repos/o/r/issues/36/labels/needs info" {
 		t.Errorf("label path decoded to %q", got)
-	}
-}
-
-func TestRequestHandsBackTheHeadersBesideAnErrorToo(t *testing.T) {
-	c, _ := served(t, map[string]string{"GET /repos/o/r": `{}`},
-		http.Header{"X-Oauth-Scopes": {"repo, gist"}})
-	h, err := c.Request("GET", "/repos/o/r", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := h.Get("X-OAuth-Scopes"); got != "repo, gist" {
-		t.Errorf("scopes on success: %q", got)
-	}
-	h, err = c.Request("GET", "/repos/o/private", nil, nil)
-	var e *Error
-	if !errors.As(err, &e) || e.Status != 404 {
-		t.Fatalf("want a 404 *Error, got %v", err)
-	}
-	if got := h.Get("X-OAuth-Scopes"); got != "repo, gist" {
-		t.Errorf("scopes beside a refusal: %q", got)
-	}
-	if e.Reason() != "not found, or no access" {
-		t.Errorf("Reason(): %q", e.Reason())
-	}
-	h, err = New("http://127.0.0.1:1", "t").Request("GET", "/x", nil, nil)
-	if err == nil || h != nil {
-		t.Errorf("no response: want nil headers and an error, got %v %v", h, err)
-	}
-}
-
-func TestSetupTokenIsItsOwnNameAndNothingElse(t *testing.T) {
-	t.Setenv("FALCONET_SETUP_TOKEN", "")
-	t.Setenv("GH_TOKEN", "gh")
-	t.Setenv("GITHUB_TOKEN", "gt")
-	if got := SetupTokenFromEnv(); got != "" {
-		t.Errorf("GH_TOKEN/GITHUB_TOKEN must not be fallbacks: got %q", got)
-	}
-	t.Setenv("FALCONET_SETUP_TOKEN", "setup")
-	if got := SetupTokenFromEnv(); got != "setup" {
-		t.Errorf("got %q", got)
 	}
 }
 
@@ -508,7 +386,7 @@ func TestTheRawReadsAreTheBytesGitHubSent(t *testing.T) {
 	c, seen := served(t, map[string]string{
 		"GET /repos/o/r/issues/42":                       issue,
 		"GET /repos/o/r/issues/42/comments?per_page=100": comments,
-	}, nil)
+	})
 	rawIssue, err := c.GetIssueRaw("o", "r", 42)
 	if err != nil {
 		t.Fatal(err)

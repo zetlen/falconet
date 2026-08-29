@@ -34,8 +34,7 @@ rewritten in the boil-down, not here.
 | Every assertion crosses a process boundary | I2, I3 | a property cannot be observed from outside a process — and then it is a Go unit test beside the guard | [below](#every-assertion-crosses-a-process-boundary) |
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
 | falconet's own GitHub client; `gh` and `jq` are not runtime dependencies | retired | the client's subset stops covering what a verb needs, by more than a dependency would cost | [below](#falconets-own-github-client) |
-| Setup is two verbs and a token the operator mints | retired | `init` cannot do a step, and the manual path becomes the only path | [below](#setup-is-two-verbs-and-a-token) |
-| A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App, or registration stops fitting inside `init` | [below](#a-github-app-purely-as-a-credential) |
+| A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
 | One release asset per target, digest in the tree before the tag | retired | the build stops reproducing, or an adopter needs a target the four assets miss | [below](#one-release-asset-per-target) |
 | falconet does not plan; the repository's plan bot does | I5 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
 
@@ -91,8 +90,8 @@ code that pays off only when someone writes the second one.
 ## Stage-level verbs, one JSON config file
 
 A thing is a public verb if and only if a caller invokes it directly — the
-four pipeline verbs (`prepare`, `commit`, `push`, `pause`), three for a
-person (`doctor`, `init`, `version`). `prompt`, `config` and `scan` exist
+four pipeline verbs (`prepare`, `commit`, `push`, `pause`) and `version`.
+`prompt`, `config` and `scan` exist
 unlisted: public in that they work, not vocabulary. Rejected: mirroring the origin's script names one-to-one (leaves
 orchestration in YAML — two code paths) and grouping by domain (`issue park`,
 `git prepare` — a taxonomy at six verbs).
@@ -167,17 +166,16 @@ the first verb, every `uses:` ref equal to `release/VERSION`.
 One module, one static binary (`CGO_ENABLED=0 -trimpath`, toolchain pinned in
 `go.mod`), standard library first: `os/exec` with argv slices — no shell, no
 quoting — `encoding/json`, `regexp` (RE2, linear-time over attacker-controlled
-issue text), `net/http`, `embed`, `crypto/rsa`. The one dependency outside it
-is `golang.org/x/crypto/nacl/box`, for the sealed box the secrets API
-demands; anything further is a change to this row, with a reason. `go vet`,
+issue text), `net/http`, `embed`. Nothing outside it: a dependency is a
+change to this row, with a reason. `go vet`,
 `staticcheck`, `errcheck` and `govulncheck` are part of green: an ignored
 error is a red build.
 
 The bash it replaced (~1,100 executable lines) ran one live issue and was
 deleted in the cutover, not kept beside the Go: two implementations agreeing
 by convention is the disease. Rejected: **Bun** (a ~90 MB compiled artifact
-or a second setup action; backtracking regexes over attacker text; a WASM
-package for the sealed box; an npm tree to audit) and **Rust** (stricter, and
+or a second setup action; backtracking regexes over attacker text; an npm
+tree to audit) and **Rust** (stricter, and
 it would have caught the fail-open class of bug at compile time — but the
 operator must be able to read a guard cold, and the guards are the product).
 The incident comment above each guard moved into Go verbatim; `git log` on
@@ -192,33 +190,14 @@ on a workstation, the same. The workflow's own `run:` steps still use `gh`
 for the pull request and contain's check, on GitHub's runner where it already
 is; the binary never does.
 
-## Setup is two verbs and a token
-
-`doctor` checks the repository it stands in against the README appendix's
-steps, read-only, one line each. `init` does steps 2–8 — the `.gitignore`
-line, the App, the secrets, the labels, the config, the caller workflow —
-each idempotent, then one local commit and never a push: pushing a workflow
-file through the API would need a `workflow` scope the token should not have,
-and the last step staying in a person's hands is this project's shape.
-
-Both authenticate with `FALCONET_SETUP_TOKEN` and nothing else. `GITHUB_TOKEN`
-and `GH_TOKEN` are deliberately not fallbacks: in CI they are the Actions
-token, which cannot do this and must never be asked to; on a laptop they are
-whatever someone set for something else. A fine-grained token reports no
-scopes, so `init` performs every read before any write and its first write is
-the idempotent one (labels), so a token short of a permission fails before
-anything hard to undo has happened, naming the permission. Without a token,
-`init` still does the local steps and prints what is left. The device flow
-was weighed and deferred: it needs an OAuth App the maintainer owns.
-
 ## A GitHub App, purely as a credential
 
 No webhooks, nothing hosted. The workflow mints installation tokens per step;
 output is authored by `falconet[bot]`; App-token pushes fire `pull_request`
-events normally, which is what an Actions-token push does not do. `init`
-registers the App from a manifest, receives the private key over localhost,
-and seals it straight into the repository's secrets — it is never written to
-disk. Installing the App is still a click in a browser.
+events normally, which is what an Actions-token push does not do. The
+operator registers it by hand from the README's step and puts its ID and
+private key into the repository's secrets by hand; installing it is a click
+in a browser.
 
 ## One release asset per target
 
@@ -257,5 +236,5 @@ What falconet still owes them is that the pull request is of the right
 change, opened where the bot will see it, with no account of the plan in it
 that a reviewer could mistake for the evidence. The cost, stated plainly:
 nothing validates or formats the change before the pull request, and
-`doctor` cannot see whether a plan bot is configured — the canary is the
+nothing can see whether a plan bot is configured — the canary is the
 check.

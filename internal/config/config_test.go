@@ -126,43 +126,6 @@ func TestMerge(t *testing.T) {
 	})
 }
 
-// The file's own document survives beside the merge, so a verb can tell
-// what the operator set from what the defaults supplied.
-func TestTheUsersDocumentIsKeptApartFromTheMerge(t *testing.T) {
-	dir := bare(t)
-	write(t, filepath.Join(dir, ".github", "falconet.json"), `{"prompts":{"implement":"mine.md"}}`)
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompts, _ := cfg.User["prompts"].(map[string]any)
-	if len(cfg.User) != 1 || prompts["implement"] != "mine.md" {
-		t.Errorf("User: %v", cfg.User)
-	}
-	// A key the file did not set is still there in the merge — a default
-	// keeps standing — and absent from User. (It used to be a prompt; prompts
-	// have no default since #3 was closed, so the handoff directory stands in.)
-	if cfg.Schema.HandoffDir != ".falconet" {
-		t.Errorf("the merge lost the default: %q", cfg.Schema.HandoffDir)
-	}
-	if _, set := cfg.User["handoff_dir"]; set {
-		t.Errorf("User carries a default it never set: %v", cfg.User)
-	}
-	if cfg.Schema.Prompts["implement"] != "mine.md" {
-		t.Errorf("the merge carries the override: %v", cfg.Schema.Prompts)
-	}
-	t.Run("nil when no file was found", func(t *testing.T) {
-		_ = bare(t)
-		cfg, err := Load("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.User != nil {
-			t.Errorf("User: %v", cfg.User)
-		}
-	})
-}
-
 func TestResolutionOrder(t *testing.T) {
 	dir := bare(t)
 	write(t, filepath.Join(dir, ".github", "falconet.json"), `{"issue":{"queue_label":"from-dot-github"}}`)

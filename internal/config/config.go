@@ -118,11 +118,6 @@ type Config struct {
 	// Doc is the defaults with the file merged over them. Numbers are
 	// json.Number, so they print as they were written.
 	Doc map[string]any
-	// User is the file's own document, before the merge — what the operator
-	// actually set — or nil when no file was found. doctor reads it to tell
-	// an override from a default: a prompt path the file names must exist
-	// under the repository root, where a default names the shipped prompt.
-	User map[string]any
 	// Schema is Doc, typed.
 	Schema Schema
 }
@@ -154,13 +149,12 @@ func Load(explicit string) (*Config, error) {
 		return nil, fmt.Errorf("the built-in defaults are not valid JSON: %v", err)
 	}
 
-	var user map[string]any
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s cannot be read: %v", path, err)
 		}
-		user, err = parseObject(raw)
+		user, err := parseObject(raw)
 		if err != nil {
 			// The message names OUR file rather than leaving a bare parse
 			// error in a log with nothing around it.
@@ -169,7 +163,7 @@ func Load(explicit string) (*Config, error) {
 		doc = Merge(doc, user)
 	}
 
-	cfg := &Config{File: path, Doc: doc, User: user}
+	cfg := &Config{File: path, Doc: doc}
 	if err := cfg.decodeSchema(); err != nil {
 		return nil, fmt.Errorf("%s does not match the schema: %v", orDefault(path, "the built-in defaults"), err)
 	}

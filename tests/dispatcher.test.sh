@@ -60,6 +60,15 @@ for v in validate assemble plan-env; do
   assert_not_contains "$ERR" "  $v " "usage"
 done
 
+it "and so are the setup verbs: the install is the README's steps, by hand"
+for v in doctor init; do
+  assert_not_contains "$ERR" "  $v " "usage"
+  run "$v"
+  assert_eq "2" "$RC" "$v exit code"
+  assert_contains "$ERR" "unknown verb '$v'"
+done
+run --help
+
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
 

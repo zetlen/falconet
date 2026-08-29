@@ -60,8 +60,8 @@ func Root(cwd string) (string, error) {
 // else the `origin` remote of the repository at cwd, parsed for an
 // owner/name on github.com (or on the host $GITHUB_SERVER_URL names).
 //
-// This is for the verbs that operate on the tree they stand in — doctor and
-// prepare — where the tree's origin is the right answer. pause does not use
+// This is for a verb that operates on the tree it stands in — prepare —
+// where the tree's origin is the right answer. pause does not use
 // it and must not: it operates on an issue, not a tree, and a comment on a
 // guessed repository is the failure its GITHUB_REPOSITORY-only rule exists
 // to prevent.

@@ -35,7 +35,7 @@
 # So nothing checks falconet out into the consumer's tree any more, and the
 # input that chose which falconet to check out is gone with the checkout: the
 # tag on the `uses:` line is the one coordinate, and a caller still passing
-# that input is rejected when its file is loaded (doctor says so). ADR-0005's
+# that input is rejected when its file is loaded. ADR-0005's
 # "one checkout in the agent job, and it is falconet's" becomes none.
 #
 # ---------------------------------------------------------------------------
