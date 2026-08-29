@@ -1,9 +1,11 @@
 name: falconet
 description: >-
   Turn a plain-language infrastructure request into a pull request a person
-  can review, and stop there. This action is setup plus pass-through: it pins
-  the binaries the verbs need — gitleaks and falconet itself — and then runs
-  one verb, or runs nothing and leaves them on PATH.
+  can review, and stop there. This action is setup plus pass-through: it
+  installs the binaries the verbs need — gitleaks, pinned by version and
+  digest, and falconet itself, compiled from this module at the ref this
+  action was called at — and then runs one verb, or runs nothing and leaves
+  them on PATH.
 author: zetlen
 
 inputs:
@@ -12,9 +14,8 @@ inputs:
       One of prepare, commit, push; the unlisted prompt; or doctor. Not
       pause: `args` is split on whitespace and a pause preamble is a
       sentence, so it runs from PATH in the workflow's own run: steps.
-      Empty means setup only: the pinned binaries are installed
-      and no verb runs, which is how a job puts falconet on PATH before its
-      first verb.
+      Empty means setup only: the binaries are installed and no verb runs,
+      which is how a job puts falconet on PATH before its first verb.
     required: false
     default: ''
   args:
@@ -30,8 +31,8 @@ inputs:
     default: '.'
   setup:
     description: >-
-      Install the pinned binaries. Leave true on the first call in a job and
-      set false afterwards; the installs are idempotent but not free.
+      Install the binaries. Leave true on the first call in a job and set
+      false afterwards; the installs are idempotent but not free.
     required: false
     default: 'true'
   gitleaks-version:
@@ -87,57 +88,69 @@ runs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/gitleaks" version
 
-    # falconet itself, the way gitleaks is installed: a version, a URL, and a
-    # digest. All three come out of this action's own checkout — GitHub
-    # fetched it into the runner's action cache at the ref the caller's
-    # `uses:` named — so release/VERSION is the tag `make release-prep` wrote
-    # and release/falconet_linux_amd64.sha256 is the digest it computed of the
-    # bytes release.yml refused to publish unless they reproduced (ADR-0006
-    # D6). The asset is bare-named because the version is already in the
-    # URL's path. No token: the release is public.
+    # falconet itself is COMPILED, not downloaded: `go install` of this module
+    # at the ref the caller's `uses:` named. GitHub fetched this action's tree
+    # at that ref into the runner's action cache; the go command fetches the
+    # same module at the same ref from the module proxy, checks it against
+    # the checksum database — a transparency log that vouches for the bytes
+    # of every version it has ever served — and builds it here. So the guards
+    # a job runs are the guards in the tree at the ref, with no second
+    # artifact between them: no release, no asset, no digest committed ahead
+    # of a tag, and no token, because the module is public.
     #
-    # Unlike gitleaks, a falconet already on PATH is NOT taken on sight. The
-    # gitleaks short-circuit saves a download of a scanner this action does
-    # not otherwise reason about; this binary is the one the whole workflow
-    # is pinned to, and a runner image or an earlier step that left a
-    # different falconet on PATH would have every verb run a version the
-    # consumer's pin never named, silently. The same version: say so and
-    # skip. Anything else: install the pinned one in front of it.
+    # The ref travels through `env:`, never through the run: block. Inside a
+    # composite action `github.action_ref` is populated when a step's env is
+    # evaluated and is EMPTY by the time its run: block is (actions/runner
+    # #2473; the contexts reference says to do exactly this) — and
+    # `go install …@` with nothing after the @ is not this module at some
+    # ref, it is an error. The step also refuses an empty ref outright, which
+    # is what a `uses: ./` would hand it. contract.test.sh holds the shape.
     #
-    # The digest is checked BEFORE install, and `falconet version` runs LAST
-    # and must begin with the pinned version: a tag is a mutable pointer and
-    # a release asset can be replaced, and what came off the network has to
-    # both hash right and actually run, on this runner, before anything
-    # depends on it. A binary that reports any other version is not the one
-    # the tree describes, whatever its bytes hashed to.
-    - name: Install falconet (pinned)
+    # Go comes from setup-go, pinned by SHA, reading the toolchain line of
+    # THIS action's go.mod — not the workspace's, which is the consumer's
+    # repository and is not a Go module. setup-go's own cache is off for the
+    # same reason: it keys on a go.sum under the workspace, which no job of
+    # falconet's has, and an enabled cache that finds none is a warning on
+    # every job of every run. The compile is the price, and the register row
+    # names it as the thing that reopens this.
+    #
+    # `falconet version` runs LAST and, when the ref is a tag, must report
+    # that tag: the go command records the version it resolved, so a binary
+    # that calls itself anything else is not the one the ref names, whatever
+    # built it. Any other ref — a branch, a commit — resolves to a
+    # pseudo-version, and the proof is that it runs. GITHUB_PATH prepends,
+    # so a falconet an earlier step left on PATH is behind this one.
+    - name: Set up Go
+      if: inputs.setup == 'true'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache: false
+
+    - name: Install falconet (go install at this action's ref)
       if: inputs.setup == 'true'
       shell: bash
+      env:
+        FALCONET_REF: ${{ github.action_ref }}
+        CGO_ENABLED: '0'
       run: |
         set -euo pipefail
-        version="$(cat "$GITHUB_ACTION_PATH/release/VERSION")"
-        sha="$(awk '{print $1}' "$GITHUB_ACTION_PATH/release/falconet_linux_amd64.sha256")"
-        if command -v falconet >/dev/null 2>&1; then
-          have="$(falconet version 2>/dev/null || true)"
-          case "$have" in
-            "falconet $version "*)
-              echo "falconet $version is already on PATH at $(command -v falconet)"
-              exit 0 ;;
-          esac
-          echo "a different falconet is on PATH at $(command -v falconet) (${have:-no version}); installing $version in front of it"
+        if [ -z "$FALCONET_REF" ]; then
+          echo "no action ref: use this action as zetlen/falconet@<ref>, not from a local path" >&2
+          exit 1
         fi
-        file="$RUNNER_TEMP/falconet_linux_amd64"
-        url="https://github.com/zetlen/falconet/releases/download/${version}/falconet_linux_amd64"
-        curl -fsSL --retry 3 -o "$file" "$url"
-        echo "$sha  $file" | sha256sum -c -
         dest="$HOME/.local/bin"
         mkdir -p "$dest"
-        install -m 0755 "$file" "$dest/falconet"
+        GOBIN="$dest" go install "github.com/zetlen/falconet/cmd/falconet@$FALCONET_REF"
         echo "$dest" >> "$GITHUB_PATH"
         have="$("$dest/falconet" version)"
-        case "$have" in
-          "falconet $version "*) echo "$have" ;;
-          *) echo "the installed falconet reports '$have', not $version" >&2; exit 1 ;;
+        case "$FALCONET_REF" in
+          v[0-9]*)
+            case "$have" in
+              "falconet $FALCONET_REF "*) echo "$have" ;;
+              *) echo "the installed falconet reports '$have', not $FALCONET_REF" >&2; exit 1 ;;
+            esac ;;
+          *) echo "$have" ;;
         esac
 
     # The verb and its arguments reach the shell through the ENVIRONMENT, not

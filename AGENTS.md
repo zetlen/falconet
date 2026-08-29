@@ -208,12 +208,12 @@ needs bash, git, jq, awk and python3 stdlib. Adding a dependency to run the
 tests is a decision, not a convenience.
 
 `contract.test.sh` is the wiring's test: it reads `action.yml`,
-`.github/workflows/falconet.yml`, `release.yml`, the Makefile and the
-README's caller template (between its `<!-- caller-workflow-template -->`
-markers) and holds their shape — no checkout in the agent job, the install
-before the first verb in every job, every `uses: zetlen/falconet@` ref equal
-to `release/VERSION`. A new case is proved red on the break it exists for
-before it is made green.
+`.github/workflows/falconet.yml`, the Makefile and the README's caller
+template (between its `<!-- caller-workflow-template -->` markers) and holds
+their shape — no checkout in the agent job, the install before the first
+verb in every job, every `uses: zetlen/falconet@` ref one tag, the binary
+`go install`ed at the action's own ref. A new case is proved red on the
+break it exists for before it is made green.
 
 ## The records have a test too
 

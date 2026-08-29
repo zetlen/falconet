@@ -49,18 +49,21 @@ opens ([the register](decisions.md#falconet-does-not-plan)).
 
 **This repository** is public at `zetlen/falconet`. `main` is integration:
 development lands there, and it moves. A consumer pins a **tag** in `uses:`
-— `zetlen/falconet/.github/workflows/falconet.yml@v0.2.0` — and the
-workflow at that tag installs, in every job, the binary whose digest the
-tree at that tag holds (ADR-0006 D6); `falconet init` writes the tag of the
-binary that ran it, and upgrading is moving the tag. A release is cut the
-way the Makefile says: `make release-prep VERSION=vX.Y.Z` as the **last**
-commit before the tag — it writes `release/VERSION`, the linux_amd64 digest
-and the workflow's own `uses: zetlen/falconet@vX.Y.Z` refs, prints the `git
-add`, `git commit`, `git tag` and `git push` for a person to run, and says
-why it must be last: "a digest describes one build of one tree, and any
-later commit that touches cmd/, internal/ or go.mod makes it stale." The tag
-push runs `release.yml`, which rebuilds those bytes and refuses to publish
-anything if they differ.
+— `zetlen/falconet/.github/workflows/falconet.yml@v1.0.0` — and the
+workflow at that tag compiles falconet, in every job, from this module at
+that tag: `go install github.com/zetlen/falconet/cmd/falconet@v1.0.0`,
+served by Go's module proxy and vouched for by its checksum database
+([the register](decisions.md#the-binary-is-go-installed-at-the-callers-ref)).
+`falconet init` writes the tag of the binary that ran it, and upgrading is
+moving the tag.
+
+A version is a git tag and nothing else. To name one: set the four
+`uses: zetlen/falconet@vX.Y.Z` lines in `.github/workflows/falconet.yml` to
+the new tag, as the **last** commit before it — the workflow at a tag names
+that tag, and `contract.test.sh` refuses four lines that disagree or a ref
+that is not a tag — then `git tag vX.Y.Z`, and push the branch and the tag.
+There is no release to cut, no asset to build and nothing to upload: the
+proxy fetches the tag the first time anyone installs it.
 
 Public means every push is a publication. One value was already redacted
 during extraction (a Cloudflare account ID); `wayfinders-infra` is private, so

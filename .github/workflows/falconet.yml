@@ -22,21 +22,23 @@
 # ---------------------------------------------------------------------------
 # Where falconet comes from
 # ---------------------------------------------------------------------------
-# Every job installs falconet as a release asset, through this repository's
-# composite action at a tag: `uses: zetlen/falconet@vX.Y.Z`, the same literal
-# on every line, equal to release/VERSION at that tag. `uses:` cannot take an
-# expression, so the ref is written by `make release-prep` together with
-# release/VERSION and the digest — three things, one command, one second —
-# and `make release-verify` and contract.test.sh refuse a tree where they
-# disagree. GitHub fetches the action's repository into the runner's action
-# cache, outside the workspace and with no token (it is public), and the
-# action installs the asset whose digest that tree holds (ADR-0006 D6).
+# Every job compiles falconet, through this repository's composite action at
+# a tag: `uses: zetlen/falconet@vX.Y.Z`, the same literal on every line, and
+# the action runs `go install` of this module at the ref it was called at.
+# GitHub fetches the action's repository into the runner's action cache,
+# outside the workspace and with no token (it is public); the go command
+# fetches the same module at the same ref from the module proxy, checked
+# against the checksum database, and builds it. `uses:` cannot take an
+# expression, so the tag is a literal here — written by hand as the last
+# commit before that tag is made (operating.md) — and contract.test.sh
+# refuses a tree where the four lines disagree or name anything but a tag.
+# Between tags they name the LAST tag, and the action there is that tag's.
 #
-# So nothing checks falconet out into the consumer's tree any more, and the
-# input that chose which falconet to check out is gone with the checkout: the
-# tag on the `uses:` line is the one coordinate, and a caller still passing
-# that input is rejected when its file is loaded (doctor says so). ADR-0005's
-# "one checkout in the agent job, and it is falconet's" becomes none.
+# So nothing checks falconet out into the consumer's tree, and the input that
+# chose which falconet to check out is gone with the checkout: the tag on the
+# `uses:` line is the one coordinate, and a caller still passing that input
+# is rejected when its file is loaded (doctor says so). ADR-0005's "one
+# checkout in the agent job, and it is falconet's" becomes none.
 #
 # ---------------------------------------------------------------------------
 # The cost of that boundary, stated plainly
@@ -277,9 +279,9 @@ jobs:
       # falconet either. ADR-0005 allowed this job one checkout, falconet's,
       # because a composite action had to run from under the workspace; the
       # action now lives in the runner's action cache and what it fetches is
-      # a public release asset, with no token. That is the stronger form of
-      # ADR-0005's sentence, and contract.test.sh holds it: zero
-      # actions/checkout steps here, ever.
+      # this public module through the module proxy, with no token. That is
+      # the stronger form of ADR-0005's sentence, and contract.test.sh holds
+      # it: zero actions/checkout steps here, ever.
       - name: Install falconet and gitleaks
         uses: zetlen/falconet@v1.0.0
 
@@ -464,7 +466,7 @@ jobs:
           BRANCH: ${{ needs.gate.outputs.branch }}
 
       # The one step between the branch and the remote: the push needs the
-      # binary, and the binary is a download. It is the only thing that runs
+      # binary, and the binary is a compile. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
       - name: Install falconet and gitleaks
         uses: zetlen/falconet@v1.0.0
