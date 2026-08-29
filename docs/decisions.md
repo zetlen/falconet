@@ -1,7 +1,7 @@
 # The decision register
 
-Every live decision in falconet: what is true, the [charter](charter.md)
-invariant it serves, the observation that should retire it, and — under the
+Every live decision in falconet: what is true, the [README](../README.md#the-invariant-principles)
+principle it serves, the observation that should retire it, and — under the
 table — the shortest honest account of why, with what was rejected. This is
 the only document that holds the *why*. It describes the tree as it is; it
 does not narrate how it got here. [`history/`](history/) does that, and is
@@ -15,22 +15,29 @@ present, that row is open. Say so, and change the row.
 Decisions absent from this table are absent because nobody made them. That is
 a finding, not a formatting error.
 
+**Re-keyed on 2026-08-29.** The Serves column cites the five principles at
+the top of the README by position — `I1` is the first, `I5` the fifth. The
+prose under the table still speaks in the old charter's I1–I6, and a row
+whose only principle was the retired adoption invariant says `retired`: its
+mechanism is what the README says goes, and the row goes with it. Both are
+rewritten in the boil-down, not here.
+
 | Decision | Serves | Reopen when | Record |
 | --- | --- | --- | --- |
-| The pipeline is falconet's own code, not `gh-aw` | I5, I6 | this repository acquires the threat model gh-aw is sized for: strangers triggering workflows | [below](#the-pipeline-is-falconets-own-code) |
-| One agent pass, holding nothing it could publish with | I5 | never for convenience — a second pass changes I5, and that goes to the operator | [below](#one-agent-pass-holding-nothing) |
-| No second, reviewing agent | I6 | a review harness clears the bar the first one failed: an independent, uncontaminated read of diff, message and plan, worth more than it costs | [below](#no-second-reviewing-agent) |
-| GitHub and Claude Code are the platform; an OpenTofu repository is the shape | I6 | an adopter exists on another forge or harness — and there is one adopter | [below](#github-and-claude-code-are-the-platform) |
-| Stage-level verbs, one JSON config file | I6 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
-| Packaged as a reusable workflow plus a composite action | I6 | the credentials or setup it demands outgrow what an adopter can check in the README's steps | [below](#a-reusable-workflow-and-a-composite-action) |
-| Verbs never call each other; they leave files in `.falconet/` | I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
-| Every assertion crosses a process boundary | I2, I5 | a property cannot be observed from outside a process — and then it is a Go unit test beside the guard | [below](#every-assertion-crosses-a-process-boundary) |
-| The language is Go | I2, I5, I6 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
-| falconet's own GitHub client; `gh` and `jq` are not runtime dependencies | I6 | the client's subset stops covering what a verb needs, by more than a dependency would cost | [below](#falconets-own-github-client) |
-| Setup is two verbs and a token the operator mints | I6 | `init` cannot do a step, and the manual path becomes the only path | [below](#setup-is-two-verbs-and-a-token) |
-| A GitHub App, registered purely as a credential | I4, I6 | GitHub offers an identity that needs no App, or registration stops fitting inside `init` | [below](#a-github-app-purely-as-a-credential) |
-| One release asset per target, digest in the tree before the tag | I6 | the build stops reproducing, or an adopter needs a target the four assets miss | [below](#one-release-asset-per-target) |
-| falconet does not plan; the repository's plan bot does | I1, I2, I3, I6 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
+| The pipeline is falconet's own code, not `gh-aw` | I2 | this repository acquires the threat model gh-aw is sized for: strangers triggering workflows | [below](#the-pipeline-is-falconets-own-code) |
+| One agent pass, holding nothing it could publish with | I2 | never for convenience — a second pass changes I5, and that goes to the operator | [below](#one-agent-pass-holding-nothing) |
+| No second, reviewing agent | retired | a review harness clears the bar the first one failed: an independent, uncontaminated read of diff, message and plan, worth more than it costs | [below](#no-second-reviewing-agent) |
+| GitHub and Claude Code are the platform; an OpenTofu repository is the shape | retired | an adopter exists on another forge or harness — and there is one adopter | [below](#github-and-claude-code-are-the-platform) |
+| Stage-level verbs, one JSON config file | I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
+| Packaged as a reusable workflow plus a composite action | I2 | the credentials or setup it demands outgrow what an adopter can check in the README's steps | [below](#a-reusable-workflow-and-a-composite-action) |
+| Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
+| Every assertion crosses a process boundary | I2, I3 | a property cannot be observed from outside a process — and then it is a Go unit test beside the guard | [below](#every-assertion-crosses-a-process-boundary) |
+| The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
+| falconet's own GitHub client; `gh` and `jq` are not runtime dependencies | retired | the client's subset stops covering what a verb needs, by more than a dependency would cost | [below](#falconets-own-github-client) |
+| Setup is two verbs and a token the operator mints | retired | `init` cannot do a step, and the manual path becomes the only path | [below](#setup-is-two-verbs-and-a-token) |
+| A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App, or registration stops fitting inside `init` | [below](#a-github-app-purely-as-a-credential) |
+| One release asset per target, digest in the tree before the tag | retired | the build stops reproducing, or an adopter needs a target the four assets miss | [below](#one-release-asset-per-target) |
+| falconet does not plan; the repository's plan bot does | I5 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
 
 ## The pipeline is falconet's own code
 

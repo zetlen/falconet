@@ -1,7 +1,7 @@
 // docslint holds the shape of this repository's records.
 //
-// The charter names invariants; the register lists every live decision with
-// the invariant it serves, the observation that should retire it, and a
+// The README's principles are numbered; the register lists every live
+// decision with the principle it serves, the observation that should retire it, and a
 // section in the same file that records it. None of that survives contact
 // with a busy week unless something refuses a row that skips it — the same
 // reason tests/contract.test.sh holds the wiring's shape rather than trusting
@@ -37,7 +37,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, f)
 	}
 	if len(findings) > 0 {
-		fmt.Fprintf(os.Stderr, "\ndocslint: %d problem(s). docs/charter.md says what these fields are for.\n", len(findings))
+		fmt.Fprintf(os.Stderr, "\ndocslint: %d problem(s). the README's principles and AGENTS.md say what these fields are for.\n", len(findings))
 		os.Exit(1)
 	}
 	fmt.Println("docslint: the records agree")

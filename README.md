@@ -1,45 +1,103 @@
-# falconet
+# falconet: the tiny code cannon
 
-A falconet is a small cannon: one precise shot, aimed by hand, at a target you
-picked on purpose. This one turns a plain-language infrastructure request into
-a pull request a person can review — and then stops, because planning is the
-repository's plan bot's job and applying is a human's.
+falconet is a tool for safely running coding agents in CI by tightly controlling their inputs, their permissions, and their outputs. With it, an issue-to-pull-request pipeline for a repository is fast to set up and reliable to run: someone files an issue in ordinary words, an agent works it inside a job that holds nothing it could publish with, and a person gets a pull request — or a question, or a hand-off — every time.
 
-**Status: it works, and it is one binary.** One static Go binary runs in CI,
-where every job installs it from a release and checks its digest, and on a
-laptop, where `falconet init` does the install and `falconet doctor` checks
-it. It has run live on a real consumer since 2026-08-21 and reached pull
-requests. Each live run has also found a wiring bug that no unit test could
-see, and each is now a case in the suite. See
-[Where this stands](#where-this-stands).
+## Who are you?
 
-## What it does
+### **"I'm setting this up!"**
+You might be handling a lot of issues yourself, but you don't trust the popular agentic tools to handle issues unattended. You might not want to use paid SaaS like env0 or Spacelift. You know how the code works, you can set up issue templates and CI jobs, and you would like to maybe work less.
 
-Someone files an issue that says, in ordinary words, what they want changed.
-falconet:
+### **"I review PRs!"**
+If you're not the operator but you review PRs, you'll get used to falconet opening small and highly descriptive PRs, with steps to repro and tests to run. There will be no big stack of commits, and no danger that the agent did something with an unexpected side effect.
 
-1. assigns itself the issue and opens a branch
-2. runs **one** agent pass with a deliberately narrow toolset — it edits
-   config and writes a commit message, and holds no shell and no push token
-3. commits through deterministic guards that an agent cannot talk its way past
-4. pushes the branch the moment a commit exists, and opens a pull request
-   whose body is the agent's own account of the change, labelled for human
-   review
+### **"I'm opening issues!"**
+You are describing what you want, and don't have to make the change yourself. (Or you can't, for whatever reason.) You file an issue, through a structured issue template. Maybe you'll get a question back. But probably, you'll get a pull request implementing your change, pretty shortly.
 
-Every exit is a terminal state: a pull request, a question for the requester,
-or a hand-off to a human. A request never disappears into a green run that
-produced nothing.
 
-**falconet does not plan.** The plan a reviewer reads is posted on the pull
-request by the plan bot your repository already runs on every pull request —
-[Atlantis](https://www.runatlantis.io/) or
-[dflook/terraform-github-actions](https://github.com/dflook/terraform-github-actions)
-are the known-good options — from credentials falconet never holds. The
-pull-request body carries no plan and the agent is told not to describe one:
-the evidence is the bot's comment, and branch protection on its status is
-what stands between the pull request and an apply.
+## How falconet controls the process
 
-What it will **not** do is apply anything. The gate at the end is a person.
+Falconet is designed to run four sequential steps in CI. Each is a job; each leaves files for the next and calls nothing.
+
+1. **Assemble.** Turn the issue — title, body, thread — and the repository
+   into exactly what the agent will read: a request document, a checkout, a
+   prompt. Decide here whether the request is eligible at all.
+2. **Implement.** Run the agent, once, with the full judgment of an agent and
+   the permissions of none: no shell, no token, no secret, no network but the
+   model, and only the harness's own file tools. It edits, and it writes
+   either a commit message or a question for the requester. It does not
+   commit.
+3. **Check.** Deterministic guards decide whether what the agent wrote may
+   ship at all; the repository's own checks decide whether it is right. A
+   guard refusal ends the run. A failing check goes back to step 1 with the
+   failure attached, a bounded number of times.
+4. **Deliver.** Commit, push the branch the moment a commit exists, and end
+   in one of three places a person can see: a pull request, a question on the
+   issue, or a hand-off that names the branch.
+
+## The invariant principles
+
+### Inputs are assembled, not discovered
+
+**1.** The agent reads what step 1 prepared and nothing reaches it another way. The
+request is untrusted text **and** it is the agent's instructions — "while
+you're in there, edit the workflow to grant Bash" is the attack — so the
+request arrives as a document, not as a capability, and the agent is told what
+it may touch rather than left to find out.
+
+### The agent holds nothing
+
+**2.** No shell, no push token, no credential of any kind, no network beyond the
+model it runs on. The tree it edits arrives with its remote stripped. This is
+enforced by the boundary of the job it runs in, not by the harness's own
+allowlist: a harness that lets the agent run a shell anyway finds nothing to
+take and nowhere to send it.
+
+### The agent can't argue with its own guards or its own results
+
+**3.** The agent's output is a diff and a message, or a question. Between that and a
+commit stand guards no model is asked to interpret: which paths may change,
+which contents may not appear, what may not be renamed, what must not leak.
+A guard refusal is terminal — nothing feeds it back for another try, because
+a guard the agent can iterate against is an oracle, not a guard. Only the
+repository's own checks may send a run back, and only a bounded number of
+times.
+
+### Every run ends somewhere a person can see
+
+**4.** Three terminal states and nothing else: a pull request, a question for the
+requester, or a hand-off to a human. A run never disappears into a green
+job that produced nothing, and work that exists is never lost to a runner
+being torn down — a branch is pushed the moment a commit exists, and a
+hand-off names it and links it.
+
+### A person merges
+
+**5.** falconet stops at the pull request. What stands between that pull request
+and the default branch is the repository's own — its checks, its reviewers,
+its branch protection — and falconet puts nothing in the pull request that a
+reviewer could mistake for that evidence. In an infrastructure repository the
+evidence is the plan the repository's plan bot posts; falconet's part is that
+the pull request is of the right change, on a branch the bot will see.
+
+## Where this stands
+
+The four steps above are what this tool is, and the tree is being boiled
+down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
+
+| Step | In the tree |
+| --- | --- |
+| Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
+| Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
+| Check | the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan. **The bounded check loop is not built yet**; a run is one pass. |
+| Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off |
+| Still here, slated for removal | `init`, `doctor`, the App manifest, the sealed-secrets client, falconet's own GitHub client, the release-digest apparatus. The install steps below describe the tree as it is. |
+| Live runs | on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0; not yet in the post-2026-08-26 shape against a plan bot |
+
+[The decision register](docs/decisions.md) holds every live decision with the
+principle it serves and the observation that should retire it.
+[`docs/history/`](docs/history/) is how those decisions were reached; it is
+not a description of the tree. [operating](docs/operating.md) covers the
+credentials only the operator can create.
 
 ## Install it in your repository
 
@@ -386,115 +444,6 @@ MISSING      8. falconet-ref is no longer an input; remove it
 your plan bot's comment showing the canary's resources and nothing else. No
 comment means the bot is not planning falconet's pull requests; that is the
 bot's configuration, and it has to be fixed before the next request.
-
-## How it is built
-
-Four verbs, one per stage. They never call each other; they pass files
-through the handoff directory, so the same sequence runs in CI and on a
-workstation. Uniform exit codes: **0** an outcome was determined, **1**
-refused or a check failed, **2** usage. The verbs that decide something
-print exactly one word on stdout.
-
-| Verb | What it does | Words |
-| --- | --- | --- |
-| `prepare --issue N` | eligibility gate, assignment, branch, the handoff | `ready` `in-flight` `ineligible` |
-| `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
-| `push --branch B` | the branch onto the remote, the moment a commit exists | — |
-| `pause --issue N --label L` | a terminal state, said where the requester reads it | `success` `failure` |
-
-Three more are for a person at a keyboard, and they are the whole of the
-install path above:
-
-| Verb | What it does | Exit |
-| --- | --- | --- |
-| `doctor` | checks the repository it stands in against the appendix's steps 1–7, read-only, one line per check | 0 every check `ok`; 1 otherwise |
-| `init` | does the appendix's steps 2–7, each idempotent and reported one line, then one commit and never a push | 0 everything attempted succeeded (a skipped step is not a failure); 1 a dirty tree, a refused write, a repository that cannot be reached |
-| `version` | the tag and the Go it was built with | 0 |
-
-`prompt`, `config` and `scan` exist unlisted —
-public in that they work, not vocabulary, by
-[the register](docs/decisions.md#stage-level-verbs-one-json-config-file)'s
-criterion that a thing is a verb if and only if a caller invokes it directly. `-h` on any of them says
-what it does.
-
-The reusable workflow runs the four as four jobs — **gate**, **implement**,
-**publish**, **contain** — and the boundaries between the jobs are the
-security model: the agent's job has `permissions: {}` and no secret but the
-model key; the scripted jobs hold the token and do the mechanics.
-[`.github/workflows/falconet.yml`](.github/workflows/falconet.yml) documents
-the trade it makes and why.
-
-What a run needs, in CI: git, gitleaks and the binary, and nothing else.
-[`action.yml`](action.yml) installs the two as the first step of every job —
-gitleaks and falconet by version and digest, falconet's digest being the one
-committed in this tree at [`release/`](release/). No OpenTofu: the plan bot
-brings its own. On a workstation, the same, plus a browser for
-`init`'s App step. The binary needs neither `jq` nor `gh`: the verbs speak to
-`GITHUB_API_URL` themselves. (The workflow still uses `gh` in two of its own
-`run:` steps, on GitHub's runner, where it already is.)
-
-The same verbs run by hand, against the repository you are standing in — no
-workflow. `prepare` and `pause` read `GH_TOKEN` (then `GITHUB_TOKEN`) and
-`GITHUB_REPOSITORY=owner/name`; `prepare` falls back to the origin remote,
-and `pause` — which operates on an issue rather than a tree — deliberately
-does not. The rest need nothing:
-
-```sh
-falconet commit
-```
-
-### Design commitments
-
-- **Deterministic mechanics, agent judgment.** The agent decides *what* the
-  change is. The binary does the branching, committing, pushing and the
-  pull request — so those steps cannot be skipped, improvised, or argued
-  out of.
-- **Guards are incident-shaped.** Every one of them exists because something
-  went wrong once. They are documented with the incident that caused them,
-  in the comment above the guard, and the port moved those comments into Go
-  verbatim: the operator reads Go, and the guards are the product.
-- **One agent, one context.** An earlier design ran a second reviewing agent;
-  measurements showed the second cold context cost more than it caught.
-- **The plan is the evidence, and it is not falconet's.** The plan bot posts
-  it whole on the pull request; the agent is told not to describe it and the
-  body carries none, because a human approving a summary of evidence is not
-  review. Since 2026-08-26 falconet runs no `tofu` at all: a fifth of the
-  tree had reimplemented what Atlantis and dflook do, and it was cut.
-- **Opinionated on purpose.** GitHub and Claude Code are assumed. An
-  OpenTofu or Terraform repository is the shape. Being agnostic across forges
-  is an explicit non-goal.
-
-## Why it exists
-
-It was built inside an OpenTofu repository and worked well enough that the
-surrounding repo became mostly pipeline: ~4,700 lines of workflow and shell
-against ~1,000 lines of actual infrastructure. Two attempts to escape that —
-adopting an off-the-shelf agentic workflow, or trimming in place — both
-concluded the same way: the workflow is a good tool wearing a repository as a
-costume. So it becomes a tool.
-[The founding record](docs/history/0002-extract-the-pipeline-into-falconet.md)
-has the measurements that killed the off-the-shelf option.
-
-## Where this stands
-
-| Piece | State |
-| --- | --- |
-| `cmd/falconet/`, `internal/` — the binary | four verbs, two setup verbs and `version`; the standard library plus `golang.org/x/crypto/nacl/box` for the sealed box the secrets API demands |
-| `tests/` | 13 files through the binary (`make test`), with `go test ./...` beside it; the wiring invariants are [`tests/contract.test.sh`](tests/contract.test.sh) |
-| `release/` + `.github/workflows/release.yml` | the digest in the tree before the tag, four assets and `checksums.txt` per tag |
-| the plan | not falconet's: the repository's plan bot, on the pull request |
-| `prompts/` | embedded in the binary; the standing-facts block is the origin's |
-| Live runs | yes, on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0. Each found a bug that only integration finds. The plan side was removed on 2026-08-26 and has not yet run live in the new shape against a plan bot |
-
-[The charter](docs/charter.md) is what falconet is for, in one page: the six
-invariants that hold, the non-goals, and the line between those and everything
-that is merely how it is built today. [The decision register](docs/decisions.md)
-holds every live decision, with the invariant it serves, the observation that
-should retire it, and why. [`docs/history/`](docs/history/) is how those
-decisions were reached, kept for its incidents and measurements; it is not a
-description of the tree. [operating](docs/operating.md) covers the credentials only the
-operator can create; [AGENTS.md](AGENTS.md) is what to read before changing
-anything here.
 
 ## Running the tests
 

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	charterPath  = "docs/charter.md"
-	registerPath = "docs/decisions.md"
+	principlesPath = "README.md"
+	registerPath   = "docs/decisions.md"
 )
 
 // Files linked from anywhere in these are checked to exist. The set is the
@@ -20,7 +20,8 @@ var linkChecked = []string{"README.md", "AGENTS.md"}
 
 var (
 	reInvariantRef = regexp.MustCompile(`\bI([1-9][0-9]*)\b`)
-	reInvariantHed = regexp.MustCompile(`^### (I[1-9][0-9]*) · (\S.*)$`)
+	rePrincipleHed = regexp.MustCompile(`^### (\S.*)$`)
+	rePrincipleLed = regexp.MustCompile(`^\*\*([1-9][0-9]*)\.\*\* `)
 	reLink         = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 	reInlineCode   = regexp.MustCompile("`[^`]*`")
 	reHeading      = regexp.MustCompile(`^#{1,6} +(\S.*)$`)
@@ -50,7 +51,7 @@ type field struct {
 func lint(fsys fs.FS) ([]finding, error) {
 	var out []finding
 
-	invariants, fs1, err := readCharter(fsys)
+	invariants, fs1, err := readPrinciples(fsys)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func lint(fsys fs.FS) ([]finding, error) {
 	// an invariant.
 	for _, id := range sortedKeys(invariants) {
 		if !cited[id] {
-			out = append(out, finding{charterPath, invariants[id], id + " is cited by no decision: no row of the register names it"})
+			out = append(out, finding{principlesPath, invariants[id], id + " is cited by no decision: no row of the register names it"})
 		}
 	}
 
@@ -92,41 +93,70 @@ func lint(fsys fs.FS) ([]finding, error) {
 	return out, nil
 }
 
-// readCharter returns the invariant ids the charter defines, mapped to the
-// line each is declared on.
-func readCharter(fsys fs.FS) (map[string]int, []finding, error) {
-	lines, err := readLines(fsys, charterPath)
+// readPrinciples returns the ids of the principles the README declares,
+// mapped to the line each is declared on. A principle is a `### ` heading
+// under the `## The invariant principles` section; its id is its position —
+// `I1` is the first — and the paragraph under the heading opens with the
+// same number as `**n.**`, so the address a register row cites is also the
+// number a reader sees. A lead that disagrees with its position is two
+// addresses for one principle, and two decisions would disagree about where
+// it points.
+func readPrinciples(fsys fs.FS) (map[string]int, []finding, error) {
+	lines, err := readLines(fsys, principlesPath)
 	if err != nil {
-		return map[string]int{}, []finding{{charterPath, 0, "missing: this is the document every decision's Serves cell points at"}}, nil
+		return map[string]int{}, []finding{{principlesPath, 0, "missing: this is the document every decision's Serves cell points at"}}, nil
 	}
 	var out []finding
 	invariants := map[string]int{}
-	seenSection := false
+	code := fenced(lines)
+	inSection, seenSection, n := false, false, 0
 	for i, l := range lines {
-		if strings.HasPrefix(l, "## ") && strings.Contains(strings.ToLower(l), "invariant") {
-			seenSection = true
+		if code[i] {
+			continue
 		}
-		m := reInvariantHed.FindStringSubmatch(l)
+		if strings.HasPrefix(l, "## ") {
+			lower := strings.ToLower(l)
+			inSection = strings.Contains(lower, "principle") || strings.Contains(lower, "invariant")
+			if inSection {
+				seenSection = true
+			}
+			continue
+		}
+		if !inSection {
+			continue
+		}
+		m := rePrincipleHed.FindStringSubmatch(l)
 		if m == nil {
 			continue
 		}
-		if prev, dup := invariants[m[1]]; dup {
-			out = append(out, finding{charterPath, i + 1, fmt.Sprintf("%s is declared twice (also on line %d); an invariant id is an address and two decisions would disagree about where it points", m[1], prev)})
-			continue
+		n++
+		id := fmt.Sprintf("I%d", n)
+		invariants[id] = i + 1
+		lead := ""
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) != "" {
+				lead = lines[j]
+				break
+			}
 		}
-		invariants[m[1]] = i + 1
+		switch lm := rePrincipleLed.FindStringSubmatch(lead); {
+		case lm == nil:
+			out = append(out, finding{principlesPath, i + 1, fmt.Sprintf("%s (%s) has no `**%d.**` lead on the first line under its heading; that number is the address a Serves cell cites", id, m[1], n)})
+		case lm[1] != fmt.Sprint(n):
+			out = append(out, finding{principlesPath, i + 1, fmt.Sprintf("%s (%s) is principle %d by position but its lead says **%s.**; an address that disagrees with its position points two decisions at different things", id, m[1], n, lm[1])})
+		}
 	}
 	if !seenSection {
-		out = append(out, finding{charterPath, 0, "no `## The invariants` section"})
+		out = append(out, finding{principlesPath, 0, "no `## The invariant principles` section"})
 	}
 	if len(invariants) == 0 {
-		out = append(out, finding{charterPath, 0, "declares no invariants: each is a `### I<n> · <name>` heading"})
+		out = append(out, finding{principlesPath, 0, "declares no principles: each is a `### <name>` heading under that section, led by `**<n>.**`"})
 	}
 	return invariants, out, nil
 }
 
 // readRegister reads the table of live decisions and the sections beneath it.
-// Every row names an invariant the charter declares and links the section
+// Every row names a principle the README declares and links the section
 // that records it; the section must exist, in this file, because the
 // register is the one document a decision is read from.
 func readRegister(fsys fs.FS, invariants map[string]int) (map[string]bool, []finding, error) {
@@ -209,15 +239,22 @@ func slug(heading string) string {
 }
 
 func checkServes(p string, f field, value string, invariants map[string]int) []finding {
+	// `retired` is a row whose only principle was retired with the mechanism
+	// it served: the README says the mechanism goes, and the row goes with
+	// it. It is accepted so the register can describe the tree as it is
+	// while that removal is in progress, and it is not an address.
+	if strings.TrimSpace(value) == "retired" {
+		return nil
+	}
 	refs := reInvariantRef.FindAllStringSubmatch(value, -1)
 	if len(refs) == 0 {
-		return []finding{{p, f.line, "the Serves cell names no invariant; cite at least one by id, like `I3`"}}
+		return []finding{{p, f.line, "the Serves cell names no principle; cite at least one by id, like `I3`, or say `retired`"}}
 	}
 	var out []finding
 	for _, m := range refs {
 		id := "I" + m[1]
 		if _, ok := invariants[id]; !ok {
-			out = append(out, finding{p, f.line, fmt.Sprintf("Serves cites %s, which %s does not declare", id, charterPath)})
+			out = append(out, finding{p, f.line, fmt.Sprintf("Serves cites %s, which %s does not declare", id, principlesPath)})
 		}
 	}
 	return out

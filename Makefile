@@ -120,7 +120,7 @@ check:
 	$(GO) run github.com/kisielk/errcheck@v1.20.0 ./...
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
-# The records' own shape: every ADR names the charter invariant it serves and
+# The records' own shape: every ADR names the README principle it serves and
 # the observation that should retire it, every accepted record is indexed in
 # the register, and no document links a file that is not here. `go test ./...`
 # runs the same check against this tree (TestTheRecordsInThisRepository), so

@@ -10,7 +10,7 @@ that are no longer true — a Bun strangler, a bash `park` verb, a reference
 review protocol, a config whose defaults name one repository's directories.
 What is true now is in [`../decisions.md`](../decisions.md), which is the one
 document to read before changing how falconet is built, and it is the only
-one that is linted for agreement with the [charter](../charter.md).
+one that is linted for agreement with the principles at the top of the [README](../../README.md).
 
 New decisions are not written here. A decision is a row in the register and a
 section beneath it, and the reasoning that does not fit there goes in the
