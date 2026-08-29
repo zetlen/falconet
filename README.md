@@ -88,9 +88,8 @@ down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
 | --- | --- |
 | Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
 | Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
-| Check | the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan. **`falconet check` is decided but not built yet** ([register](docs/decisions.md)): a verb that runs the operator's configured check command, with the caller owning the loop. |
-| Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off |
-| Not yet built | `falconet check` — the check verb and the bounded iteration loop ([register](docs/decisions.md)) |
+| Check | `falconet check`, the repository's own check (`check.command`) after every agent pass, with the workflow owning the loop: a failing check goes back to a fresh pass, at most `max-attempts` times. Then the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan, and the config file itself — once, terminally. |
+| Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off, including a change whose check still fails at the cap |
 | Live runs | on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0; not yet in the post-2026-08-26 shape against a plan bot |
 
 [The decision register](docs/decisions.md) holds every live decision with the
@@ -141,7 +140,7 @@ shorten the install.
 - **Linux x64 runners.** The action installs a pinned `linux_x64` release
   asset of gitleaks and checks its digest, so macOS or ARM fails the
   checksum; falconet itself is compiled for whatever the runner is.
-- **A clean tree on a fresh checkout.** Two verbs read `git status`. If a
+- **A clean tree on a fresh checkout.** Three verbs read `git status`. If a
   hook or generator leaves untracked files behind on checkout, gitignore them.
 
 If `gh api repos/{owner}/{repo}/actions/permissions/workflow` says
@@ -221,7 +220,9 @@ An **API key** from the Anthropic console, not a Claude Code subscription
 token: if you already run `anthropics/claude-code-action` with
 `claude_code_oauth_token`, that secret is a different thing and will not work
 here. A dedicated key keeps falconet's spend a separate number — set a budget
-alert on it. The agent pass is capped at 40 turns and 30 minutes.
+alert on it. Each agent pass is capped at 40 turns; a run makes at most
+three passes (step 7's `max-attempts`), and the agent's job is capped at
+60 minutes.
 
 **Check:** `gh secret list` shows `ANTHROPIC_API_KEY`.
 
@@ -253,28 +254,35 @@ from the agent.
 
 ### 6. Write `.github/falconet.json`
 
-Optional — every key has a default. The smallest useful file names a prompt
-of your own:
+One key is required, `paths.allow`: the paths the agent may change. It has
+no default, because an allowlist you did not write is a choice made for you
+— a default that admitted `*.tf` in a Pulumi repository would be exactly
+that — and `commit` refuses to run until it names something. The smallest
+useful file is that key and, if the repository has one, the check that
+decides whether the agent's change is right:
 
 ```json
 {
-  "prompts": {
-    "implement": "prompts/implement.md"
-  }
+  "paths": { "allow": ["dns/*.tf"] },
+  "check": { "command": ["make", "test"] }
 }
 ```
 
 The file is merged **over** the defaults: naming one key changes one thing.
 Arrays replace wholesale rather than append, because an allowlist that grows
 by accident is not an allowlist. A malformed file is a hard failure with the
-parse error, never a silent fall back to defaults.
+parse error, never a silent fall back to defaults. And the file is never the
+agent's to change, whatever it says the agent may touch: a run that edits
+it, or creates one where none was committed, is refused before its contents
+are consulted.
 
 Every key, with its default:
 
 | Key | Default | What it is |
 | --- | --- | --- |
-| `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
-| `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. |
+| `paths.allow` | none — **required** | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
+| `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. For an OpenTofu repository the origin's list was `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` — the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
+| `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
 | `issue.queue_label` | `infra-request` | The label that makes an issue eligible. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
@@ -301,9 +309,11 @@ run time, by `falconet prompt implement` — which is why that command's
 output is not the copy to commit: it has already put this machine's paths
 and this file's lists where the placeholders were.
 
-**Check:** `jq -e . .github/falconet.json > /dev/null && echo parses`, and
+**Check:** `jq -e '.paths.allow | length > 0' .github/falconet.json` → `true`;
 every `prompts.*` path names a file under the repository root:
-`test -f "$(jq -r .prompts.implement .github/falconet.json)"`.
+`test -f "$(jq -r .prompts.implement .github/falconet.json)"`; and, from a
+clean checkout, `falconet check` prints `pass` (or `skipped`, with no
+`check.command`) — it runs the command exactly as the agent job will.
 
 ### 7. Add the caller workflow
 
@@ -359,6 +369,7 @@ jobs:
 | `issue` | yes | — | The issue number to work. |
 | `config` | no | `.github/falconet.json` | Path to the config file. |
 | `runs-on` | no | `ubuntu-latest` | Must stay Linux x64. |
+| `max-attempts` | no | `3` | How many agent passes a run may spend getting `check.command` to pass: 1, 2 or 3. Each pass is a fresh agent context with the check's failure in front of it; at the cap the work is committed, pushed and handed off. With no `check.command` the first pass is the only one. |
 
 Three things about this file that are not obvious:
 
@@ -407,9 +418,9 @@ Then watch. `gh run watch` follows it, or the Actions tab:
 | When | What you should see |
 | --- | --- |
 | within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the issue is assigned and the branch exists. |
-| next | **implement**: one agent pass, then every guard, then the commit. The agent's only output that outlives the run is its commit message. |
+| next | **implement**: one agent pass, then `falconet check` — your `check.command`, or `skipped` — and, if it failed, another pass with the failure in front of it, up to `max-attempts`. Then every guard, once, and the commit. The agent's only output that outlives the run is its commit message. |
 | next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then the pull request. |
-| within ~15 minutes | One of exactly three endings on the issue, below. |
+| within ~15 minutes, or ~45 with three passes | One of exactly three endings on the issue, below. |
 | always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
 
 The three endings:
@@ -418,7 +429,7 @@ The three endings:
 | --- | --- | --- |
 | **A pull request**, labelled `needs-plan-review` | Title is the agent's commit subject. Body is its explanation, and nothing else; your plan bot's comment with the plan follows. | Read the plan the bot posted. It should show the canary's resources and nothing else — anything else is drift, not the agent. Then **close the PR without merging** unless you mean to apply it; in a repository that deploys on merge, the merge *is* the apply. Delete the branch, close the issue. |
 | **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. That comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. |
-| **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, and the text names which. |
+| **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, and the text names which — or the check still failing at the cap, in which case the branch is pushed, the check's output is folded under the comment, and the change is yours to finish or discard. |
 
 The ending that is *not* on that list — a red run and an issue with only the
 acknowledgment, or nothing at all — is a failed gate, and it is silent. See
@@ -456,16 +467,25 @@ bot's configuration, and it has to be fixed before the next request.
 | `sha256sum: WARNING: 1 computed checksum did NOT match` in the gitleaks install step | The runner is not Linux x64 — gitleaks' pinned asset is the Linux x86-64 one, and the digest is checked before anything is installed — or the asset was replaced, which is what the digest exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
 | `go: github.com/zetlen/falconet/cmd/falconet@vX.Y.Z: … unknown revision` in the falconet install step | The ref on the workflow's `uses:` line — the ref the action compiles falconet at — names a tag that does not exist: typed by hand, or not yet pushed. | Pin a tag from the tags page. |
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
+| `paths.allow is empty — set it in .github/falconet.json` in the Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
+| Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
+| `check: could not run [...]` in a Check step, and the run ends in **contain**'s hand-off | `check.command` names a program the runner does not have, or its first element is not on `PATH`. A check that could not run is neither a pass nor a failure the agent can act on, so the job stops. | Step 6: an argv the runner can start, or a setup step of your own before the check runs. Test it with `falconet check` from a clean checkout. |
+| Paused `ready-for-human`: *the repository's own check fails on it and I could not get it passing* | The agent's change failed `check.command` on every pass it was allowed. The branch is pushed and the check's output is in the comment. | Read the output. A check that fails on the base tree too fails every run; fix that first. |
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted if it could be, and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
 | The PR's explanation talks about a sandbox or a tenant you do not have | `prompts.implement` names a copy of the shipped prompt from before it stopped carrying the origin's standing facts. | Step 6: edit the copy, or delete it and the key so the shipped prompt is used. |
 
 ### Known limits
 
-- **The change is not validated before the pull request.** No `tofu
-  validate`, no `tofu fmt`: a syntactically broken change reaches the pull
-  request, and the plan bot is what says so. The guards that remain are the
-  path allowlist, the content denylist and the secret scan.
+- **The change is checked only as well as `check.command` checks it.** With
+  no command configured, nothing validates or formats the change before the
+  pull request, and the plan bot is what says so. The guards — the path
+  allowlist, the content denylist, the secret scan — decide whether a change
+  may ship, never whether it is right.
+- **A check that fails on the base tree fails every run.** The check runs
+  after the agent's first pass, not before it, and does not know which
+  failures the agent caused. Keep the default branch green, or the loop
+  spends its passes on a failure nobody asked the agent to fix.
 - **The plan bot is yours to run.** falconet cannot tell whether one is
   configured, or whether it plans the App's pull requests; the canary is the
   check.
@@ -485,8 +505,9 @@ bot's configuration, and it has to be fixed before the next request.
 Nothing in the install needs it: every job of the caller workflow compiles
 its own from this repository at the tag the workflow names, and the eight
 steps are `gh` and a browser. On a laptop the binary runs the verbs by hand
-— the same `prepare`, `commit`, `push` and `pause` the workflow runs, from a
-checkout — and the test suite runs through it.
+— the same `prepare`, `check`, `commit`, `push` and `pause` the workflow
+runs, from a checkout, with the loop as a shell loop around `claude -p` and
+`falconet check` — and the test suite runs through it.
 
 ```sh
 go install github.com/zetlen/falconet/cmd/falconet@v1.0.0

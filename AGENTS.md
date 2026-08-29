@@ -133,9 +133,13 @@ you think one is wrong, say so and stop.
 - **A guard refusal is terminal** (principle 3). Nothing feeds a refusal from
   the path allowlist, the content denylist, the rename check or the secret
   scan back to the agent for another try: a guard the agent can iterate
-  against is an oracle. Only the repository's own checks may send a run back,
-  and only a bounded number of times. The loop itself is not built yet; when
-  it is, it loops on checks and never on guards.
+  against is an oracle. Only the repository's own check may send a run back
+  — `falconet check`, after every agent pass, at most `max-attempts` times,
+  and the retries in `falconet.yml` are conditioned on that verb's word and
+  on nothing else; `contract.test.sh` holds it. And the file the guards are
+  read from, `.github/falconet.json`, is never the agent's to change: a
+  guard the agent can rewrite is not a guard either, and both `check` and
+  `commit` refuse a tree that changed it before reading what it now says.
 
 - **falconet does not plan, and does not describe the plan** (principle 5,
   and a non-goal). The repository's plan bot posts the plan on the pull
@@ -269,10 +273,11 @@ derive the working tree from the binary's own location.
 
 The verbs never call each other; they leave files for each other in the
 handoff directory (`handoff_dir`, default `.falconet/`), which is written
-*inside* the consumer's checkout. It is untracked, and two verbs read
+*inside* the consumer's checkout. It is untracked, and three verbs read
 `git status`: `prepare` refuses a dirty tree, `commit` refuses any changed
-path outside the allowlist. So every job in `falconet.yml` that runs either
-of them writes `.falconet/` into `.git/info/exclude` first — per clone,
+path outside the allowlist, and `check` and `commit` both refuse a changed
+config file. So every job in `falconet.yml` that runs any of them writes
+`.falconet/` into `.git/info/exclude` first — per clone,
 never into a file the commit verb could see, and never relying on the
 consumer's `.gitignore` — and `contract.test.sh` fails if a step reorders
 that. A verb that starts reading the working tree joins that invariant; the

@@ -103,6 +103,13 @@ assert_not_contains "$out" 'records-*.tf' "prompt"
 it "and not its tooling"
 assert_not_contains "$out" 'tofu' "prompt"
 
+it "the shipped prompt tells the agent where a failed check's output is, by the handoff's path"
+out="$( cd "$d" && "$FALCONET" prompt implement --config "$d/.github/falconet.json" 2>&1 )"
+assert_contains "$out" "$d/.falconet/check-failure.txt" "prompt"
+
+it "and to rewrite the commit message rather than leave the first pass's"
+assert_contains "$out" "rewrite" "prompt"
+
 it "with no config at all, the prompt has no allowlist or denylist"
 out="$("$FALCONET" prompt implement)"
 assert_not_contains "$out" '*.tf' "prompt"

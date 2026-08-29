@@ -8,7 +8,7 @@
 //
 //	falconet <verb> [args]
 //
-// The four pipeline verbs are the stages of the pipeline (docs/decisions.md).
+// The five pipeline verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
 // `prompt`, `scan` and `config` are unlisted on purpose: public in the
@@ -40,6 +40,8 @@ import (
 const usageText = `Usage: falconet <verb> [args]
 
   prepare   gate an issue, assign it, open a branch, lay out the handoff
+  check     run the repository's own check on the tree the agent left, and say
+            whether it passed
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   pause     put an issue into a terminal state and say so where it will be read
@@ -52,7 +54,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // dispatcher's whole knowledge of what exists; a name in neither is a usage
 // error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "pause", "version"}
+	verbs    = []string{"prepare", "check", "commit", "push", "pause", "version"}
 	unlisted = []string{"prompt", "scan", "config"}
 )
 
@@ -66,6 +68,7 @@ var native = map[string]func(args []string) int{
 	"version": runVersion,
 	"prepare": runPrepare,
 	"config":  runConfig,
+	"check":   runCheck,
 	"commit":  runCommit,
 	"scan":    runScan,
 	"push":    runPush,

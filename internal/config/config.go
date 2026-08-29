@@ -64,6 +64,9 @@ const Defaults = `{
   "paths": {
     "allow": [],
     "deny_content": []
+  },
+  "check": {
+    "command": []
   }
 }`
 
@@ -92,6 +95,15 @@ type Schema struct {
 		// so it has to survive here.
 		DenyContent []string `json:"deny_content"`
 	} `json:"paths"`
+	// Check is the repository's own check, as the check verb runs it: an
+	// argv, run with no shell, from the repository root. Empty means there
+	// is none, and the verb says `skipped`. An argv rather than a command
+	// line because the binary runs subprocesses with os/exec and no shell
+	// (docs/decisions.md, "The language is Go"); an operator whose check is
+	// several commands names a script or a Makefile target.
+	Check struct {
+		Command []string `json:"command"`
+	} `json:"check"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
 	// because `falconet prompt <name>` looks names up dynamically. It has no
 	// default (#3): an absent key means the prompt embedded in the binary,

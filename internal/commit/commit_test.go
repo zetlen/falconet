@@ -505,7 +505,7 @@ func TestReasonsKeepGiveUpsLineStructure(t *testing.T) {
 		ReasonRename("R ", "new.tf"),
 		ReasonDeniedContent([]string{"a.tf: file()"}),
 		ReasonUnchanged(),
-		ReasonNoMessage([]string{"a.tf"}),
+		ReasonNoMessage(".falconet/commit-msg.txt", []string{"a.tf"}),
 		ReasonEmptyStaged([]string{"a.tf"}),
 	} {
 		if !strings.HasSuffix(r, "\n") || strings.HasSuffix(r, "\n\n") {

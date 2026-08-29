@@ -12,7 +12,7 @@
 
 # stdout and stderr are captured separately throughout. "Prints usage" is not
 # the assertion — "prints usage WHERE A HUMAN SEES IT AND NOT INTO THE
-# OUTCOME" is, because three of the four pipeline verbs put a single word on stdout and
+# OUTCOME" is, because four of the five pipeline verbs put a single word on stdout and
 # a dispatcher that chattered there would corrupt every one of them.
 run() { # args... -> sets OUT ERR RC
   OUT="$("$FALCONET" "$@" 2>"$WORK/err")"; RC=$?

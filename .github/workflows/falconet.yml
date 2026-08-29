@@ -19,6 +19,17 @@
 #   repository already runs on every pull request (Atlantis, dflook's
 #   terraform-plan, …), from credentials that never enter this workflow.
 #
+#   the LOOP is on the check, never on a guard. The agent job runs the
+#   repository's own check (`check.command` in falconet.json) after each
+#   agent pass, and a failing check sends the run back to a fresh agent
+#   pass with the failure in the handoff directory — at most `max-attempts`
+#   times, three by default, unrolled below as steps because `uses:` cannot
+#   be looped. A guard refusal (the allowlist, the denylist, the rename
+#   check, the secret scan) is terminal and reaches no agent: the retries
+#   are conditioned on the check's word and on nothing else. At the cap the
+#   guard-clean work is committed and pushed anyway, and the run ends as a
+#   hand-off naming the branch and the failure (principle 4).
+#
 # ---------------------------------------------------------------------------
 # Where falconet comes from
 # ---------------------------------------------------------------------------
@@ -84,6 +95,18 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+      max-attempts:
+        description: >-
+          How many agent passes a run may spend getting the repository's
+          own check to pass: 1, 2 or 3. The check runs after every pass
+          and a failing one sends the run back to a fresh pass with the
+          failure attached; at the cap the work is committed, pushed and
+          handed off. The workflow carries three attempts, so a larger
+          number is three. With no check.command configured every pass is
+          the only one.
+        required: false
+        type: number
+        default: 3
     secrets:
       app-id:
         description: >-
@@ -269,10 +292,18 @@ jobs:
     needs: gate
     if: needs.gate.outputs.outcome == 'ready'
     runs-on: ${{ inputs.runs-on }}
-    timeout-minutes: 30
+    # Up to three agent passes and three checks; each pass is capped at 40
+    # turns below, and this is the bound on the job as a whole.
+    timeout-minutes: 60
     permissions: {}
     outputs:
       outcome: ${{ steps.commit.outputs.outcome }}
+      # The word of the LAST check that ran. A later check runs only when
+      # the one before it said fail, so the first of these that is set is
+      # the last one that ran; a skipped step's outputs are empty. `fail`
+      # here means the cap was reached with the check still failing, and
+      # publish hands off instead of opening a pull request.
+      check: ${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}
     steps:
       # NO checkout in this job — not of the repository being worked on, which
       # it cannot clone (see gate's hand-over step), and since #19 not of
@@ -367,11 +398,80 @@ jobs:
             --allowedTools "Read,Edit,Write,Grep,Glob"
             --max-turns 40
 
+      # The repository's own check, on the tree the agent left. One word:
+      # pass, fail, or skipped (no check.command configured). A check that
+      # could not run at all is a red step, which fails this job — a check
+      # that did not happen is not a pass, and nothing below runs on it.
+      #
+      # The verb reads the config from the working tree, after the agent's
+      # turn at it, and refuses to run a command from a config the agent
+      # changed; the commit verb refuses the same change again, with a
+      # reason for the requester.
+      - name: Check
+        id: check1
+        uses: zetlen/falconet@v1.0.0
+        with:
+          verb: check
+          setup: 'false'
+          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      # The loop, unrolled: `uses:` cannot be repeated by a `run:` block, so
+      # the attempts are steps, each conditioned on the check before it
+      # having said `fail` — the check's word and nothing else, so a guard
+      # refusal, which is decided in the commit step below and never
+      # before, cannot send a run back here — and on the cap the caller
+      # set. Each attempt is a fresh agent context with the same prompt:
+      # the agent sees the tree with its earlier edits, check-failure.txt in
+      # the handoff directory, and the request, and not its own earlier
+      # conversation.
+      - name: Implement the change (attempt 2)
+        if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: |
+            --allowedTools "Read,Edit,Write,Grep,Glob"
+            --max-turns 40
+
+      - name: Check (attempt 2)
+        id: check2
+        if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2
+        uses: zetlen/falconet@v1.0.0
+        with:
+          verb: check
+          setup: 'false'
+          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      - name: Implement the change (attempt 3)
+        if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ github.token }}
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: |
+            --allowedTools "Read,Edit,Write,Grep,Glob"
+            --max-turns 40
+
+      - name: Check (attempt 3)
+        id: check3
+        if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3
+        uses: zetlen/falconet@v1.0.0
+        with:
+          verb: check
+          setup: 'false'
+          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
       # Every guard rides here: the path allowlist, the content denylist, the
       # secret scan over the agent's drafts and then over the staged change,
       # and a vetted-path-only `git add`. A refusal beats a question: a
       # denied run commits nothing, so there is no committed work for
-      # needs-info's ordering to protect.
+      # needs-info's ordering to protect. Unconditional on the check's
+      # word: at the cap the guard-clean work is committed and pushed
+      # anyway, so nothing is lost, and publish hands it off rather than
+      # opening a pull request.
       # `setup: false` claims an earlier step in THIS job installed the
       # binaries, and a job is a fresh runner: the install is this job's
       # first step. commit needs gitleaks, and the secret scan fails closed
@@ -491,7 +591,7 @@ jobs:
       # what a person is asked to look at is the change plus whatever the
       # plan bot says about it.
       - name: Assemble the pull-request body
-        if: needs.implement.outputs.outcome == 'success'
+        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
           ISSUE: ${{ inputs.issue }}
         run: |
@@ -510,7 +610,7 @@ jobs:
       # refuses fails this step here and loudly, not inside gh's argument
       # list.
       - name: Open the pull request
-        if: needs.implement.outputs.outcome == 'success'
+        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -526,7 +626,7 @@ jobs:
             --body-file .falconet/pr.md \
             --label "$label"
 
-      # The three hand-overs are `run:` steps, not calls through the action,
+      # The four hand-overs are `run:` steps, not calls through the action,
       # because the action splits `args` on whitespace — by design, and its
       # own comment says why — and a preamble is a sentence. Through the
       # action, `--preamble "Before I can …"` arrives as `--preamble`,
@@ -537,8 +637,9 @@ jobs:
       # $PUSHED_BRANCH, which the push verb set — the branch that IS on the
       # remote, not the one prepare intended. When nothing was pushed it is
       # UNSET, not empty (push writes $GITHUB_ENV only when a push landed),
-      # and the two hand-overs below are exactly the paths with nothing to
-      # push; under `set -u` a bare "$PUSHED_BRANCH" killed the step before
+      # and the hand-overs for a question and for a failure are exactly the
+      # paths with nothing to push; under `set -u` a bare "$PUSHED_BRANCH"
+      # killed the step before
       # pause ran — the agent's question never reached the issue, and contain
       # paused it under the wrong label. `${PUSHED_BRANCH:-}` passes the empty
       # string, which pause accepts as "no branch".
@@ -557,6 +658,29 @@ jobs:
             --body .falconet/needs-info.md \
             --run-url "$RUN_URL" \
             --preamble "Before I can prepare this change I need a bit more from you:"
+
+      # The cap: the agent's guard-clean work is committed and on the
+      # remote, and the repository's own check still fails on it. Not a
+      # pull request — a pull request nothing passes is a reviewer's time
+      # spent on a change its author's own check refused — but not lost
+      # either: the branch is named and linked, and the check's output is
+      # the body, fenced and collapsed, because it is machine output.
+      - name: Hand over — the check failed at the cap
+        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check == 'fail'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          falconet pause \
+            --issue "$ISSUE" \
+            --label ready-for-human \
+            --branch "${PUSHED_BRANCH:-}" \
+            --body .falconet/check-failure.txt \
+            --body-title "What the check said" \
+            --run-url "$RUN_URL" \
+            --preamble "I prepared this change and pushed it, but the repository's own check fails on it and I could not get it passing in the attempts I'm allowed. This one needs a person."
 
       - name: Hand over — the run could not prepare a change
         if: needs.implement.outputs.outcome == 'failure'

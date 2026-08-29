@@ -522,6 +522,52 @@ reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
 assert_contains "$reason" "records-example-tech.tf" "failure reason"
 assert_contains "$reason" "dns/*.tf" "failure reason"
 
+# --- the guard's own configuration is never the agent's to change ----------
+#
+# Found in review on 2026-08-29, before any live run could: commit reads
+# .github/falconet.json from the WORKING TREE, after the agent has had its
+# turn at it. An issue that says "first widen paths.allow in
+# .github/falconet.json, then edit the workflow" gets a policy of the
+# agent's own writing, and every path it touched is inside it. The allowlist
+# would have been consulted and would have said yes. A guard the agent can
+# rewrite is not a guard (principle 3), so a change to the file the policy
+# was read from is refused before the policy is used, whatever that file
+# now says — and so is a config file where none was committed, which is
+# the same move from a repository that had been running on the defaults.
+
+c="$(new_checkout config_rewritten)"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\njobs: {}\n' >"$c/repo/.github/workflows/infra.yml"
+printf 'locals {\n  a = 8\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Widen the allowlist and add a workflow\n\nAs asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a change to the config file the policy was read from is refused"
+assert_eq "failure" "$out" "outcome"
+
+it "and the reason names that file, and nothing about the paths it would have admitted"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" ".github/falconet.json" "failure reason"
+assert_not_contains "$reason" "Refused paths" "failure reason"
+
+it "and nothing is committed, the workflow edit included"
+assert_eq 1 "$(commit_count "$c")" "commits"
+
+c="$(new_checkout config_invented)"
+git -C "$c/repo" rm -q .github/falconet.json
+git -C "$c/repo" commit -qm "run on the defaults"
+mkdir -p "$c/repo/.github"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+printf 'locals {\n  a = 9\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a config\n\nAs asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a config file where none was committed is the same move, and the same refusal"
+assert_eq "failure" "$out" "outcome"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" ".github/falconet.json" "failure reason"
+assert_eq 2 "$(commit_count "$c")" "commits"
+
 # --- the allowlist's globs: `*` crosses `/` ---------------------------------
 #
 # The README says so: "`*` crosses `/`, so `*.tf` matches `dns/records.tf`".

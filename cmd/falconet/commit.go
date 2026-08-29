@@ -45,10 +45,9 @@ Modes:
 Prints exactly one word on stdout — the outcome — and nothing else:
 
   needs-info  DIR/needs-info.md is non-empty. The requester gets asked.
-  success     the tree is dirty AND DIR/commit-msg.txt is non-empty. The
-              touched .tf files have been formatted, everything is
-              committed, and the subject and body are filed for the
-              pull-request stage.
+  success     the tree is dirty AND DIR/commit-msg.txt is non-empty.
+              Everything is committed, and the subject and body are filed
+              for the pull-request stage.
   failure     anything else. DIR/failure-reason.txt says what, in prose a
               requester can read.
 
@@ -223,6 +222,16 @@ func runCommit(args []string) int {
 		return giveUp(commit.ReasonRename(renamed.Code, renamed.Path))
 	}
 
+	// --- the guard's own configuration ------------------------------------
+	//
+	// See "The guard's own configuration" in internal/commit. The policy
+	// above was compiled from a file in the working tree, and the working
+	// tree is the agent's. Before that policy decides anything, refuse a
+	// change to the file it came from — whatever that file now says.
+	if path, hit := commit.ConfigChanged(cfg.File, root, changed); hit {
+		return giveUp(commit.ReasonConfigChanged(path))
+	}
+
 	// --- the allowlist ------------------------------------------------------
 	//
 	// A path is allowed if ANY paths.allow glob matches it (commit.AllowPattern
@@ -292,7 +301,7 @@ func runCommit(args []string) int {
 			fmt.Println("needs-info")
 			return 0
 		}
-		return giveUp(commit.ReasonNoMessage(changed))
+		return giveUp(commit.ReasonNoMessage(filepath.Join(filepath.Base(out), "commit-msg.txt"), changed))
 	}
 
 	// --- commit ---------------------------------------------------------------

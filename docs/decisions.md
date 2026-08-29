@@ -67,29 +67,60 @@ module, no token needed.
 The agent's grant is exactly `Read,Edit,Write,Grep,Glob`, capped at 40 turns.
 It edits files, writes `commit-msg.txt` (or `needs-info.md`), and stops.
 
-`falconet check` is a verb that runs an operator-configured command (the
-repository's tests, linter, whatever the operator names in `falconet.json`),
-records its output into the handoff directory, and exits 0 (pass) or 1
-(fail). It does not loop, re-invoke the agent, or decide what happens next.
-The iteration is the caller's: in CI, a loop in the workflow's `run:` block
-that re-invokes the agent action on failure, capped at the configured max;
-on a workstation, a shell loop. The verb is CI-agnostic; the iteration
-policy is the caller's idiom.
+`falconet check` runs the operator's own check — `check.command` in
+`falconet.json`, an argv with no shell (the repository's tests, its linter,
+whatever decides whether a change is right) — from the repository root, on
+the tree as the agent left it, and prints one word: `pass`, `fail`, or
+`skipped` when no command is configured. On `fail` it writes
+`check-failure.txt` into the handoff directory: the command, how it ended,
+and the last 64 KiB of its output, cut on a line boundary with a note saying
+so. On `pass` it removes that file, so its presence means the last check
+failed. A check that could not run at all — the command not found — is a
+mechanical failure, exit 1 with no word, because a check that did not happen
+is neither a pass nor something the agent can act on. The verb does not
+loop, does not run the agent, and does not decide what happens next.
 
-What feeds back is the check's output and nothing else. A guard refusal
-(path allowlist, content denylist, rename, secret scan) is terminal — a
-guard the agent can iterate against is an oracle, not a guard (principle 3).
-At the cap: commit the guard-clean work, push, hand off naming the branch
-and the failure (principle 4). Each iteration is a fresh agent context: the
-agent sees the tree with its prior edits, the check failure in the handoff
-directory, and the request, but not its prior conversation.
+The iteration is the caller's. In `falconet.yml` it is three attempts,
+unrolled as steps because a `uses:` step cannot be repeated by a `run:`
+block: after each agent pass a check step, and each further pass and its
+check conditioned on the check before it having said `fail` and on the
+caller's `max-attempts` input (1, 2 or 3; default 3). On a workstation it is
+a shell loop around `claude -p` and `falconet check`. The verb is
+CI-agnostic; the iteration policy is the caller's idiom, and
+`contract.test.sh` holds the workflow's: a check after every pass, the
+retries conditioned on the check's word and on nothing else, the commit once
+and after the last check.
 
-Rejected: a workflow-level loop across jobs (push, wait for the PR's real
-checks, re-enter `implement` with the failure) — it uses the repo's actual
-CI checks, but each iteration waits for the full CI pipeline, and the
-orchestration is complex. The check verb is the faster feedback path; the
-PR's own checks still run after the final push, as they always did, and a
-failure there is a human's.
+What feeds back is `check-failure.txt` and nothing else. A guard refusal
+(path allowlist, content denylist, rename, secret scan, the config file
+itself) is terminal — a guard the agent can iterate against is an oracle,
+not a guard (principle 3) — and is decided once, in the commit step, after
+the last check, where nothing before it reads the answer. Each attempt is a
+fresh agent context on the same prompt: the agent sees the tree with its
+earlier edits, the failure file, and the request, and not its own earlier
+conversation; the shipped prompt tells it to look for the file and to
+rewrite its commit message. At the cap, `commit` runs regardless of the
+check's word — the guard-clean work is committed and pushed, so nothing is
+lost — and `publish` hands the issue off `ready-for-human` naming the
+branch, with the check's output folded under the comment, instead of
+opening a pull request nothing passes (principle 4).
+
+The cap is a workflow input rather than a config key because the loop is
+the caller's, and a key in the binary's config bounding a count the binary
+never takes would be a config that describes someone else's YAML. Three
+slots because that is what one operator wanted to pay for; the input
+describes the ceiling, and a caller wanting four edits the workflow.
+
+Rejected: a workflow-level loop across jobs (push, wait for the pull
+request's real checks, re-enter `implement` with the failure) — it uses
+the repository's actual CI, but each iteration waits for the whole of it,
+and the orchestration crosses the job boundary that is the security model.
+The check verb is the faster path; the pull request's own checks still run
+after the final push, as they always did, and a failure there is a
+person's. Also rejected: running the check before the first agent pass, so
+a base tree that already fails is known — one extra run of the operator's
+suite on every issue, for a failure the operator can see on their default
+branch; the README says so under known limits.
 
 ## No second, reviewing agent
 
@@ -161,15 +192,18 @@ file layout — and every adopter got them.
 ## Stage-level verbs, one JSON config file
 
 A thing is a public verb if and only if a caller invokes it directly — the
-four pipeline verbs (`prepare`, `commit`, `push`, `pause`) and `version`.
+five pipeline verbs (`prepare`, `check`, `commit`, `push`, `pause`) and
+`version`.
 `prompt`, `config` and `scan` exist unlisted: public in that they work, not
 vocabulary. Rejected: mirroring the origin's script names one-to-one (leaves
 orchestration in YAML — two code paths) and grouping by domain (`issue
 park`, `git prepare` — a taxonomy at five verbs).
 
-Exit codes are uniform — **0** outcome determined, **1** refused or a check
-failed, **2** usage — and a verb that decides something prints exactly one
-word on stdout. Eligibility (queue label present, no blocking label, opt-out
+Exit codes are uniform — **0** outcome determined, **1** refused
+mechanically, **2** usage — and a verb that decides something prints exactly
+one word on stdout. A check that ran and failed is an outcome, the word
+`fail` with exit 0, so a caller can tell it from a check that could not run,
+which is exit 1 and no word. Eligibility (queue label present, no blocking label, opt-out
 unchecked) is decided by `prepare`, not by a job-level `if:`: a job `if:`
 runs before checkout and cannot read the config, and gating there would fork
 eligibility into YAML-in-CI and nothing-locally. That is principle 1 at the
@@ -208,8 +242,9 @@ reopen trigger is those steps outgrowing what a person can check.
 They leave files for each other in `handoff_dir` (default `.falconet/`),
 written *inside* the consumer's checkout and untracked: `request.md`,
 `base-sha.txt`, `branch.txt` from `prepare`; `commit-msg.txt` or
-`needs-info.md` from the agent; `commit-subject.txt`, `commit-body.md` or
-`failure-reason.txt` from `commit`; `pr.md` from the workflow's own body
+`needs-info.md` from the agent; `check-failure.txt` from `check`, present
+exactly when the last check failed; `commit-subject.txt`, `commit-body.md`
+or `failure-reason.txt` from `commit`; `pr.md` from the workflow's own body
 step. Every job that runs a verb writes `.falconet/` into
 `.git/info/exclude` first, because `prepare` refuses a dirty tree and
 `commit` refuses any changed path outside the allowlist, and the consumer's
@@ -233,8 +268,9 @@ is what let the suite adjudicate the port from bash to Go unchanged, and it
 keeps the guards behind principles 2 and 3 adjudicable from outside. What
 cannot be seen from outside a process — truncation never splitting a line,
 the fence outrunning every backtick run, the denylist matching in config
-order, a prompt paragraph dropped whole — is a Go unit or property test
-beside the guard. `contract.test.sh` holds the wiring's shape the same way:
+order, a prompt paragraph dropped whole, the check's tail never over budget
+and never resuming mid-line — is a Go unit or property test beside the
+guard. `contract.test.sh` holds the wiring's shape the same way:
 no checkout in the agent job, the install before the first verb, every
 `uses:` ref one tag, `commit` run once.
 

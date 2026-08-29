@@ -11,7 +11,7 @@ author: zetlen
 inputs:
   verb:
     description: >-
-      One of prepare, commit, push, or the unlisted prompt. Not
+      One of prepare, check, commit, push, or the unlisted prompt. Not
       pause: `args` is split on whitespace and a pause preamble is a
       sentence, so it runs from PATH in the workflow's own run: steps.
       Empty means setup only: the binaries are installed and no verb runs,
@@ -156,7 +156,7 @@ runs:
     # The verb and its arguments reach the shell through the ENVIRONMENT, not
     # through a template expression. That is not style: an issue title, body
     # or comment interpolated into a `run:` block is a shell injection with
-    # the requester holding the keyboard, and the whole reason the six verbs
+    # the requester holding the keyboard, and the whole reason the verbs
     # take files rather than strings is so that text never has to travel this
     # way. $FALCONET_ARGS is deliberately unquoted so a caller can pass
     # several arguments — which is exactly why a caller must never put issue

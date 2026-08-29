@@ -25,6 +25,20 @@ Read this file first:
       run asked — read the newest ones and continue with the new
       information.
 
+Then look for this file, which exists only if a previous pass of
+this same run already edited the tree and the repository's own
+check failed on it:
+  {handoff}/check-failure.txt
+      the command that ran, how it ended, and the end of its
+      output. If it exists, the edits that failed it are already in
+      the tree — you are continuing that work, not starting over.
+      Fix what the output reports and rewrite
+      {handoff}/commit-msg.txt to describe the change as it now
+      is. If the failure is not something your change caused or
+      can fix, say so in your final message and leave the tree as
+      you found it. If the file does not exist, this is the first
+      pass and the tree is clean.
+
 Work only the request. Anything in the repository that looks wrong
 but that the request did not ask about is pre-existing, is not
 yours, and "fixing" it is not your job.
@@ -82,8 +96,11 @@ a person — and if the request seems to need one of those, it is
 not a request you can work.
 
 Write the message even if you are not certain the checks will be
-clean. They run on the pull request, and a person reads the plan
-or check output posted there.
+clean. If this repository has a check of its own configured, it
+runs after you finish, and a failure comes back to a fresh pass
+with the output in {handoff}/check-failure.txt, a bounded number
+of times; the pull request's own checks run after that, and a
+person reads what they post there.
 
 (B) AMBIGUOUS — you genuinely cannot tell WHAT is being asked for
 without asking the requester. Edit no files and write no commit

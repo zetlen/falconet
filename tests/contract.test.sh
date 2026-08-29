@@ -56,8 +56,10 @@ pause_calls="$(awk '
 
 # --- the agent holds nothing it could publish with -------------------------
 
-it "the agent's tool grant is exactly the five file tools"
+it "the agent's tool grant is exactly the five file tools, on every agent invocation"
 assert_contains "$wf" '--allowedTools "Read,Edit,Write,Grep,Glob"' "workflow"
+assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
+  "$(grep -c -- '--allowedTools "Read,Edit,Write,Grep,Glob"' <<<"$wf_code")" "grants per agent invocation"
 
 it "and names no Bash tool, which is the whole boundary"
 assert_not_contains "$wf" 'Bash(' "workflow"
@@ -89,8 +91,62 @@ assert_eq 1 "$(grep -c 'verb: push' <<<"$wf_code")" "push steps"
 it "and only by the push verb — nothing else runs git push"
 assert_not_contains "$wf" "git push" "workflow"
 
-it "there is no repair loop: commit happens once"
+it "the loop is on the check: commit still happens once, after it"
 assert_eq 1 "$(grep -c 'verb: commit' <<<"$wf_code")" "commit steps"
+
+# --- the check loop feeds the check back and never a guard -----------------
+#
+# Principle 3, as wiring. The repository's own check runs after every agent
+# pass; a failing one sends the run back to a fresh pass, at most
+# `max-attempts` times; the guards run once, in the commit step, after the
+# last check, and nothing before the commit reads their answer. A retry
+# conditioned on anything but the check's word — the commit's outcome, a
+# failure-reason file — is a guard the agent can iterate against, and this
+# is where it would show up.
+
+agent_steps="$(grep -c 'claude-code-action' <<<"$implement_job")"
+
+it "the repository's own check runs after every agent pass"
+assert_eq "$agent_steps" "$(grep -c 'verb: check' <<<"$implement_job")" "check steps per agent step"
+
+it "and there are three attempts, which is what the max-attempts input describes"
+assert_eq 3 "$agent_steps" "agent invocations"
+assert_contains "$wf_code" "max-attempts:" "the workflow's inputs"
+assert_contains "$wf_code" "default: 3" "the max-attempts default"
+
+it "the first attempt is unconditional"
+first="$(awk '/name: Implement the change$/{f=1} f && /uses: anthropics/{print "uses"; exit} f && /if:/{print "if"; exit}' <<<"$implement_job")"
+assert_eq "uses" "$first" "the first agent step's first key"
+
+it "and every further attempt is conditioned on the check before it saying fail, and on the cap"
+assert_eq 2 "$(grep -c "if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2" <<<"$implement_job")" "attempt 2's conditions (agent and check)"
+assert_eq 2 "$(grep -c "if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3" <<<"$implement_job")" "attempt 3's conditions (agent and check)"
+
+it "and on nothing else: no condition in the agent job reads the commit's outcome or a guard's file"
+assert_eq 0 "$(grep 'if:' <<<"$implement_job" | grep -c 'steps.commit\|failure-reason\|outcome == .failure.')" "retry conditions naming a guard"
+
+it "the commit runs after the last check, and is not conditioned on its word"
+last_check="$(grep -n 'verb: check' <<<"$implement_job" | tail -1 | cut -d: -f1)"
+commit_at="$(grep -n 'verb: commit' <<<"$implement_job" | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$last_check" && -n "$commit_at" && "$last_check" -lt "$commit_at" ]] && echo true || echo false)" \
+  "the last check ($last_check) precedes the commit ($commit_at)"
+commit_step="$(awk '/name: Commit$/{f=1} f && /verb: commit/{print; exit} f' <<<"$implement_job")"
+assert_not_contains "$commit_step" "if:" "the commit step"
+
+it "and the job reports the word of the last check that ran"
+assert_contains "$implement_job" "check: \${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}" "the implement job's outputs"
+
+it "the pull request is opened only when that word is not fail"
+pr_step="$(awk '/name: Open the pull request/{f=1} f && /gh pr create/{exit} f' <<<"$publish_job")"
+assert_contains "$pr_step" "needs.implement.outputs.check != 'fail'" "the PR step's condition"
+
+it "and at the cap the run hands off instead, naming the branch and carrying the check's output"
+cap_pause="$(grep -- 'check-failure.txt' <<<"$pause_calls")"
+assert_contains "$cap_pause" '--branch "${PUSHED_BRANCH:-}"' "the cap's pause"
+assert_contains "$cap_pause" '--label ready-for-human' "the cap's pause"
+assert_contains "$cap_pause" '--body-title' "the cap's pause: machine output is fenced"
+cap_step="$(awk '/name: Hand over — the check failed at the cap/{f=1} f && /falconet pause/{exit} f' <<<"$publish_job")"
+assert_contains "$cap_step" "needs.implement.outputs.check == 'fail'" "the cap step's condition"
 
 # --- the push is unconditional and comes first -----------------------------
 #
@@ -126,14 +182,14 @@ passing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
 total="$(grep -c 'falconet pause' <<<"$wf_code")"
 assert_eq "$total" "$passing" "pause calls passing --branch"
 
-it "and there are three of them: two endings in publish and the containment"
-assert_eq 3 "$total" "pause calls"
+it "and there are four of them: three endings in publish and the containment"
+assert_eq 4 "$total" "pause calls"
 
 it "and the ones in publish read PUSHED_BRANCH rather than the branch prepare intended"
 # The branch that IS on the remote, set by the push verb; empty when nothing
 # was pushed, which pause takes as "no branch".
 publish_pauses="$(awk '/falconet pause/ { p = 1; buf = "" } p { buf = buf " " $0; if ($0 !~ /\\$/) { print buf; p = 0 } }' <<<"$publish_job")"
-assert_eq 2 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+assert_eq 3 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
 
 # Unset, not empty, when nothing was pushed — and the two hand-overs for a
 # question and a failure are exactly the paths with nothing to push. A bare
@@ -179,8 +235,10 @@ assert_eq 3 "$(grep -c -- '--template' <<<"$contain_job")" "gh --template uses i
 it "the workflow names review-verdict zero times"
 assert_not_contains "$wf" "review-verdict" "workflow"
 
-it "and there is no second agent"
-assert_eq 1 "$(grep -c 'claude-code-action' "$WF")" "agent invocations"
+it "and there is no second agent: every invocation is the implementing one, on the same prompt"
+assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
+  "$(grep -c 'prompt: ${{ steps.prompt.outputs.text }}' <<<"$wf_code")" "agent invocations on the implement prompt"
+assert_eq 0 "$(grep -c 'falconet prompt review' <<<"$wf_code")" "review prompts"
 
 # --- the pull request describes the change, not the request ----------------
 
@@ -304,8 +362,9 @@ assert_eq "" "$unmet" "steps running falconet before their job installed it"
 it "and every job installs exactly once"
 assert_eq 4 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
 
-# Two verbs read `git status`: prepare refuses a dirty tree, and commit
-# refuses every changed path outside the allowlist, untracked included. The
+# Three verbs read `git status`: prepare refuses a dirty tree, commit
+# refuses every changed path outside the allowlist, untracked included, and
+# check refuses a config the agent changed. The
 # handoff directory is written INSIDE the consumer's tree, it is not the
 # agent's, and it is not anything a consumer's .gitignore can be relied on
 # to know about. The tool's own checkout used to sit beside it — a composite
@@ -323,7 +382,7 @@ unexcluded="$(awk '
       excluded[job] = 1
     if (buf ~ /uses: zetlen\/falconet@/) {
       verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
-      if (verb ~ /^(prepare|commit)$/ && !excluded[job]) print job "/" verb
+      if (verb ~ /^(prepare|check|commit)$/ && !excluded[job]) print job "/" verb
     }
     buf = ""
   }
@@ -409,6 +468,11 @@ for perm in contents issues pull-requests; do
   # needs, which is exactly the kind of over-grant nobody audits afterwards.
   assert_eq "$want" "$got" "the template's $perm grant"
 done
+
+it "and the README's input table names every input the workflow declares"
+declared="$(awk '/^    inputs:$/{f=1; next} f && /^    secrets:$/{exit} f && /^      [a-z-]+:$/{sub(/^ +/, ""); sub(/:$/, ""); print}' "$WF" | sort)"
+documented="$(awk -F'|' '/^\| Input \| Required/{f=1; next} f && !/^\|/{exit} f && /^\| `/{v=$2; gsub(/[` ]/, "", v); print v}' "$REPO_ROOT/README.md" | sort)"
+assert_eq "$declared" "$documented" "inputs: declared vs the README's table"
 
 it "and passes no falconet-ref, which the workflow no longer declares"
 # A reusable workflow rejects an input it does not declare, at load: the

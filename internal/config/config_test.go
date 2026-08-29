@@ -44,6 +44,11 @@ func TestDefaultsStandAlone(t *testing.T) {
 	if len(s.Paths.DenyContent) != 0 {
 		t.Errorf("paths.deny_content has %d entries, want 0 (no default)", len(s.Paths.DenyContent))
 	}
+	// No check by default either: a repository with no check.command has
+	// no check, and the verb says `skipped` rather than guessing one.
+	if len(s.Check.Command) != 0 {
+		t.Errorf("check.command has %d entries, want 0 (no default)", len(s.Check.Command))
+	}
 	checks := map[string]string{
 		"handoff_dir":        s.HandoffDir,
 		"issue.queue_label":  s.Issue.QueueLabel,
@@ -67,15 +72,6 @@ func TestDefaultsStandAlone(t *testing.T) {
 	if len(s.Prompts) != 0 {
 		t.Errorf("prompts default = %v, want none: the shipped prompt is the binary's, not a path", s.Prompts)
 	}
-}
-
-func index(list []string, s string) int {
-	for i, v := range list {
-		if v == s {
-			return i
-		}
-	}
-	return -1
 }
 
 // jq's `*`: objects recurse, everything else replaces.
