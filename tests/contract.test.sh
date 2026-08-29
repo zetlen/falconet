@@ -605,9 +605,13 @@ assert_file_missing "$REPO_ROOT/.github/workflows/release.yml"
 it "and the Makefile has no release target"
 assert_eq 0 "$(grep -c -E '^release[a-z-]*:' "$MK")" "release targets"
 
-it "and the README's first step is go install of this module, not a download"
-step1="$(awk '/^### 1\. Install the binary/{f=1; next} f && /^### /{exit} f' "$REPO_ROOT/README.md")"
-assert_contains "$step1" 'go install github.com/zetlen/falconet/cmd/falconet@' "README step 1"
-assert_not_contains "$step1" 'curl' "README step 1"
+# The install itself needs no binary on a laptop, so the README's section on
+# getting one is not a numbered step; it is the section whose heading names
+# the machine. It must say `go install` of this module and nothing about a
+# download.
+it "and the README's section on the binary is go install of this module, not a download"
+binary_section="$(awk '/^## The binary on your machine/{f=1; next} f && /^## /{exit} f' "$REPO_ROOT/README.md")"
+assert_contains "$binary_section" 'go install github.com/zetlen/falconet/cmd/falconet@' "README binary section"
+assert_not_contains "$binary_section" 'curl' "README binary section"
 
 summary
