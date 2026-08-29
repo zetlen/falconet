@@ -90,7 +90,7 @@ down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
 | Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
 | Check | the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan. **The bounded check loop is not built yet**; a run is one pass. |
 | Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off |
-| Still here, slated for removal | falconet's own GitHub client, the release-digest apparatus. The install steps below describe the tree as it is. |
+| Still here, slated for removal | falconet's own GitHub client. The install steps below describe the tree as it is. |
 | Live runs | on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0; not yet in the post-2026-08-26 shape against a plan bot |
 
 [The decision register](docs/decisions.md) holds every live decision with the
@@ -138,9 +138,9 @@ shorten the install.
   must be `all`, or `selected` with `zetlen/falconet`, `actions/*` and
   `anthropics/claude-code-action` in the list.
   A repository restricted to local actions stops before any of this runs.
-- **Linux x64 runners.** The action installs pinned `linux_x64` release
-  assets of gitleaks and of falconet itself and checks their digests, so
-  macOS or ARM fails the checksum.
+- **Linux x64 runners.** The action installs a pinned `linux_x64` release
+  asset of gitleaks and checks its digest, so macOS or ARM fails the
+  checksum; falconet itself is compiled for whatever the runner is.
 - **A clean tree on a fresh checkout.** Two verbs read `git status`. If a
   hook or generator leaves untracked files behind on checkout, gitignore them.
 
@@ -374,9 +374,9 @@ Three things about this file that are not obvious:
   from a person on an issue paused `needs-info` is the way back in.
 - **The ref in `uses:` must be a literal** — GitHub does not expand
   expressions there — and it is the one coordinate: the workflow at that ref
-  installs, in every job, the binary whose digest that ref's tree holds.
+  compiles falconet, in every job, from this repository's tree at that ref.
   `main` is where the template starts and it moves; put a tag there —
-  `@v0.2.0` — as step 8 says. There is no `falconet-ref` input any more: the bash-era caller
+  `@v1.0.0` — as step 8 says. There is no `falconet-ref` input any more: the bash-era caller
   passed it to choose which falconet the jobs checked out, nothing is
   checked out now, and a caller still passing it is rejected when the file
   is loaded.
@@ -425,11 +425,11 @@ acknowledgment, or nothing at all — is a failed gate, and it is silent. See
 [Troubleshooting](#troubleshooting).
 
 **Pin a tag.** The ref in `uses:` is the one coordinate: the workflow at
-`@v0.2.0` installs, in every job, the binary whose digest the tree at
-`v0.2.0` holds. Put the tag there — never `main`, which moves:
+`@v1.0.0` compiles, in every job, the binary from this repository's tree at
+`v1.0.0`. Put the tag there — never `main`, which moves:
 
 ```yaml
-    uses: zetlen/falconet/.github/workflows/falconet.yml@v0.2.0
+    uses: zetlen/falconet/.github/workflows/falconet.yml@v1.0.0
 ```
 
 If you are upgrading a caller from the bash era, **delete its `falconet-ref:`
@@ -453,8 +453,8 @@ bot's configuration, and it has to be fixed before the next request.
 | `prepare: working tree is dirty before the agent ran:`, listing paths | Something in your repository creates untracked files on checkout. | Gitignore them. |
 | `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | Step 3: the App's **Install App** page with this repository selected, and `FALCONET_APP_ID` against the App ID on its page. |
 | `Resource not accessible by integration` | The caller's `permissions:` block is missing, or the App lacks one of its three permissions. | Steps 3 and 7. |
-| `sha256sum: WARNING: 1 computed checksum did NOT match` in the install step | The runner is not Linux x64 — both gitleaks' and falconet's pinned assets are the Linux x86-64 ones, and the digest is checked before anything is installed — or a release asset was replaced, which is what the digest in the tree exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
-| `the installed falconet reports '…', not v0.2.0` in the install step | The asset at that release runs but is not the version the tree pins. | The same as the row above. |
+| `sha256sum: WARNING: 1 computed checksum did NOT match` in the gitleaks install step | The runner is not Linux x64 — gitleaks' pinned asset is the Linux x86-64 one, and the digest is checked before anything is installed — or the asset was replaced, which is what the digest exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
+| `go: github.com/zetlen/falconet/cmd/falconet@vX.Y.Z: … unknown revision` in the falconet install step | The ref on the workflow's `uses:` line — the ref the action compiles falconet at — names a tag that does not exist: typed by hand, or not yet pushed. | Pin a tag from the tags page. |
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted if it could be, and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
@@ -482,84 +482,35 @@ bot's configuration, and it has to be fixed before the next request.
 
 ## The binary on your machine
 
-Nothing in the install needs it: every job of the caller workflow installs
-its own, by digest, and the eight steps are `gh` and a browser. On a laptop
-the binary runs the verbs by hand — the same `prepare`, `commit`, `push` and
-`pause` the workflow runs, from a checkout — and the test suite runs through
-it. Two ways to get it, and one snag on macOS.
-
-**From the release page.**
-
-| Your machine | Asset |
-| --- | --- |
-| Apple silicon Mac | `falconet_darwin_arm64` |
-| Intel Mac | `falconet_darwin_amd64` |
-| Linux x86-64 | `falconet_linux_amd64` |
-| Linux arm64 | `falconet_linux_arm64` |
-
-Pick the tag from [the releases page](https://github.com/zetlen/falconet/releases),
-then:
+Nothing in the install needs it: every job of the caller workflow compiles
+its own from this repository at the tag the workflow names, and the eight
+steps are `gh` and a browser. On a laptop the binary runs the verbs by hand
+— the same `prepare`, `commit`, `push` and `pause` the workflow runs, from a
+checkout — and the test suite runs through it.
 
 ```sh
-tag=v0.2.0
-asset=falconet_darwin_arm64            # from the table above
-base="https://github.com/zetlen/falconet/releases/download/$tag"
-
-curl -fsSL -O "$base/$asset"
-curl -fsSL -O "$base/checksums.txt"
-
-# checksums.txt is sha256sum's own format, so the tool checks it for you.
-shasum -a 256 --ignore-missing -c checksums.txt   # Linux: sha256sum --ignore-missing -c
-
-chmod +x "$asset"
-mkdir -p ~/.local/bin
-mv "$asset" ~/.local/bin/falconet                 # anywhere on your PATH
+go install github.com/zetlen/falconet/cmd/falconet@v1.0.0
 ```
 
-Verify the checksum rather than trusting the download. A release tag is a
-mutable pointer and an asset can be replaced — the same reason `action.yml`
-pins gitleaks by digest as well as by version. falconet's own `linux_amd64`
-digest is committed in this tree at
-[`release/falconet_linux_amd64.sha256`](release/falconet_linux_amd64.sha256),
-written before the tag exists; the release workflow rebuilds those bytes on a
-runner and publishes nothing at all if they differ.
+That is the whole of it. Name the newest tag from
+[the tags page](https://github.com/zetlen/falconet/tags); the `go` command
+fetches the module at that tag through Go's module proxy, checks it against
+the checksum database, compiles it for the machine you are on, and leaves it
+at `$(go env GOPATH)/bin/falconet` — put that directory on your `PATH` if it
+is not there already. It is the same command the action runs in every CI
+job, at the tag your caller workflow names. It needs a Go at least as new as
+the `go` line in this repository's `go.mod`; `GOTOOLCHAIN=auto`, the
+default, fetches one if yours is older.
 
-**The macOS quarantine snag.** A file a **browser** downloads gets a
-`com.apple.quarantine` attribute, and Gatekeeper will not run an unsigned,
-un-notarised binary that carries one. Observed on macOS 26: it does not fail
-with a message — the process simply hangs. `curl` does not set the attribute,
-so the recipe above never trips over this; if a browser fetched the file,
-clear it **before** the first run:
-
-```sh
-xattr -d com.apple.quarantine ~/.local/bin/falconet
-```
-
-Clearing it after a denial did not reliably help in testing — Gatekeeper had
-already made up its mind about that file. Clear it first, or re-download with
-`curl`. This is documented rather than solved: signing and notarising means
-an Apple Developer account and a signing identity in CI, the level of
-commitment [docs/operating.md](docs/operating.md) declines everywhere else —
-as it declines a Homebrew tap and a `curl … | sh` install script.
-
-**With Go.**
-
-```sh
-go install github.com/zetlen/falconet/cmd/falconet@v0.2.0
-```
-
-Nothing is quarantined this way: the file is compiled locally rather than
-arriving through a browser. It builds with **your** Go, not the pinned one —
-`GOTOOLCHAIN=auto`, the default, is a floor and not a pin — so
-`falconet version` may report a Go newer than the release assets do. That is
-fine here, where nothing is compared against a digest; it is exactly what the
-release workflow must not do, and does not.
+No release page, no asset to pick, no checksum to compare by hand, and
+nothing for macOS to quarantine: the file was compiled here, not fetched by
+a browser.
 
 **Check:** `falconet version` prints the tag and the Go it was built with — a
-v0.2.0 build on an Apple-silicon Mac says:
+v1.0.0 build on an Apple-silicon Mac says:
 
 ```
-falconet v0.2.0 (go1.26.7 darwin/arm64)
+falconet v1.0.0 (go1.26.7 darwin/arm64)
 ```
 
 A `go install` of a commit rather than a tag reports the pseudo-version the

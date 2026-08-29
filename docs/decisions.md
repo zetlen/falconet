@@ -35,7 +35,7 @@ rewritten in the boil-down, not here.
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
 | falconet's own GitHub client; `gh` and `jq` are not runtime dependencies | retired | the client's subset stops covering what a verb needs, by more than a dependency would cost | [below](#falconets-own-github-client) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
-| One release asset per target, digest in the tree before the tag | retired | the build stops reproducing, or an adopter needs a target the four assets miss | [below](#one-release-asset-per-target) |
+| The binary is `go install`ed at the caller's ref | I2, I3 | a job's compile time, or the module proxy's availability, starts costing more than a prebuilt asset would | [below](#the-binary-is-go-installed-at-the-callers-ref) |
 | falconet does not plan; the repository's plan bot does | I5 | an adopter has no plan bot and cannot run one, or the plan bot cannot be made to plan on falconet's pull requests | [below](#falconet-does-not-plan) |
 
 ## The pipeline is falconet's own code
@@ -60,8 +60,8 @@ artifact (`source.tgz`) with its remote and credential stripped, and
 remote survives. That is what keeps the boundary literal for a private
 repository, which answers a tokenless clone with *not found*; the first live
 run (2026-08-21) found that, and the answer was to ship the tree rather than
-grant the job `contents: read`. falconet itself is installed as a public
-release asset, no token needed.
+grant the job `contents: read`. falconet itself is compiled from the public
+module, no token needed.
 
 The agent's grant is exactly `Read,Edit,Write,Grep,Glob`, capped at 40 turns.
 It edits files, writes `commit-msg.txt` (or `needs-info.md`), and stops. There
@@ -120,9 +120,10 @@ prose.
 The boundaries between jobs are the security model: the agent's job holds no
 token, the scripted jobs never run the agent, and App installation tokens are
 minted per step in the jobs that need them. `action.yml` is setup plus
-pass-through — it pins and installs falconet and gitleaks, then runs one
-verb — for a caller that wants a verb inside a workflow of its own. Nothing
-of falconet's is vendored into the adopter's tree; upgrading is moving a tag.
+pass-through — it installs gitleaks by version and digest and falconet by
+`go install` at its own ref, then runs one verb — for a caller that wants a
+verb inside a workflow of its own. Nothing of falconet's is vendored into
+the adopter's tree; upgrading is moving a tag.
 
 This is the charter's worked example: chosen in passing, it grew a
 secret-management problem that was read as work to do rather than as a
@@ -159,7 +160,7 @@ seen from outside a process — truncation never splitting a line, the fence
 outrunning every backtick run, the denylist matching in config order — is a
 Go unit or property test beside the guard. `contract.test.sh` holds the
 wiring's shape the same way: no checkout in the agent job, the install before
-the first verb, every `uses:` ref equal to `release/VERSION`.
+the first verb, every `uses:` ref one tag.
 
 ## The language is Go
 
@@ -199,14 +200,49 @@ operator registers it by hand from the README's step and puts its ID and
 private key into the repository's secrets by hand; installing it is a click
 in a browser.
 
-## One release asset per target
+## The binary is `go install`ed at the caller's ref
 
-`release/` holds the version and the linux_amd64 digest, committed before the
-tag; `release.yml` rebuilds the bytes and refuses to publish if they differ.
-`action.yml` installs falconet by version and digest in every job that runs a
-verb, the way it installs gitleaks. A workstation installs from the release
-page or with `go install`. No Homebrew tap, no `curl | sh`: the level of
-commitment [operating.md](operating.md) declines is still declined.
+Every job that runs a verb installs falconet with
+`go install github.com/zetlen/falconet/cmd/falconet@<ref>`, where `<ref>` is
+the one on the `uses: zetlen/falconet@…` line that reached the composite
+action — `github.action_ref`, read through the step's `env:`, because inside
+a composite action it is empty by the time a `run:` block is evaluated. Go
+is `actions/setup-go`, pinned by SHA, reading the `toolchain` line of the
+action's own `go.mod`; its cache is off, because it keys on a `go.sum` under
+the workspace and the workspace is the consumer's repository. gitleaks is
+still a release asset pinned by version and digest. A workstation runs the
+same command at a tag. A version is a git tag and nothing else: the workflow
+at a tag names that tag on its four `uses:` lines, written by hand as the
+last commit before the tag ([operating.md](operating.md)), and
+`contract.test.sh` refuses four lines that disagree or a ref that is not a
+tag. Between tags the lines name the last one.
+
+The integrity story is Go's. The module proxy serves the source for the ref,
+the checksum database — a transparency log — vouches for the bytes of every
+version it has ever served, and the runner compiles them: the same channel
+and the same trust as `go install` on a laptop. That is the argument for I3:
+the guards a job runs are the guards in the tree at the ref the caller
+named, with no second artifact between the two whose provenance has to be
+argued on its own. For I2 it is that the install holds nothing — no token,
+no release, the same step in the tokenless agent job as in every other — so
+the boundary between jobs does not rest on a download step.
+
+Rejected, and gone from the tree: one release asset per target, with the
+linux_amd64 digest committed under `release/` before the tag, a release
+workflow that rebuilt the bytes and refused to publish on a mismatch, four
+assets and a checksums file, and Makefile targets that wrote the version,
+the digest and the workflow's refs in one second. It worked, and it was some
+three hundred lines of build discipline — reproducible-build flags each
+measured to change the bytes, a toolchain pinned twice — to let a tag vouch
+for bytes that did not exist when it was made, which the checksum database
+does for every Go module already. What it bought was a one-second install
+where this is a compile, and that cost is the Reopen-when. Also weighed:
+installing at `job.workflow_sha`, so the reusable workflow would build the
+binary at its own commit with no literal to bump — rejected because the
+composite action's `uses:` line would still be a literal, and two
+coordinates that can disagree is the drift the four-equal-lines rule
+exists to prevent. No Homebrew tap, no `curl | sh`: the level of commitment
+[operating.md](operating.md) declines is still declined.
 
 ## falconet does not plan
 
