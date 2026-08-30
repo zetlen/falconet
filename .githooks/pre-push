@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The records agree before they leave this machine.
+# The records are checked before they leave this machine.
 #
 # Installed by `make hooks`, which sets core.hooksPath to this directory — so
 # the hook that runs is the hook in the tree, and every clone gets the same one

@@ -40,5 +40,5 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\ndocslint: %d problem(s). the README's principles and AGENTS.md say what these fields are for.\n", len(findings))
 		os.Exit(1)
 	}
-	fmt.Println("docslint: the records agree")
+	fmt.Println("docslint: links and cross-references check out")
 }

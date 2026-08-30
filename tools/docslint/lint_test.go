@@ -112,11 +112,6 @@ func TestEachBreakIsRefused(t *testing.T) {
 			return sub(f, "docs/history/0002-a-record.md", "How it was reached.", "See [ADR-0001](0001-gone.md).")
 		}, "there is no docs/history/0001-gone.md in this tree"},
 
-		{"a principle no decision serves", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "README.md", "**1.** falconet plans; it never applies.",
-				"**1.** falconet plans; it never applies.\n\n### Nobody's business\n\n**2.** Unserved.")
-		}, "I2 is cited by no decision"},
-
 		{"a principle whose lead disagrees with its position", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "README.md", "**1.** falconet plans", "**2.** falconet plans")
 		}, "is principle 1 by position but its lead says **2.**"},
@@ -164,6 +159,21 @@ func TestEachBreakIsRefused(t *testing.T) {
 	}
 }
 
+// A principle no decision serves yet is allowed: principles may be declared
+// ahead of the decisions that will serve them, and the register only has to
+// be right about what it does cite.
+func TestAnUnservedPrincipleIsAllowed(t *testing.T) {
+	f := sub(corpus(), "README.md", "**1.** falconet plans; it never applies.",
+		"**1.** falconet plans; it never applies.\n\n### Nobody's business\n\n**2.** Unserved, and that is fine.")
+	found, err := lint(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("an unserved principle produced findings: %v", found)
+	}
+}
+
 // A `### ` heading outside the principles section is prose, not a principle:
 // it gets no id, and nothing asks it for a lead.
 func TestAHeadingOutsideTheSectionIsNotAPrinciple(t *testing.T) {
@@ -178,7 +188,7 @@ func TestAHeadingOutsideTheSectionIsNotAPrinciple(t *testing.T) {
 }
 
 // The suite's own subject is this repository. Every other case above proves
-// the tool can say no; this one is the tree saying the records agree.
+// the tool can say no; this one is the tree passing its own check.
 func TestTheRecordsInThisRepository(t *testing.T) {
 	found, err := lint(os.DirFS("../.."))
 	if err != nil {

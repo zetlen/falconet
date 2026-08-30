@@ -57,19 +57,11 @@ func lint(fsys fs.FS) ([]finding, error) {
 	}
 	out = append(out, fs1...)
 
-	cited, fs2, err := readRegister(fsys, invariants)
+	fs2, err := readRegister(fsys, invariants)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, fs2...)
-
-	// An invariant nothing serves is either missing its decision or is not
-	// an invariant.
-	for _, id := range sortedKeys(invariants) {
-		if !cited[id] {
-			out = append(out, finding{principlesPath, invariants[id], id + " is cited by no decision: no row of the register names it"})
-		}
-	}
 
 	// Links last, over everything an adopter or an agent is sent to.
 	files, err := prose(fsys)
@@ -159,11 +151,10 @@ func readPrinciples(fsys fs.FS) (map[string]int, []finding, error) {
 // Every row names a principle the README declares and links the section
 // that records it; the section must exist, in this file, because the
 // register is the one document a decision is read from.
-func readRegister(fsys fs.FS, invariants map[string]int) (map[string]bool, []finding, error) {
-	cited := map[string]bool{}
+func readRegister(fsys fs.FS, invariants map[string]int) ([]finding, error) {
 	lines, err := readLines(fsys, registerPath)
 	if err != nil {
-		return cited, []finding{{registerPath, 0, "missing: this is the index of every live decision"}}, nil
+		return []finding{{registerPath, 0, "missing: this is the index of every live decision"}}, nil
 	}
 
 	var out []finding
@@ -206,9 +197,6 @@ func readRegister(fsys fs.FS, invariants map[string]int) (map[string]bool, []fin
 			}
 		}
 		out = append(out, checkServes(registerPath, field{line: i + 1}, cells[1], invariants)...)
-		for _, m := range reInvariantRef.FindAllStringSubmatch(cells[1], -1) {
-			cited["I"+m[1]] = true
-		}
 		links := reLink.FindAllStringSubmatch(cells[3], -1)
 		if len(links) == 0 {
 			out = append(out, finding{registerPath, i + 1, "the Record cell links nothing; a decision with no record is a decision nobody can reopen"})
@@ -226,7 +214,7 @@ func readRegister(fsys fs.FS, invariants map[string]int) (map[string]bool, []fin
 	if !sawTable {
 		out = append(out, finding{registerPath, 0, "no register table; its header row is `" + strings.Join(want, " | ") + "`"})
 	}
-	return cited, out, nil
+	return out, nil
 }
 
 // slug is the anchor GitHub gives a heading: lower-cased, punctuation
@@ -374,13 +362,4 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

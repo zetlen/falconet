@@ -224,9 +224,10 @@ break it exists for before it is made green.
 `make lint-docs` holds the shape of the two documents above, the same way
 `contract.test.sh` holds the wiring's: every row of the register names a
 principle the README actually declares and links a section of the register
-that exists; every invariant is named by some row; and nothing in
-`README.md`, `AGENTS.md` or `docs/` links a file that is not in this tree. It
-is
+that exists, and nothing in
+`README.md`, `AGENTS.md` or `docs/` links a file that is not in this tree. A
+principle no row serves yet is fine — principles may run ahead of the
+decisions that will serve them. It is
 `tools/docslint`, Go and the standard library, with its own cases in
 `tools/docslint/lint_test.go` — each one a corpus broken in exactly one place,
 proved red on the break it exists for.
@@ -237,8 +238,8 @@ inside CI. `make hooks` puts it on `pre-push` for this clone, which is a
 convenience and not the gate: CI runs it on every push and every pull request,
 and `--no-verify` exists.
 
-A new principle or a new kind of row starts by breaking the lint on purpose
-and watching it refuse. A new decision is a row and a section in the
+A new kind of row starts by breaking the lint on purpose and watching it
+refuse. A new decision is a row and a section in the
 register, made in the same commit as the change; the reasoning that does not
 fit there goes in that commit's message. No new files go in `docs/history/`.
 
