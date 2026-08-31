@@ -4,8 +4,7 @@ Instructions for agents and humans changing this repository. Read these in
 order, and always know which one you are reading:
 
 1. **The top of [README.md](README.md)** — what falconet is for: the four
-   steps, and the five principles that are not up for negotiation. Eighty
-   lines. Read it first.
+   steps, and the five principles. Read it first.
 2. **This file** — the non-goals, what is merely a means, and the working
    rules.
 3. **[docs/decisions.md](docs/decisions.md)** — every live decision: what is
@@ -13,9 +12,10 @@ order, and always know which one you are reading:
    what was rejected. Read it before proposing a change to how any of this is
    built. It describes the tree as it is.
 
-`docs/history/` is how those decisions were reached. It is not a description
-of anything, several of its records contradict the tree on purpose, and you
-do not need it to work here. Do not read it for what is true.
+`docs/history/` is the archive of how those decisions were reached; the
+register supersedes it. Several of its records contradict the tree on
+purpose — read them for their incidents and measurements, never for what is
+true now.
 
 The ranking is the point of having three. A **principle** is a property of
 what falconet produces, and it is not traded away for a nicer implementation.
@@ -23,12 +23,10 @@ A **means** is a choice someone made for reasons, and a choice has a shelf
 life. If you cannot tell which of the two a sentence in this file is, that is
 a fault in this file — say so.
 
-One rule follows from keeping them apart, and it is the reason the principles
-sit at the top of the README above everything else: **when a mechanism starts
+One rule follows from keeping them apart: **when a mechanism starts
 generating work that no principle asked for, the mechanism is what is wrong,
-not the work that is missing.** That is not licence to rewrite whatever you
-find inconvenient. It is a question to ask out loud, in the register's terms
-— name the row, name its trigger — before spending a week serving a decision
+not the work that is missing.** Raise that in the register's terms — name
+the row, name its trigger — before spending a week serving a decision
 instead of a goal.
 
 Each fact lives in one place. The README says what must be true, the register
@@ -54,45 +52,45 @@ working rules. Nothing here restates an argument it does not own.
 
 ## Everything else is a means
 
-Go. One binary. A reusable workflow whose job boundaries are principle 2. A GitHub App
-or a token as the identity that pushes. Labels as the queue. One config file.
-A handoff directory. An OpenTofu repository as the origin and a Pulumi one as
-the second home. Every one of those is a **means**: chosen for reasons, and
-the reasons are in [the decision register](docs/decisions.md), which gives each
-one the invariant it serves and the observation that should retire it.
+Go. One binary. A reusable workflow whose job boundaries are principle 2. A
+GitHub App as the identity that pushes. Labels as the queue. One config file.
+A handoff directory. Every one of those is a **means**: chosen for reasons,
+and the reasons are in [the decision register](docs/decisions.md), which
+gives each one the principle it serves and the observation that should
+retire it. A means is not a rule; it is a decision, and a decision has a
+shelf life.
 
-A means is not a rule. It is a decision, and a decision has a shelf life.
+Three rows worth knowing before proposing architecture:
 
-> **When a mechanism starts generating work that no principle above asked
-> for, that is evidence the mechanism is wrong — not evidence that the work
-> is needed.**
+- **The pipeline is falconet's own code**
+  ([register](docs/decisions.md#the-pipeline-is-falconets-own-code)):
+  `github/gh-aw` and its kind are sized for a threat model this repository
+  does not have, and the row reopens on one observation — strangers can
+  trigger this pipeline.
+- **One implementing agent, and no reviewing agent**
+  ([register](docs/decisions.md#no-second-reviewing-agent)); the bar a
+  second one must clear is written there.
+- **The language is Go, and the port is done**
+  ([register](docs/decisions.md#the-language-is-go)); Bun and Rust were
+  weighed, with reasons. The suite runs once, through the binary
+  `make build` leaves at `dist/falconet`: `make test`.
 
-The principles were rewritten on 2026-08-29 because that rule fired on the
-tool as a whole. What had grown around the four steps — setup verbs, a
-self-checking installer, an App registered from a manifest, a GitHub client
-of its own, a release apparatus with digests in the tree — served an
-adoption story for adopters who do not exist, and the register's
-"OpenTofu is the shape" row reopened on its own trigger when the one
-adopter moved to Pulumi. The four steps are what was worth keeping; this
-names them so the rest can go.
+To reopen a row, cite its **Reopen when** as something you can point at in
+the present, and change the row in the same commit as the change it admits.
 
 ## Changing the principles
 
-A principle changes when the operator says it changes — not in the
-register, and never as the side effect of some other decision. It has
-happened twice: on 2026-08-26 planning left falconet for the plan bot, and on
-2026-08-29 the tool was distilled to the four steps above, which added the
-bounded check loop to principle 3 and retired the adoption invariant with the
-apparatus that served it. A change that finds itself amending one has either
-found the wrong solution or found a real disagreement; either way it stops
-and asks. Means change all the time, as rows of the register, and keeping
-the two apart is the whole point.
+A principle changes only when the operator says it changes — never as a
+register row, and never as the side effect of some other decision. A change
+that finds itself amending one has either found the wrong solution or found
+a real disagreement; either way it stops and asks.
 
 ## The guards are scar tissue, not defensive programming
 
-Every guard in this codebase exists because something went wrong once, and the
-incident is documented in a comment directly above it. **Do not "simplify" one
-without reading why it exists.** Two examples, both load-bearing:
+Every guard in this codebase exists because something went wrong once, and
+the incident is documented in a comment directly above it. Read that comment
+before changing the guard: it is the requirement the guard answers to. Two
+examples, both load-bearing:
 
 - PR #28 shipped a plan the agent had abridged by hand — literal
   "# ... omitted here for length" comments inside the fence — and the human
@@ -107,13 +105,10 @@ without reading why it exists.** Two examples, both load-bearing:
 If a guard looks like paranoia, that is what a guard that has been working
 looks like.
 
-The guard logic lives in `internal/<pkg>`, with no filesystem access and
-the incident prose above each guard moved there verbatim from the bash it
-replaced; `cmd/falconet/<verb>.go` is the flags, the files, the
-subprocesses and the exit code. The operator reads Go, the comment is the
-record, and the commit that ported each verb names every departure from
-the bash and why — `git log` is where to look before calling a difference
-a bug.
+The guard logic lives in `internal/<pkg>`, with no filesystem access, and
+the incident prose sits directly above each guard; `cmd/falconet/<verb>.go`
+is the flags, the files, the subprocesses and the exit code. The operator
+reads Go, and the comment is the record.
 
 ## What is not up for negotiation
 
@@ -144,35 +139,15 @@ you think one is wrong, say so and stop.
 - **falconet does not plan, and does not describe the plan** (principle 5,
   and a non-goal). The repository's plan bot posts the plan on the pull
   request; the body carries none and the agent is told not to guess at one.
-  Do not add a plan, a validate, a `tofu` or `pulumi` call or a cloud
-  credential back into the binary or the workflow — that is the fifth of the
-  tree removed on 2026-08-26
-  ([register](docs/decisions.md#falconet-does-not-plan)), and it reopens
-  only on the trigger written there.
+  A plan, a validate, a `tofu` or `pulumi` call or a cloud credential in the
+  binary or the workflow is a change to this decision
+  ([register](docs/decisions.md#falconet-does-not-plan)), which reopens only
+  on the trigger written there.
 
 - **Every run ends somewhere a person can see** (principle 4). A pull
   request, a question for the requester, or a hand-off — and never a green
   run that produced nothing. A new exit path that is none of the three is a
   new terminal state, and there are three.
-
-## Means currently in force
-
-Settled, with reasons, and each carries a **Reopen when** in
-[the register](docs/decisions.md). Disagree loudly and cite the trigger you
-can point at in the present. Do not quietly build the other thing.
-
-- **Do not re-propose `github/gh-aw`** or anything shaped like it
-  ([register](docs/decisions.md#the-pipeline-is-falconets-own-code)). It
-  reopens on one observation: strangers can trigger this pipeline.
-- **Do not wire up a review agent**
-  ([register](docs/decisions.md#no-second-reviewing-agent)) unless it clears
-  the bar written there.
-- **The language is Go, and the port is done**
-  ([register](docs/decisions.md#the-language-is-go)). Bun and Rust were
-  weighed, with reasons; do not re-propose either. The suite runs once,
-  through the binary `make build` leaves at `dist/falconet`: `make test`.
-- **The rest are in the register**, not restated here. Each row names what
-  it serves and what would retire it.
 
 ## Tests
 
@@ -182,34 +157,32 @@ can point at in the present. Do not quietly build the other thing.
 - **`go test ./...`** — unit and property tests beside the guard logic
   (`testing`, `testing/quick`), for what the bash suite cannot see from
   outside a process: a pause comment's truncation never splits a line and
-  never exceeds its budget, the fence outruns every backtick run, the denylist matches in
-  config order, the config merge (objects recurse, arrays and scalars
-  replace), the handoff directory, the repository root, the dispatcher's
-  lists in step with what it implements. `go vet`, `staticcheck`,
-  `errcheck` and `govulncheck` are part of green in CI — ci.yml runs them
-  before the suite, and `make check` runs the same pinned versions locally:
-  an ignored error is a red build.
+  never exceeds its budget, the fence outruns every backtick run, the
+  denylist matches in config order, the config merge (objects recurse,
+  arrays and scalars replace), the handoff directory, the repository root,
+  the dispatcher's lists in step with what it implements. `go vet`,
+  `staticcheck`, `errcheck` and `govulncheck` are part of green in CI —
+  ci.yml runs them before the suite, and `make check` runs the same pinned
+  versions locally: an ignored error is a red build.
 - **`bash tests/run.sh`** — the acceptance suite and the incident record,
-  run through the binary. It is not rewritten for Go and it reaches inside
-  nothing: **no test may reach inside its subject.** Every assertion crosses
-  a process boundary: spawn `$FALCONET <verb>`, then check stdout, exit
-  code, and files on disk. `FALCONET` defaults to `dist/falconet` and
-  `tests/lib.sh` refuses to start without it (`build it first: make build`);
-  `FALCONET=/other/binary bash tests/run.sh` runs the same suite against
-  another build. There is no fallback to anything else: green means green
-  through the binary.
+  run through the binary. **No test reaches inside its subject.** Every
+  assertion crosses a process boundary: spawn `$FALCONET <verb>`, then check
+  stdout, exit code, and files on disk. `FALCONET` defaults to
+  `dist/falconet` and `tests/lib.sh` refuses to start without it (`build it
+  first: make build`); `FALCONET=/other/binary bash tests/run.sh` runs the
+  same suite against another build. Green means green through the binary.
 
 GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
 `fake_github` in `tests/lib.sh` that answers from fixtures and records what
-it was asked, with `GITHUB_API_URL` pointing at it. No test
-file stubs `gh`; the files that once did put a tripwire on `PATH` instead,
-so a verb that shelled out to `gh` would fail loudly before the real one
-could carry a test token anywhere. `gitleaks` is a bash stub handed in
-through `$GITLEAKS`, and its argv is part of the contract. Pushes land only
-in bare repositories under a temp directory; nothing touches the network,
-GitHub, or any credential. The suite
-needs bash, git, jq, awk and python3 stdlib. Adding a dependency to run the
-tests is a decision, not a convenience.
+it was asked. The verbs shell out to `gh api` with full URLs built from
+`GITHUB_API_URL`, so pointing that variable at the fake is what routes every
+request — the real `gh`, exercised end to end, with a token that goes
+nowhere but loopback. `gitleaks` is a bash stub handed in through
+`$GITLEAKS`, and its argv is part of the contract. Pushes land only in bare
+repositories under a temp directory; nothing touches the network, GitHub, or
+any credential. The suite needs bash, git, jq, awk, python3 (stdlib only)
+and `gh`. Adding a dependency to run the tests is a decision, not a
+convenience.
 
 `contract.test.sh` is the wiring's test: it reads `action.yml`,
 `.github/workflows/falconet.yml`, the Makefile and the README's caller
@@ -241,17 +214,15 @@ and `--no-verify` exists.
 A new kind of row starts by breaking the lint on purpose and watching it
 refuse. A new decision is a row and a section in the
 register, made in the same commit as the change; the reasoning that does not
-fit there goes in that commit's message. No new files go in `docs/history/`.
+fit there goes in that commit's message.
 
 ## One shell trap
 
-The binary speaks `os/exec`, and the shell traps the bash used to carry
-went with it — except one, because two `run:` steps in the workflow still
-use `gh` (the pull request, and contain's check): **never `gh ... | grep
--q`.** `grep -q` exits at the first
-match and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found*
-match into a non-zero pipeline — the exact opposite of the answer just
-computed. Capture the whole result, then inspect it.
+Two `run:` steps in the workflow use `gh` directly (the pull request, and
+contain's check). In those, capture the whole result into a variable, then
+inspect it — never `gh ... | grep -q`. `grep -q` exits at the first match
+and can SIGPIPE `gh`, which under `set -o pipefail` turns a *found* match
+into a non-zero pipeline — the exact opposite of the answer just computed.
 
 ## Adding a verb
 
@@ -264,11 +235,10 @@ of something that stayed internal.
 
 The binary lives wherever it was installed; `REPO_ROOT` is the repository
 being worked on, and `internal/repo` finds it from the working directory
-(or `$FALCONET_REPO`). The origin's scripts lived inside the repo they
-operated on, so one answer served both — and a verb that keeps that
-assumption operates on wherever the tool sits instead of on the consumer's
-repository, silently, reporting an outcome about the wrong tree. Never
-derive the working tree from the binary's own location.
+(or `$FALCONET_REPO`). A verb that derives the working tree from the
+binary's own location operates on wherever the tool sits instead of on the
+consumer's repository, silently, reporting an outcome about the wrong tree —
+always resolve the tree from the working directory.
 
 ## The handoff lives inside the tree it describes
 

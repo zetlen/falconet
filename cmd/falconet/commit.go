@@ -1,18 +1,14 @@
 package main
 
 // commit — read the implementing agent's outcome off the disk and, where
-// there is one, make the commit that agent can no longer make itself.
+// there is one, make the commit the agent cannot make itself.
 //
-// The implementing stage used to hold `Bash(git add:*)` and `Bash(git
-// commit:*)`, and its prompt carried a paragraph of permission-matcher tax
-// ("a single simple command ... no heredoc, no $(...), no &&"). It now holds
-// no Bash at all: it edits files, writes its commit message to
-// .ci-handoff/commit-msg.txt, and stops. This verb does the rest.
-//
-// That is worth more than two fewer tool grants. "Did the agent commit?" used
-// to be a claim to check — claude-code-action reports `conclusion: success`
-// for a run that did nothing. It is now a question about the tree, and the
-// tree does not have opinions.
+// The implementing agent holds no git and no shell: it edits files, writes
+// its commit message into the handoff directory, and stops. This verb does
+// the rest — which makes "did the agent commit?" a question about the tree,
+// and the tree does not have opinions, where an agent harness's own report
+// is a claim to check (claude-code-action says `conclusion: success` for a
+// run that did nothing).
 //
 // The guards are internal/commit, which carries the incident record above
 // each; the secret scan is internal/scan. This file is the sequence they run

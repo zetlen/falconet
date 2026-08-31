@@ -3,10 +3,9 @@
 Every live decision in falconet: what is true, the
 [principle](../README.md#the-invariant-principles) it serves, the observation
 that should retire it, and — under the table — the shortest honest account of
-why, with what was rejected. This is the only document that holds the *why*.
-It describes the tree as it is; it does not narrate how it got here.
-[`history/`](history/) does that, and is not for reading before changing
-something.
+why, with what was rejected. This is the only document that holds the *why*,
+and it describes the tree as it is; [`history/`](history/) is the archive of
+how it got here.
 
 A decision is not a rule — it is a choice with a shelf life, and the **Reopen
 when** column is the shelf life, written by whoever made the choice, before
@@ -143,11 +142,9 @@ cheap when one arrives is principle 2 as it is built — the job boundary,
 not the harness's allowlist, is what holds the agent — so a harness is a
 tool grant and a way to run it, and nothing else in the tree knows its name.
 
-Until 2026-08-29 this row also said *an OpenTofu repository is the shape*.
-The pilot repository retired that day and is restarting on Pulumi, so that
-half's trigger fired; the shipped prompt no longer names an IaC tool (the
-prompt row), and what remains of the shape is the config defaults, which
-have a row of their own, open.
+No IaC tool is part of the platform: the shipped prompt names none (the
+prompt row), and what the agent may touch is the config's to say (the
+allowlist row).
 
 ## No default for the path allowlist or the content denylist
 
@@ -156,22 +153,18 @@ entries — an allowlist the operator did not write is a choice made for them,
 and a default that silently admits `*.tf` in a Pulumi repository is exactly
 that.
 
-Before 2026-08-29 both defaulted to the origin repository's values:
-`["*.tf"]` and the seven HCL constructs that make a plan execute code or read
-a file. Those were kept because the origin was the only adopter, and a
-default that names nothing is a default an adopter must set before the first
-run. The origin retired, and the next repository is a Pulumi one, where a
-string denylist over a program is a tripwire and not a wall — `pulumi
-preview` executes whatever the file says. So the operator names both, or
-names nothing and runs without a denylist, which is the honest position for
-a repository whose program is code. The recommended shape for such a
-repository is that the agent edits a data surface the program reads — YAML
-or JSON under an allowlist of its own — and the program stays a person's;
-pure data has no denylist to get wrong.
+The operator names both, or names an allowlist and no denylist — the honest
+position for a repository whose program is code, where a string denylist
+over a program is a tripwire and not a wall: `pulumi preview` executes
+whatever the file says. The recommended shape for such a repository is that
+the agent edits a data surface the program reads — YAML or JSON under an
+allowlist of its own — and the program stays a person's; pure data has no
+denylist to get wrong.
 
-Rejected: keeping the `*.tf` default with documentation saying whose it is
-— a default an adopter must understand to override is a default that will
-not be overridden.
+Rejected: shipping one repository's values (`["*.tf"]` and the seven HCL
+constructs that make a plan execute code or read a file) as everyone's
+default, with documentation saying whose they are — a default an adopter
+must understand to override is a default that will not be overridden.
 
 ## The shipped prompt says what the config says
 
@@ -185,9 +178,11 @@ whose placeholder renders empty is dropped whole, so an empty denylist does
 not read `refused: `. Standing facts an operator wants the agent to take as
 given live in that repository's `AGENTS.md`, where they bind a person too;
 a prompt of the operator's own (`prompts.implement`) is for when the wording
-itself should differ. Until 2026-08-29 the shipped prompt carried the
-origin's standing facts — its registrar sandbox, its scratch tenant, its
-file layout — and every adopter got them.
+itself should differ.
+
+Rejected: shipping one repository's standing facts in the prompt every
+adopter gets — that is the same mistake as shipping its config values as
+the defaults, in prose instead of JSON.
 
 ## Stage-level verbs, one JSON config file
 
@@ -229,13 +224,14 @@ pass-through — it installs gitleaks by version and digest and falconet by
 verb inside a workflow of its own. Nothing of falconet's is vendored into
 the adopter's tree; upgrading is moving a tag.
 
-This was the old charter's worked example of a mechanism generating work no
-principle asked for: chosen in passing, it grew a secret-management problem
-— a setup verb, a token for it, an App registered from a manifest, a
-sealed-box client for the secrets API — that was read as work to do rather
-than as a mechanism reporting a fault. On 2026-08-29 all of that went; the
-install is eight steps a person does with `gh` and a browser, and the
+The install is eight steps a person does with `gh` and a browser, and the
 reopen trigger is those steps outgrowing what a person can check.
+
+Rejected, and gone from the tree: a setup verb that did the steps — an App
+registered from a manifest, a sealed-box client for the secrets API, and a
+powerful short-lived token to run it all. Automating the install grew a
+secret-management problem larger than the install: a mechanism generating
+work no principle asked for.
 
 ## Verbs never call each other
 
@@ -304,17 +300,17 @@ non-github.com hosts — the test server, GitHub Enterprise Server — are
 authenticated the same way github.com is. The verbs depend on the interface;
 nothing in a verb knows the implementation is `gh`.
 
-Before 2026-08-29 the binary had its own `net/http` client (about 400 lines).
-The reason it was bespoke — no `gh` dependency on a workstation — served
-the retired adoption principle, and the install's own steps used `gh` on the
-operator's machine anyway. Two HTTP paths for one forge was one too many: the
-workflow's `run:` steps already shelled out to `gh` for the pull request and
-contain's check, and the binary now does the same, through a clean adapter
-boundary. What a run needs in CI is git, gitleaks, `gh` and the binary; on
-a workstation, the same. Rejected: keeping the `net/http` client as a second
-implementation behind the same interface — two implementations agreeing by
-convention is the disease, and there is no second consumer to justify
-the cost.
+What a run needs in CI is git, gitleaks, `gh` and the binary; on a
+workstation, the same — and `gh` was already there on both, for the
+install's own steps and for the two workflow `run:` steps that use it (the
+pull request, and contain's check).
+
+Rejected: a `net/http` client of falconet's own (about 400 lines) — two
+HTTP paths for one forge, kept apart only by convention, to spare a
+dependency the operator's machine carries anyway. Also rejected: keeping
+that client as a second implementation behind the same interface — two
+implementations agreeing by convention is the disease, and there is no
+second consumer to justify the cost.
 
 ## A GitHub App, purely as a credential
 
@@ -382,23 +378,22 @@ change and a `Closes` line, and the prompt tells the agent not to describe
 the plan. Branch protection on the bot's status is what stands between the
 pull request and an apply.
 
-Until 2026-08-26 the binary did this itself: per-stack `init`, `validate`
-and `plan` with a config that classified stacks, a `plan-env` secret and a
-verb that masked it into the environment, a baseline plan in `prepare`, a
-body assembler that refused to abridge, and `tofu fmt` in `commit` — about
-2,400 lines, a fifth of the tree, plus three rows of this register. All of
-it reimplemented what the plan bots do, for one adopter that needs a plan
-bot on its human pull requests anyway. It was removed so that the successor
-maintainer inherits one bespoke thing (issue → sandboxed agent → guarded
-commit → pull request) and one standard thing, instead of a half of each.
-Git has the three retired rows: `plan-env is one secret of static strings`,
-`Every planned stack is planned`, `Never narrow a plan with -target`.
+What the bot delivers — the whole plan in front of the reviewer, and the
+plan being of what the change touches — is the bot's to deliver, and
+principle 5 says so: the evidence is the repository's own. What falconet
+owes is that the pull request is of the right change, opened where the bot
+will see it, with no account of the plan in it that a reviewer could
+mistake for the evidence. The cost, stated plainly: nothing validates or
+formats the change before the pull request, and nothing can see whether a
+plan bot is configured — the canary is the check.
 
-What moved with it — the whole plan in front of the reviewer, and the plan
-being of what the change touches — is the bot's to deliver, and principle 5
-says so: the evidence is the repository's own. What falconet still owes is
-that the pull request is of the right change, opened where the bot will see
-it, with no account of the plan in it that a reviewer could mistake for the
-evidence. The cost, stated plainly: nothing validates or formats the change
-before the pull request, and nothing can see whether a plan bot is
-configured — the canary is the check.
+Rejected, and gone from the tree: planning in the binary — per-stack
+`init`, `validate` and `plan` with a config that classified stacks, a
+`plan-env` secret and a verb that masked it into the environment, a
+baseline plan in `prepare`, a body assembler that refused to abridge, and
+`tofu fmt` in `commit` — about 2,400 lines, a fifth of the tree, plus three
+rows of this register (git has them). All of it reimplemented what the plan
+bots do, for an adopter that needs a plan bot on its human pull requests
+anyway; removing it leaves a maintainer one bespoke thing (issue →
+sandboxed agent → guarded commit → pull request) and one standard thing,
+instead of a half of each.

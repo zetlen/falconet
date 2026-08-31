@@ -3,11 +3,11 @@
 # gate → implement → publish → contain. Four jobs, and the boundaries between
 # them are the security model rather than a tidy diagram:
 #
-#   the AGENT JOB never holds a token. Not a blanked one — none. The origin
-#   blanked credentials on the agent STEP and said so honestly in its own
-#   comment: whether a `uses:` step's env: reaches a composite action's
-#   expression context is not something it had confirmed on a live run. A job
-#   with `permissions: {}` and no secrets: block is not best-effort.
+#   the AGENT JOB never holds a token. Not a blanked one — none. Blanking
+#   credentials on the agent's step would be best-effort: whether a `uses:`
+#   step's env: reaches a composite action's expression context is nothing
+#   a workflow can promise. A job with `permissions: {}` and no secrets:
+#   block is enforced by GitHub.
 #
 #   the SCRIPTED JOBS never run the agent. They hold the token and do the
 #   mechanics — the branch, the guards, the commit, the push, the pull
@@ -45,11 +45,8 @@
 # refuses a tree where the four lines disagree or name anything but a tag.
 # Between tags they name the LAST tag, and the action there is that tag's.
 #
-# So nothing checks falconet out into the consumer's tree any more, and the
-# input that chose which falconet to check out is gone with the checkout: the
-# tag on the `uses:` line is the one coordinate, and a caller still passing
-# that input is rejected when its file is loaded. ADR-0005's
-# "one checkout in the agent job, and it is falconet's" becomes none.
+# Nothing of falconet's is checked out into the consumer's tree: the tag on
+# the `uses:` line is the one coordinate.
 #
 # ---------------------------------------------------------------------------
 # The cost of that boundary, stated plainly
@@ -73,9 +70,9 @@
 # is durable as an artifact rather than as a branch. `contain` links the run —
 # and therefore the artifact — on every path that stops early.
 #
-# If that trade is wrong, the alternative is the origin's shape: one job,
-# per-step credential blanking, and the honesty that step-level blanking is
-# unconfirmed. This file takes the enforceable boundary and pays for it here.
+# If that trade is wrong, the alternative is one job with per-step
+# credential blanking — a boundary that is best-effort where this one is
+# enforced. This file takes the enforceable boundary and pays for it here.
 
 name: falconet
 
@@ -113,8 +110,7 @@ on:
           A GitHub App registered purely as a credential — no webhook, nothing
           hosted. Output is authored by the app rather than by a person, and
           App-token pushes fire pull_request events, which GITHUB_TOKEN
-          pushes do not. That is why the empty-commit-with-a-PAT workaround
-          is deleted rather than ported.
+          pushes do not.
         required: true
       app-private-key:
         required: true
@@ -161,11 +157,7 @@ jobs:
       # path outside the allowlist. A run in CI must not depend on the
       # consumer's .gitignore knowing the directory's name, so it is excluded
       # per clone, here, before any verb reads git status; contract.test.sh
-      # fails if a step reorders that. The tool's own checkout used to sit
-      # beside it as a second untracked path, and every run once died right
-      # there, on the checkout showing up as `??`, before the acknowledgment;
-      # the tool is a binary on PATH now, and the exclude names the one path
-      # that is left.
+      # fails if a step reorders that.
       #
       # Per clone and never committed. A consumer still gitignores the
       # handoff directory for runs by hand; a run in CI must not depend on it.
@@ -249,9 +241,7 @@ jobs:
       # grep is the fail-closed half: if a future checkout writes the
       # credential somewhere else in .git, nothing ships at all.
       #
-      # The handoff is excluded from the tar: it travels as its own artifact,
-      # and the only other thing that ever needed excluding — the tool's
-      # checkout — is no longer in the tree.
+      # The handoff is excluded from the tar: it travels as its own artifact.
       - name: Hand the checkout to the agent job, without the credential
         id: source
         if: steps.prepare.outputs.outcome == 'ready'
@@ -305,14 +295,11 @@ jobs:
       # publish hands off instead of opening a pull request.
       check: ${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}
     steps:
-      # NO checkout in this job — not of the repository being worked on, which
-      # it cannot clone (see gate's hand-over step), and since #19 not of
-      # falconet either. ADR-0005 allowed this job one checkout, falconet's,
-      # because a composite action had to run from under the workspace; the
-      # action now lives in the runner's action cache and what it fetches is
-      # this public module through the module proxy, with no token. That is
-      # the stronger form of ADR-0005's sentence, and contract.test.sh holds
-      # it: zero actions/checkout steps here, ever.
+      # NO checkout in this job, ever — contract.test.sh holds it. The
+      # repository being worked on cannot be cloned here (see gate's
+      # hand-over step), and falconet arrives without one: the action runs
+      # from the runner's action cache, and what it fetches is this public
+      # module through the module proxy, with no token.
       - name: Install falconet and gitleaks
         uses: zetlen/falconet@v1.0.0
 

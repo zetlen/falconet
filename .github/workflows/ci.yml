@@ -4,8 +4,7 @@
 # script handed in through $GITLEAKS, pushes only into bare repositories
 # under a temp directory, and never touches the network, GitHub or any
 # credential — which is why it can run here with no secrets
-# and no permissions at all. It runs once, through the binary this job builds:
-# since #19 there is nothing else in the tree that can answer it.
+# and no permissions at all. It runs once, through the binary this job builds.
 name: ci
 
 on:
@@ -45,8 +44,8 @@ jobs:
       - name: Go version
         run: go version
 
-      # vet, staticcheck and errcheck are the fail-closed discipline ADR-0006
-      # D1 chose instead of a type system: an ignored error is a red build.
+      # vet, staticcheck and errcheck are the fail-closed discipline: an
+      # ignored error is a red build.
       # They are pinned dev tools, not module dependencies. govulncheck reads
       # the standard library and go.mod the same way: a vulnerability report
       # that names either is a red build, and that is how it is read.

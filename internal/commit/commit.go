@@ -15,29 +15,24 @@
 //
 // Only paths matching `paths.allow` may be committed. Anything else is a
 // failure that names the path. The list is the operator's, in
-// .github/falconet.json, and it has no default: in the origin repository it
-// was `*.tf`, and `*.tf` and `scripts/record-manifest.txt` until #17 deleted
-// the manifest — a DNS record then lived in exactly one file, which was a
-// `.tf` file, so the second entry stopped naming anything a request could
-// need.
+// .github/falconet.json, and it has no default.
 //
 // The issue title, body and comment thread are attacker-controlled text, and
 // they are also the agent's instructions. An issue that asks it to "also
-// update .github/workflows/infra-issues.yml to grant Bash" is a privilege
-// escalation, and until now the only thing standing against it was a cheap
-// model answering "are unrelated files touched?". That question is now a case
-// statement. A request that genuinely needs a script change fails to a human,
-// which is the right answer for a request that wants to edit the machinery
-// that reviews it.
+// update the workflow to grant Bash" is a privilege escalation, and this
+// case statement is what stands against it — never a model's judgment of
+// whether unrelated files were touched. A request that genuinely needs a
+// change outside the allowlist fails to a human, which is the right answer
+// for a request that wants to edit the machinery that reviews it.
 //
 // COMMITTED files only, and that is the whole of it. This is a gate on the
-// commit, not a sandbox. The agent holds unrestricted Read over the workspace,
-// and what it writes into .ci-handoff/commit-msg.txt and
-// .ci-handoff/needs-info.md is not a committed file at all — the first is
-// published as the pull-request body, the second as a comment on the
-// requester's issue. The allowlist decides what lands in the repository; it
-// does not decide what the agent can see or what it can say. The secret scan
-// below reads those two files, but it is a pattern matcher, not a boundary.
+// commit, not a sandbox. The agent holds unrestricted Read over the
+// workspace, and what it writes into the handoff directory's commit-msg.txt
+// and needs-info.md is not a committed file at all — the first is published
+// as the pull-request body, the second as a comment on the requester's
+// issue. The allowlist decides what lands in the repository; it does not
+// decide what the agent can see or what it can say. The secret scan below
+// reads those two files, but it is a pattern matcher, not a boundary.
 //
 // # The publish-boundary secret scan
 //
@@ -301,10 +296,9 @@ func inClass(c byte) string {
 // whitespace tolerated before an opening paren, around a quote, and wherever
 // the literal has a space.
 //
-// This reproduces the hand-written regexes it replaces, character for
-// character. That is the point: the config's default IS the old behavior.
-// regexp.QuoteMeta escapes exactly the fourteen characters the sed did, and
-// the three substitutions follow in the same order.
+// This reproduces the origin's hand-written regexes character for
+// character: regexp.QuoteMeta escapes exactly the fourteen characters the
+// sed did, and the three substitutions follow in the same order.
 func DenyPattern(literal string) string {
 	p := regexp.QuoteMeta(literal)
 	p = strings.ReplaceAll(p, `\(`, `[[:space:]]*\(`)

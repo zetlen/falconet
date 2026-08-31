@@ -79,10 +79,7 @@ reviewer could mistake for that evidence. In an infrastructure repository the
 evidence is the plan the repository's plan bot posts; falconet's part is that
 the pull request is of the right change, on a branch the bot will see.
 
-## Where this stands
-
-The four steps above are what this tool is, and the tree is being boiled
-down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
+## Where each step lives
 
 | Step | In the tree |
 | --- | --- |
@@ -90,13 +87,12 @@ down to them — [AGENTS.md](AGENTS.md) says what goes and why. Today:
 | Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
 | Check | `falconet check`, the repository's own check (`check.command`) after every agent pass, with the workflow owning the loop: a failing check goes back to a fresh pass, at most `max-attempts` times. Then the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan, and the config file itself — once, terminally. |
 | Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off, including a change whose check still fails at the cap |
-| Live runs | on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0; not yet in the post-2026-08-26 shape against a plan bot |
 
 [The decision register](docs/decisions.md) holds every live decision with the
 principle it serves and the observation that should retire it.
-[`docs/history/`](docs/history/) is how those decisions were reached; it is
-not a description of the tree. [operating](docs/operating.md) covers the
-credentials only the operator can create.
+[`docs/history/`](docs/history/) is the archive of how those decisions were
+reached. [operating](docs/operating.md) covers the credentials only the
+operator can create.
 
 ## Install it in your repository
 
@@ -117,11 +113,6 @@ machine, not things falconet needs.
 Nothing is vendored and nothing of falconet's is checked out into your
 repository: the caller workflow names a tag of this repository, and every job
 installs the binary that tag vouches for. Upgrading is changing the tag.
-
-No tool does these steps for you, and none checks them afterwards. The list
-stays at its full length on purpose: it is the honest measure of what
-installing this thing costs a person, and shortening the document would not
-shorten the install.
 
 ### 1. Check the repository qualifies
 
@@ -387,10 +378,7 @@ Three things about this file that are not obvious:
   expressions there — and it is the one coordinate: the workflow at that ref
   compiles falconet, in every job, from this repository's tree at that ref.
   `main` is where the template starts and it moves; put a tag there —
-  `@v1.0.0` — as step 8 says. There is no `falconet-ref` input any more: the bash-era caller
-  passed it to choose which falconet the jobs checked out, nothing is
-  checked out now, and a caller still passing it is rejected when the file
-  is loaded.
+  `@v1.0.0` — as step 8 says.
 - **It coexists with a stock `claude.yml`.** If you already run
   `anthropics/claude-code-action` on issue events, that one starts on an
   `@claude` mention and this one on the queue label. Don't write `@claude` in
@@ -458,7 +446,7 @@ bot's configuration, and it has to be fixed before the next request.
 
 | What you see | Why | Do |
 | --- | --- | --- |
-| The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares, or passes an input the workflow does not declare — `falconet-ref`, from a bash-era caller. GitHub checks both when the workflow file is loaded, so nothing runs and nobody is told — including the requester. Until 2026-08-21 this README prescribed `contents: read`, which `publish` exceeds. | Step 7's `permissions:` block, verbatim; no `falconet-ref:`. |
+| The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares, or passes an input the workflow does not declare — `falconet-ref`, from a bash-era caller. GitHub checks both when the workflow file is loaded, so nothing runs and nobody is told — including the requester. | Step 7's `permissions:` block, verbatim; no `falconet-ref:`. |
 | **gate** is red and the issue has no comment | `prepare` hard-failed before the acknowledgment — the one failure the requester never hears about, because `contain` is conditioned on the gate having said `ready`. | Open the run; the last lines of **Prepare** name the cause. The usual one is the next row. |
 | A pull request with no plan comment on it | Your plan bot is not planning pull requests the App opens — a bot that only plans a member's pull requests, or a path filter falconet's branch does not match. | The bot's configuration. Nothing in falconet decides this. |
 | `prepare: working tree is dirty before the agent ran:`, listing paths | Something in your repository creates untracked files on checkout. | Gitignore them. |
@@ -553,11 +541,11 @@ and reads stdout, the exit code and files on disk; nothing reaches inside its
 subject. It stubs `gitleaks` with a bash script handed in through
 `$GITLEAKS`, whose argv is part of the contract. GitHub is
 [`tests/fixtures/fake-github.py`](tests/fixtures/fake-github.py), a loopback
-server that answers from fixtures and records what it was asked, with
-`GITHUB_API_URL` pointing at it. Pushes land only in bare repositories under
-a temp directory; nothing touches the network, GitHub or any credential. No test stubs `gh` anywhere — the files that once did put a
-tripwire on `PATH`, so a verb that shelled out to it would fail loudly before
-the real one could carry a test token anywhere.
+server that answers from fixtures and records what it was asked; the verbs
+reach it through the real `gh`, whose requests follow `GITHUB_API_URL`, so
+the adapter is exercised end to end and a test token goes nowhere but
+loopback. Pushes land only in bare repositories under a temp directory;
+nothing touches the network, GitHub or any credential.
 
 `go test ./...` covers what the suite cannot see from outside a process: unit
 and property tests (`testing/quick`) beside the guard logic — a pause
@@ -567,7 +555,7 @@ slug and the in-flight pattern, the dispatcher's lists in step with what it
 implements. `go vet`, `staticcheck`, `errcheck` and `govulncheck` run in CI
 beside it, and `make check` runs the same four at the same pinned versions
 on a laptop: an ignored error is a red build. The suite needs bash, git, jq,
-awk and python3 (stdlib only); `go test` needs Go.
+awk, python3 (stdlib only) and `gh`; `go test` needs Go.
 
 ## Support
 

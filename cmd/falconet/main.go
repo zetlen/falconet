@@ -59,11 +59,9 @@ var (
 )
 
 // native is what this binary answers for: one entry per name in the two
-// lists above, and main_test.go holds the three in step. Through the port
-// (ADR-0006 D3 step 2) a known verb without an entry here was handed to its
-// bash script by a fallback; #19 deleted the scripts and the fallback with
-// them, so a verb that is known and not implemented is a build defect the
-// test refuses, never a runtime path.
+// lists above, and main_test.go holds the three in step — a verb that is
+// known and not implemented is a build defect the test refuses, never a
+// runtime path.
 var native = map[string]func(args []string) int{
 	"version": runVersion,
 	"prepare": runPrepare,

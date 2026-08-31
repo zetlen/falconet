@@ -1,8 +1,7 @@
 # Operating falconet
 
 What the operator does, what only the operator can do, and where the pieces
-live. This is not a contributor guide — see [Support](../README.md#support)
-for why there isn't one.
+live.
 
 ## Two things an agent cannot do for you
 
@@ -21,10 +20,9 @@ repository, and puts the App ID and the downloaded private key into
 ([README step 3](../README.md#3-create-the-github-app-and-store-its-two-secrets));
 the `.pem` is deleted once the secret holds it.
 
-This also fixes a real bug for free. Pull requests opened with `GITHUB_TOKEN`
-do not trigger workflows, so CI never runs on them; pushes authenticated with
-an App token do. The old workaround was pushing an empty commit with a scoped
-PAT — **that idea is deleted, not ported.**
+The App token also carries a property `GITHUB_TOKEN` lacks: pull requests
+opened with `GITHUB_TOKEN` do not trigger workflows, so CI never runs on
+them, while pushes authenticated with an App token trigger them normally.
 
 **A dedicated `ANTHROPIC_API_KEY`, with a budget alert.** Deliberately an API
 key rather than a subscription OAuth token, so falconet's spend stays a
@@ -64,29 +62,11 @@ during extraction (a Cloudflare account ID); `wayfinders-infra` is private, so
 anything further brought over from it must be read before it is committed
 here, not after.
 
-**The consuming repository** is `wayfinders-infra` (private,
-`zetlen/wayfinders-infra`) — falconet's only integration environment, and
-deliberately so until falconet stops being a personal project
-([ADR-0002](history/0002-extract-the-pipeline-into-falconet.md), move 3). It still
-holds its own copies of `scripts/`: they were copied, not moved, because its
-`work-infra-issues` skill is currently the only thing working its request
-queue.
-
-Development *is* integration. There is no build-then-integrate phase — the
-orchestrator is Actions YAML and cannot run outside a consuming repository.
-`wayfinders-infra` consumed `falconet@main` from the first working commit and
-ran the first live run on it (2026-08-21, issue #106 → PR #108, on the
-bash); it pins a tag now. It needs a plan bot on its pull requests before it
-takes the first release without planning (2026-08-26 onwards).
-
-## What deliberately stayed behind
-
-`ci-deploy-receipt.sh` reports on an apply. falconet never applies, so it
-remains in `wayfinders-infra` and is not part of this corpus.
-
-## What deliberately is not added
-
-Public from day one, MIT, a personal project. No code of conduct, no issue
-templates, no contributor guide, no marketplace listing. Those are a different
-level of commitment and it has not been made. The README says so plainly, and
-that is the whole of the promise.
+**The consuming repository.** Development is integration: the orchestrator
+is Actions YAML and runs only inside a repository that consumes falconet,
+so a consuming repository — one, private, the operator's — is the
+integration environment, and the canary in
+[README step 8](../README.md#8-file-the-canary) is how it proves a release
+against itself. Its pull requests need a plan bot before any release is
+worth pinning: falconet does not plan, and a pull request nothing plans is
+one nobody can review.
