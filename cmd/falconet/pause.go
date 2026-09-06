@@ -9,11 +9,11 @@ package main
 // port. No alias: there are no users yet, and two words for one verb is the
 // drift #5 was filed to prevent.
 //
-// The first verb to talk to GitHub without `gh` (ADR-0006 D2): three calls
-// against GITHUB_API_URL with the token from GH_TOKEN or GITHUB_TOKEN, on the
-// repository GITHUB_REPOSITORY names. That variable is the only source — it
-// is set in every Actions run, and a repository guessed from a git remote is
-// how a comment lands on the wrong one. A local run exports it.
+// GitHub calls go through the `Client` adapter in internal/github, backed by
+// `gh api`, against the repository GITHUB_REPOSITORY names. That variable is
+// the only source — it is set in every Actions run, and a repository guessed
+// from a git remote is how a comment lands on the wrong one. A local run
+// exports it.
 
 import (
 	"fmt"
@@ -222,7 +222,7 @@ func runPause(args []string) int {
 	// the one before: an issue that got its label and not its comment is
 	// still better paused than not, and the word and the exit code say it
 	// was partial.
-	client := github.New(github.APIURLFromEnv(), token)
+	client := github.NewGH(github.APIURLFromEnv(), token)
 	status := 0
 	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
 		fmt.Fprintf(os.Stderr, "could not comment on #%d: %v\n", number, err)

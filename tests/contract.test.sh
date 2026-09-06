@@ -10,11 +10,15 @@
 # that grows a checkout it must not have — each fails here, where a unit
 # test would see nothing wrong.
 #
-# Since #19 the wrappers install a release asset instead of checking falconet
-# out into the consumer's tree. The cases that held the checkout's
+# Since #19 the wrappers install the binary instead of checking falconet out
+# into the consumer's tree — first as a release asset with a digest in the
+# tree, and since the release apparatus went, as a `go install` of this
+# module at the action's own ref. The cases that held the checkout's
 # invariants — the tool path in the exclude and in the tar, the jq check,
-# the falconet-ref input, the one permitted checkout in the agent job — are
-# retired below, each where it stood, with what replaced it.
+# the falconet-ref input, the one permitted checkout in the agent job — and
+# then the asset's — the digest file, the release workflow, the Makefile's
+# release targets — are retired below, each where it stood, with what
+# replaced it.
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -52,8 +56,10 @@ pause_calls="$(awk '
 
 # --- the agent holds nothing it could publish with -------------------------
 
-it "the agent's tool grant is exactly the five file tools"
+it "the agent's tool grant is exactly the five file tools, on every agent invocation"
 assert_contains "$wf" '--allowedTools "Read,Edit,Write,Grep,Glob"' "workflow"
+assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
+  "$(grep -c -- '--allowedTools "Read,Edit,Write,Grep,Glob"' <<<"$wf_code")" "grants per agent invocation"
 
 it "and names no Bash tool, which is the whole boundary"
 assert_not_contains "$wf" 'Bash(' "workflow"
@@ -85,8 +91,62 @@ assert_eq 1 "$(grep -c 'verb: push' <<<"$wf_code")" "push steps"
 it "and only by the push verb — nothing else runs git push"
 assert_not_contains "$wf" "git push" "workflow"
 
-it "there is no repair loop: commit happens once"
+it "the loop is on the check: commit still happens once, after it"
 assert_eq 1 "$(grep -c 'verb: commit' <<<"$wf_code")" "commit steps"
+
+# --- the check loop feeds the check back and never a guard -----------------
+#
+# Principle 3, as wiring. The repository's own check runs after every agent
+# pass; a failing one sends the run back to a fresh pass, at most
+# `max-attempts` times; the guards run once, in the commit step, after the
+# last check, and nothing before the commit reads their answer. A retry
+# conditioned on anything but the check's word — the commit's outcome, a
+# failure-reason file — is a guard the agent can iterate against, and this
+# is where it would show up.
+
+agent_steps="$(grep -c 'claude-code-action' <<<"$implement_job")"
+
+it "the repository's own check runs after every agent pass"
+assert_eq "$agent_steps" "$(grep -c 'verb: check' <<<"$implement_job")" "check steps per agent step"
+
+it "and there are three attempts, which is what the max-attempts input describes"
+assert_eq 3 "$agent_steps" "agent invocations"
+assert_contains "$wf_code" "max-attempts:" "the workflow's inputs"
+assert_contains "$wf_code" "default: 3" "the max-attempts default"
+
+it "the first attempt is unconditional"
+first="$(awk '/name: Implement the change$/{f=1} f && /uses: anthropics/{print "uses"; exit} f && /if:/{print "if"; exit}' <<<"$implement_job")"
+assert_eq "uses" "$first" "the first agent step's first key"
+
+it "and every further attempt is conditioned on the check before it saying fail, and on the cap"
+assert_eq 2 "$(grep -c "if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2" <<<"$implement_job")" "attempt 2's conditions (agent and check)"
+assert_eq 2 "$(grep -c "if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3" <<<"$implement_job")" "attempt 3's conditions (agent and check)"
+
+it "and on nothing else: no condition in the agent job reads the commit's outcome or a guard's file"
+assert_eq 0 "$(grep 'if:' <<<"$implement_job" | grep -c 'steps.commit\|failure-reason\|outcome == .failure.')" "retry conditions naming a guard"
+
+it "the commit runs after the last check, and is not conditioned on its word"
+last_check="$(grep -n 'verb: check' <<<"$implement_job" | tail -1 | cut -d: -f1)"
+commit_at="$(grep -n 'verb: commit' <<<"$implement_job" | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$last_check" && -n "$commit_at" && "$last_check" -lt "$commit_at" ]] && echo true || echo false)" \
+  "the last check ($last_check) precedes the commit ($commit_at)"
+commit_step="$(awk '/name: Commit$/{f=1} f && /verb: commit/{print; exit} f' <<<"$implement_job")"
+assert_not_contains "$commit_step" "if:" "the commit step"
+
+it "and the job reports the word of the last check that ran"
+assert_contains "$implement_job" "check: \${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}" "the implement job's outputs"
+
+it "the pull request is opened only when that word is not fail"
+pr_step="$(awk '/name: Open the pull request/{f=1} f && /gh pr create/{exit} f' <<<"$publish_job")"
+assert_contains "$pr_step" "needs.implement.outputs.check != 'fail'" "the PR step's condition"
+
+it "and at the cap the run hands off instead, naming the branch and carrying the check's output"
+cap_pause="$(grep -- 'check-failure.txt' <<<"$pause_calls")"
+assert_contains "$cap_pause" '--branch "${PUSHED_BRANCH:-}"' "the cap's pause"
+assert_contains "$cap_pause" '--label ready-for-human' "the cap's pause"
+assert_contains "$cap_pause" '--body-title' "the cap's pause: machine output is fenced"
+cap_step="$(awk '/name: Hand over — the check failed at the cap/{f=1} f && /falconet pause/{exit} f' <<<"$publish_job")"
+assert_contains "$cap_step" "needs.implement.outputs.check == 'fail'" "the cap step's condition"
 
 # --- the push is unconditional and comes first -----------------------------
 #
@@ -104,7 +164,7 @@ pr_line="$(grep -n 'gh pr create' "$WF" | cut -d: -f1)"
   && assert_eq "before" "before" "push at $push_line, pr create at $pr_line" \
   || assert_eq "push before pr create" "push=$push_line pr=$pr_line" "order"
 
-# The push needs the binary and the binary is a download, so one step stands
+# The push needs the binary and the binary is a compile, so one step stands
 # between the restored branch and the remote, and it is that one.
 it "and only the install stands between restoring the branch and the push"
 publish_steps="$(sed -n 's/^      - name: //p' <<<"$publish_job")"
@@ -122,14 +182,14 @@ passing="$(printf '%s\n' "$pause_calls" | grep -c -- '--branch' || true)"
 total="$(grep -c 'falconet pause' <<<"$wf_code")"
 assert_eq "$total" "$passing" "pause calls passing --branch"
 
-it "and there are three of them: two endings in publish and the containment"
-assert_eq 3 "$total" "pause calls"
+it "and there are four of them: three endings in publish and the containment"
+assert_eq 4 "$total" "pause calls"
 
 it "and the ones in publish read PUSHED_BRANCH rather than the branch prepare intended"
 # The branch that IS on the remote, set by the push verb; empty when nothing
 # was pushed, which pause takes as "no branch".
 publish_pauses="$(awk '/falconet pause/ { p = 1; buf = "" } p { buf = buf " " $0; if ($0 !~ /\\$/) { print buf; p = 0 } }' <<<"$publish_job")"
-assert_eq 2 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
+assert_eq 3 "$(grep -c -- '--branch "${PUSHED_BRANCH:-}"' <<<"$publish_pauses")" "publish pauses on \$PUSHED_BRANCH"
 
 # Unset, not empty, when nothing was pushed — and the two hand-overs for a
 # question and a failure are exactly the paths with nothing to push. A bare
@@ -175,8 +235,10 @@ assert_eq 3 "$(grep -c -- '--template' <<<"$contain_job")" "gh --template uses i
 it "the workflow names review-verdict zero times"
 assert_not_contains "$wf" "review-verdict" "workflow"
 
-it "and there is no second agent"
-assert_eq 1 "$(grep -c 'claude-code-action' "$WF")" "agent invocations"
+it "and there is no second agent: every invocation is the implementing one, on the same prompt"
+assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
+  "$(grep -c 'prompt: ${{ steps.prompt.outputs.text }}' <<<"$wf_code")" "agent invocations on the implement prompt"
+assert_eq 0 "$(grep -c 'falconet prompt review' <<<"$wf_code")" "review prompts"
 
 # --- the pull request describes the change, not the request ----------------
 
@@ -213,41 +275,52 @@ tar_line="$(grep -n 'tar -xzf' "$ACTION" | cut -d: -f1)"
   && assert_eq "before" "before" "sha at $sha_line, tar at $tar_line" \
   || assert_eq "sha before tar" "sha=$sha_line tar=$tar_line" "order"
 
-# falconet itself, the same shape (ADR-0006 D6): the version and the digest
-# are read from the action's own tree — release/VERSION and the file
-# `make release-prep` writes beside it — so the action at a tag installs the
-# asset release.yml refused to publish unless those bytes reproduced.
-falconet_install="$(awk '/name: Install falconet/{f=1} /name: Run$/{f=0} f' "$ACTION")"
+# falconet itself is not downloaded at all: it is `go install`ed from this
+# module at the ref the caller's `uses:` named. There is no asset to hash —
+# the module proxy serves the source and the checksum database vouches for
+# it — so what these cases hold is that the install IS that, at THAT ref,
+# and that the ref reaches the shell in the one way that works. Comments
+# stripped: the prose above the steps names every shape they refuse.
+go_setup="$(awk '/name: Set up Go/{f=1} /name: Install falconet/{f=0} f' <<<"$action_code")"
+falconet_install="$(awk '/name: Install falconet/{f=1} /name: Run$/{f=0} f' <<<"$action_code")"
 
-it "falconet is pinned by the version in the tree"
-assert_contains "$falconet_install" 'version="$(cat "$GITHUB_ACTION_PATH/release/VERSION")"' "action"
+# The break: a URL, a tarball, a digest file — any install that is not a
+# compile of this module is the retired row growing back without its row;
+# and a version written into the action would have every ref install the
+# same one.
+it "falconet is go-installed from this module at the action's ref"
+assert_contains "$falconet_install" 'go install "github.com/zetlen/falconet/cmd/falconet@$FALCONET_REF"' "action"
 
-it "and by the digest release-prep wrote beside it"
-assert_contains "$falconet_install" '"$GITHUB_ACTION_PATH/release/falconet_linux_amd64.sha256"' "action"
+# The break: `${{ github.action_ref }}` pasted into the run: block instead.
+# Inside a composite action it is populated when a step's env: is evaluated
+# and EMPTY by the time its run: block is (actions/runner#2473) — so the
+# install would be `go install …@`, an error, in every job of every run.
+it "and the ref reaches the shell through env:, never through the run: block"
+assert_contains "$falconet_install" 'FALCONET_REF: ${{ github.action_ref }}' "action"
+assert_eq 1 "$(grep -c 'github.action_ref' <<<"$falconet_install")" "mentions of github.action_ref in the install step"
 
-it "and fetches the bare-named asset from the release of that version"
-assert_contains "$falconet_install" 'releases/download/${version}/falconet_linux_amd64' "action"
+# The break: `uses: ./`. A local path has no ref, and an empty one must fail
+# here, by name, rather than as whatever `go install` makes of it.
+it "and refuses an empty ref rather than installing something else"
+assert_contains "$falconet_install" 'if [ -z "$FALCONET_REF" ]' "action"
 
-it "the digest is checked before the binary is installed"
-sha2_line="$(grep -n 'sha256sum -c -' "$ACTION" | sed -n 2p | cut -d: -f1)"
-install_line="$(grep -n 'install -m 0755 "$file"' "$ACTION" | cut -d: -f1)"
-[[ -n "$sha2_line" && -n "$install_line" && "$sha2_line" -lt "$install_line" ]] \
-  && assert_eq "before" "before" "sha at $sha2_line, install at $install_line" \
-  || assert_eq "sha before install" "sha=$sha2_line install=$install_line" "order"
+# The break: a floating tag on setup-go — every other action here floats,
+# and the compiler is not to be one more moving part — or a go-version-file
+# that names the WORKSPACE's go.mod, which is the consumer's tree and not a
+# Go module, instead of this action's own.
+it "Go is set up from this action's own go.mod, by an action pinned to a SHA"
+assert_eq "true" "$(grep -Eq '^ *uses: actions/setup-go@[0-9a-f]{40}( #.*)?$' <<<"$go_setup" && echo true || echo false)" "setup-go pinned by a SHA"
+assert_contains "$go_setup" 'go-version-file: ${{ github.action_path }}/go.mod' "setup-go's version file"
 
-it "and the installed binary is proved to run and to be that version, last"
-proof_line="$(grep -n '"$dest/falconet" version' "$ACTION" | cut -d: -f1)"
-[[ -n "$proof_line" && "$install_line" -lt "$proof_line" ]] \
-  && assert_eq "after" "after" "install at $install_line, proof at $proof_line" \
-  || assert_eq "proof after install" "install=$install_line proof=$proof_line" "order"
-assert_eq 2 "$(grep -c '"falconet $version "\*' <<<"$falconet_install")" "version-prefix checks"
-
-it "a falconet already on PATH is taken only if it is that version, unlike gitleaks"
-# The short-circuit's exit 0 comes after the version check, never before it.
-check_at="$(grep -n '"falconet $version "\*' <<<"$falconet_install" | head -1 | cut -d: -f1)"
-exit_at="$(grep -n 'exit 0' <<<"$falconet_install" | head -1 | cut -d: -f1)"
-assert_eq "true" "$([[ -n "$check_at" && -n "$exit_at" && "$check_at" -lt "$exit_at" ]] && echo true || echo false)" \
-  "the version check ($check_at) precedes the exit 0 ($exit_at)"
+# The break: the proof dropped, or moved ahead of the install. `falconet
+# version` is what shows the compile produced something that runs, and that
+# the version the go command resolved the ref to is the tag the ref names.
+it "and the installed binary is proved to run, and to be the tag, last"
+go_install_at="$(grep -n 'go install "github.com/zetlen/falconet' <<<"$falconet_install" | cut -d: -f1)"
+proof_at="$(grep -n '"$dest/falconet" version' <<<"$falconet_install" | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$go_install_at" && -n "$proof_at" && "$go_install_at" -lt "$proof_at" ]] && echo true || echo false)" \
+  "the install ($go_install_at) precedes the proof ($proof_at)"
+assert_contains "$falconet_install" '"falconet $FALCONET_REF "*' "the version check"
 
 it "the action with no verb is an install and nothing else"
 verb_decl="$(awk '/^  verb:/{f=1} f && /^  [a-z]/ && !/^  verb:/{exit} f' "$ACTION")"
@@ -255,9 +328,9 @@ assert_contains "$verb_decl" "required: false" "verb input"
 assert_contains "$verb_decl" "default: ''" "verb input"
 assert_contains "$action_code" "if: inputs.verb != ''" "the Run step"
 
-# "Check jq" lived here. The runner is asked for git, gitleaks and the
-# binary, and for nothing else (ADR-0006 D2); the case below that greps both
-# files for jq is what replaced it.
+# "Check jq" lived here. The runner is asked for git, gitleaks, gh and the
+# binary, and for nothing else; the case below that greps both files for jq
+# is what replaced it.
 
 # `setup: false` says "an earlier step in THIS job already installed them",
 # and a job is a fresh runner, so the claim is about the job and never about
@@ -289,8 +362,9 @@ assert_eq "" "$unmet" "steps running falconet before their job installed it"
 it "and every job installs exactly once"
 assert_eq 4 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
 
-# Two verbs read `git status`: prepare refuses a dirty tree, and commit
-# refuses every changed path outside the allowlist, untracked included. The
+# Three verbs read `git status`: prepare refuses a dirty tree, commit
+# refuses every changed path outside the allowlist, untracked included, and
+# check refuses a config the agent changed. The
 # handoff directory is written INSIDE the consumer's tree, it is not the
 # agent's, and it is not anything a consumer's .gitignore can be relied on
 # to know about. The tool's own checkout used to sit beside it — a composite
@@ -308,7 +382,7 @@ unexcluded="$(awk '
       excluded[job] = 1
     if (buf ~ /uses: zetlen\/falconet@/) {
       verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
-      if (verb ~ /^(prepare|commit)$/ && !excluded[job]) print job "/" verb
+      if (verb ~ /^(prepare|check|commit)$/ && !excluded[job]) print job "/" verb
     }
     buf = ""
   }
@@ -395,6 +469,11 @@ for perm in contents issues pull-requests; do
   assert_eq "$want" "$got" "the template's $perm grant"
 done
 
+it "and the README's input table names every input the workflow declares"
+declared="$(awk '/^    inputs:$/{f=1; next} f && /^    secrets:$/{exit} f && /^      [a-z-]+:$/{sub(/^ +/, ""); sub(/:$/, ""); print}' "$WF" | sort)"
+documented="$(awk -F'|' '/^\| Input \| Required/{f=1; next} f && !/^\|/{exit} f && /^\| `/{v=$2; gsub(/[` ]/, "", v); print v}' "$REPO_ROOT/README.md" | sort)"
+assert_eq "$declared" "$documented" "inputs: declared vs the README's table"
+
 it "and passes no falconet-ref, which the workflow no longer declares"
 # A reusable workflow rejects an input it does not declare, at load: the
 # same startup_failure, for a caller copied from an older README.
@@ -411,8 +490,9 @@ assert_not_contains "$caller" "falconet-ref" "README caller template"
 # token, ships its checkout as an artifact. ADR-0005 then allowed the agent
 # job exactly one checkout, falconet's own, because a composite action had to
 # run from under the workspace; #19 retired that too — the action lives in
-# the runner's action cache and what it fetches is a public release asset,
-# with no token. So these cases guard the halves that make that safe: the
+# the runner's action cache and what it fetches is this public module through
+# the module proxy, with no token. So these cases guard the halves that make
+# that safe: the
 # agent job clones NOTHING, and what it receives cannot authenticate as
 # anybody.
 
@@ -532,21 +612,23 @@ assert_eq 2 "$(grep -c 'FALCONET_OUTCOME_EOF' "$ACTION")" "delimiter lines"
 # push's silence on stdout is asserted in push.test.sh, by running it. The grep
 # of push.sh's source that used to sit here went with ADR-0006 D3 step 0.
 
-# --- the binary is pinned to the tag the workflow runs at --------------------
+# --- every job runs the same falconet, and it is a tag's --------------------
 #
-# `uses:` cannot take an expression, so every verb step names a literal tag,
-# and the action at that tag installs the asset whose digest its tree holds.
-# The tag must be release/VERSION — the same three things `make release-prep`
-# writes in the same second — or the workflow runs one falconet and vouches
-# for another. At a commit between releases the refs name the LAST release
-# (the action there is the last release's), and they move together with
-# release/VERSION when release-prep runs for the next.
+# `uses:` cannot take an expression, so every verb step names a literal ref,
+# and the action at that ref go-installs the module at that ref. Four lines
+# that disagree are a run whose jobs run two falconets — prepare's guards
+# from one tag and commit's from another — and a ref that is not a tag is
+# one that moves under a consumer between two runs. WHICH tag is not for a
+# test in the tree to know: the workflow at a tag names that tag, written by
+# hand as the last commit before it (operating.md), and between tags the
+# lines name the last one.
 
-tree_version="$(cat "$REPO_ROOT/release/VERSION")"
+it "every uses: zetlen/falconet@ ref in the workflow is one literal"
+refs="$(grep -o 'uses: zetlen/falconet@[^ ]*' <<<"$wf_code" | sort -u)"
+assert_eq 1 "$(wc -l <<<"$refs" | tr -d ' ')" "distinct refs: $(tr '\n' ' ' <<<"$refs")"
 
-it "every uses: zetlen/falconet@ ref in the workflow is exactly the version in the tree"
-assert_eq "uses: zetlen/falconet@$tree_version" \
-  "$(grep -o 'uses: zetlen/falconet@[^ ]*' <<<"$wf_code" | sort -u)" "distinct refs"
+it "and it is a tag, not a branch"
+assert_eq "true" "$(grep -Eq '^uses: zetlen/falconet@v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$refs" && echo true || echo false)" "the ref is vX.Y.Z: $(tr '\n' ' ' <<<"$refs")"
 
 it "and every job pins one, so no job runs an unpinned falconet"
 unpinned=""
@@ -562,109 +644,38 @@ assert_eq 0 "$(grep -c 'jq\|libexec\|falconet-tool\|falconet-ref\|bin/falconet' 
   "matches for the old shapes"
 assert_not_contains "$wf" "uses: ./" "workflow"
 
+# --- there is no release apparatus -------------------------------------------
+#
+# The retired row: a digest committed ahead of the tag, a release workflow
+# that rebuilt the bytes and refused to publish on a mismatch, four assets
+# and a checksums file beside them, and a Makefile that wrote the version,
+# the digest and the workflow's refs in one second. The break is any of it
+# growing back — a release/ directory, a release.yml, a Makefile target, a
+# README step that downloads an asset — without the register row that would
+# have to come back with it.
+
 MK="$REPO_ROOT/Makefile"
-mk="$(cat "$MK")"
 
-it "the Makefile knows the workflow and the ref shape by name"
-assert_eq "true" "$(grep -Eq '^WORKFLOW +:= \.github/workflows/falconet\.yml$' "$MK" && echo true || echo false)" "WORKFLOW"
-assert_eq "true" "$(grep -Eq '^USES_REF +:= uses: zetlen/falconet@$' "$MK" && echo true || echo false)" "USES_REF"
+it "nothing names the release directory, its targets, or a release asset"
+old_release="$(grep -n -E 'release/VERSION|release-prep|release-verify|release-build|zetlen/falconet/releases/download|checksums\.txt' \
+  "$WF" "$ACTION" "$MK" "$REPO_ROOT/README.md" "$REPO_ROOT/AGENTS.md" \
+  "$REPO_ROOT/.github/workflows/ci.yml" "$REPO_ROOT/docs/operating.md" "$REPO_ROOT/docs/decisions.md" || true)"
+assert_eq "" "$old_release" "references to the release apparatus"
 
-it "release-prep rewrites the refs in the same breath as release/VERSION"
-prep="$(awk '/^release-prep:/{f=1} f && /^[a-z-]+:/ && !/^release-prep:/{f=0} f' "$MK")"
-assert_contains "$prep" '$(USES_REF)$(VERSION)' "release-prep's recipe"
-assert_contains "$prep" 'mv $(WORKFLOW).release-prep.tmp $(WORKFLOW)' "release-prep's rewrite, through a temp file"
-assert_contains "$prep" 'git add $(VERSION_FILE) $(DIGEST_FILE) $(WORKFLOW)' "release-prep's git add"
+it "and there is no release directory and no release workflow"
+assert_file_missing "$REPO_ROOT/release"
+assert_file_missing "$REPO_ROOT/.github/workflows/release.yml"
 
-it "and release-verify refuses a tree where they disagree"
-verify="$(awk '/^release-verify:/{f=1} f && /^[a-z-]+:/ && !/^release-verify:/{f=0} f' "$MK")"
-assert_contains "$verify" '$(USES_REF)$(VERSION)' "release-verify's recipe"
-assert_contains "$verify" 'pins falconet at a ref that is not $(VERSION)' "release-verify's refusal"
+it "and the Makefile has no release target"
+assert_eq 0 "$(grep -c -E '^release[a-z-]*:' "$MK")" "release targets"
 
-# --- the release refuses to publish bytes it cannot reproduce ---------------
-#
-# ADR-0006 D6 asks a consumer's pinned SHA to vouch for a binary that did not
-# exist when they pinned it: the SHA-256 of the linux_amd64 asset is committed
-# in the tree BEFORE the tag, and the only thing that makes it true afterwards
-# is that the build reproduces. The compare is what turns that from a hope
-# into a check, and it is worth nothing unless it happens before anything is
-# published — a release with one asset already uploaded is a release someone
-# can download.
-#
-# So these cases hold the ordering, and they hold the flags, because every one
-# of the four was measured to change the bytes: without -buildvcs=false a
-# dirty pre-tag tree and a clean tree at the tag differ by construction;
-# without -trimpath the absolute path of the checkout is in the binary;
-# without CGO_ENABLED=0 the runner (building natively, with a C compiler
-# present) turns cgo on where a laptop cross-compiling the same target leaves
-# it off; without -buildid= the link stamps an id.
-
-REL="$REPO_ROOT/.github/workflows/release.yml"
-rel="$(cat "$REL")"
-# Comments stripped where a case is about what the file DOES: the prose above
-# each step names the thing it is explaining not to do.
-rel_code="$(grep -v '^[[:space:]]*#' "$REL")"
-
-it "the release runs on a tag push and on nothing else"
-assert_contains "$rel" "tags: ['v*']" "release workflow"
-assert_not_contains "$rel_code" "workflow_dispatch" "release workflow"
-
-it "and pins the Go toolchain to go.mod's, because GOTOOLCHAIN=auto is a floor"
-assert_contains "$rel" "sed -n 's/^toolchain //p' go.mod" "release workflow"
-assert_contains "$rel" 'echo "GOTOOLCHAIN=$tc" >> "$GITHUB_ENV"' "release workflow"
-
-it "the build goes through the Makefile, so the flags have one definition"
-assert_contains "$rel" "make release-build" "release workflow"
-
-it "and the workflow holds no build flags of its own to drift from it"
-assert_not_contains "$rel_code" "go build" "release workflow"
-
-it "the Makefile's release build refuses VCS stamping"
-assert_contains "$mk" "-buildvcs=false" "Makefile"
-
-it "trims the path out of the binary"
-assert_contains "$mk" "-trimpath" "Makefile"
-
-it "turns cgo off explicitly, rather than inheriting the host's default"
-assert_contains "$mk" "CGO_ENABLED=0" "Makefile"
-
-it "and clears the build id"
-assert_contains "$mk" "-buildid=" "Makefile"
-
-it "the compare-and-refuse step comes before the release is created"
-verify_line="$(grep -n 'make release-verify' "$REL" | cut -d: -f1)"
-create_line="$(grep -n 'gh release create' "$REL" | cut -d: -f1)"
-[[ -n "$verify_line" && -n "$create_line" && "$verify_line" -lt "$create_line" ]] \
-  && assert_eq "before" "before" "verify at $verify_line, release create at $create_line" \
-  || assert_eq "verify before release create" "verify=$verify_line create=$create_line" "order"
-
-it "and before any asset is named for upload"
-asset_line="$(grep -n 'dist/falconet_linux_amd64' "$REL" | tail -1 | cut -d: -f1)"
-[[ -n "$verify_line" && -n "$asset_line" && "$verify_line" -lt "$asset_line" ]] \
-  && assert_eq "before" "before" "verify at $verify_line, first asset at $asset_line" \
-  || assert_eq "verify before upload" "verify=$verify_line asset=$asset_line" "order"
-
-it "the tag reaches the shell as an environment variable, never a template"
-# A tag name is chosen by whoever pushes the tag, and ${{ }} is pasted in
-# before bash sees it: `$(…)` in a tag would run. The Makefile then refuses
-# any tag that is not vX.Y.Z before it reaches a compiler flag.
-assert_contains "$rel" 'VERSION="$GITHUB_REF_NAME"' "release workflow"
-assert_not_contains "$rel_code" "github.ref_name" "release workflow"
-
-it "only the job that publishes is granted anything"
-assert_contains "$rel" "contents: write" "release workflow"
-assert_eq 1 "$(grep -v '^[[:space:]]*#' "$REL" | grep -c 'permissions: {}')" \
-  "permissions: {} declarations"
-
-it "the digest in the tree is sha256sum's own format, so sha256sum -c reads it"
-digest_file="$REPO_ROOT/release/falconet_linux_amd64.sha256"
-assert_eq "true" "$([[ -f "$digest_file" ]] && echo true || echo false)" "$digest_file exists"
-assert_eq "true" \
-  "$(grep -Eq '^[0-9a-f]{64}  falconet_linux_amd64$' "$digest_file" && echo true || echo false)" \
-  "digest line shape"
-
-it "and the version recorded beside it is a release tag, so a stale digest is caught"
-assert_eq "true" \
-  "$(grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' "$REPO_ROOT/release/VERSION" && echo true || echo false)" \
-  "release/VERSION"
+# The install itself needs no binary on a laptop, so the README's section on
+# getting one is not a numbered step; it is the section whose heading names
+# the machine. It must say `go install` of this module and nothing about a
+# download.
+it "and the README's section on the binary is go install of this module, not a download"
+binary_section="$(awk '/^## The binary on your machine/{f=1; next} f && /^## /{exit} f' "$REPO_ROOT/README.md")"
+assert_contains "$binary_section" 'go install github.com/zetlen/falconet/cmd/falconet@' "README binary section"
+assert_not_contains "$binary_section" 'curl' "README binary section"
 
 summary

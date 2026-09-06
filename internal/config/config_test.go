@@ -38,18 +38,27 @@ func TestDefaultsStandAlone(t *testing.T) {
 		t.Errorf("File = %q, want empty: nothing was read", cfg.File)
 	}
 	s := cfg.Schema
+	if len(s.Paths.Allow) != 0 {
+		t.Errorf("paths.allow has %d entries, want 0 (no default)", len(s.Paths.Allow))
+	}
+	if len(s.Paths.DenyContent) != 0 {
+		t.Errorf("paths.deny_content has %d entries, want 0 (no default)", len(s.Paths.DenyContent))
+	}
+	// No check by default either: a repository with no check.command has
+	// no check, and the verb says `skipped` rather than guessing one.
+	if len(s.Check.Command) != 0 {
+		t.Errorf("check.command has %d entries, want 0 (no default)", len(s.Check.Command))
+	}
 	checks := map[string]string{
 		"handoff_dir":        s.HandoffDir,
 		"issue.queue_label":  s.Issue.QueueLabel,
 		"labels.human":       s.Labels.Human,
-		"paths.allow[0]":     s.Paths.Allow[0],
 		"blocking_labels[3]": s.Issue.BlockingLabels[3],
 	}
 	want := map[string]string{
 		"handoff_dir":        ".falconet",
 		"issue.queue_label":  "infra-request",
 		"labels.human":       "ready-for-human",
-		"paths.allow[0]":     "*.tf",
 		"blocking_labels[3]": "wontfix",
 	}
 	for k, got := range checks {
@@ -57,27 +66,12 @@ func TestDefaultsStandAlone(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want[k])
 		}
 	}
-	// Order is load-bearing for the denylist: templatefile( before file(.
-	deny := s.Paths.DenyContent
-	tf, f := index(deny, "templatefile("), index(deny, "file(")
-	if tf < 0 || f < 0 || tf > f {
-		t.Errorf("deny_content order: templatefile( at %d, file( at %d in %v", tf, f, deny)
-	}
 	// prompts has no default (#3). The old one named a path relative to the
 	// consumer's repository, which made the default an override and the
 	// shipped prompt unreachable; an absent key is the embedded prompt.
 	if len(s.Prompts) != 0 {
 		t.Errorf("prompts default = %v, want none: the shipped prompt is the binary's, not a path", s.Prompts)
 	}
-}
-
-func index(list []string, s string) int {
-	for i, v := range list {
-		if v == s {
-			return i
-		}
-	}
-	return -1
 }
 
 // jq's `*`: objects recurse, everything else replaces.
@@ -122,43 +116,6 @@ func TestMerge(t *testing.T) {
 		_ = Merge(base, over)
 		if _, ok := base["a"].(map[string]any)["c"]; ok {
 			t.Error("Merge wrote into its base argument")
-		}
-	})
-}
-
-// The file's own document survives beside the merge, so a verb can tell
-// what the operator set from what the defaults supplied.
-func TestTheUsersDocumentIsKeptApartFromTheMerge(t *testing.T) {
-	dir := bare(t)
-	write(t, filepath.Join(dir, ".github", "falconet.json"), `{"prompts":{"implement":"mine.md"}}`)
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompts, _ := cfg.User["prompts"].(map[string]any)
-	if len(cfg.User) != 1 || prompts["implement"] != "mine.md" {
-		t.Errorf("User: %v", cfg.User)
-	}
-	// A key the file did not set is still there in the merge — a default
-	// keeps standing — and absent from User. (It used to be a prompt; prompts
-	// have no default since #3 was closed, so the handoff directory stands in.)
-	if cfg.Schema.HandoffDir != ".falconet" {
-		t.Errorf("the merge lost the default: %q", cfg.Schema.HandoffDir)
-	}
-	if _, set := cfg.User["handoff_dir"]; set {
-		t.Errorf("User carries a default it never set: %v", cfg.User)
-	}
-	if cfg.Schema.Prompts["implement"] != "mine.md" {
-		t.Errorf("the merge carries the override: %v", cfg.Schema.Prompts)
-	}
-	t.Run("nil when no file was found", func(t *testing.T) {
-		_ = bare(t)
-		cfg, err := Load("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.User != nil {
-			t.Errorf("User: %v", cfg.User)
 		}
 	})
 }

@@ -1,18 +1,14 @@
 package main
 
 // commit — read the implementing agent's outcome off the disk and, where
-// there is one, make the commit that agent can no longer make itself.
+// there is one, make the commit the agent cannot make itself.
 //
-// The implementing stage used to hold `Bash(git add:*)` and `Bash(git
-// commit:*)`, and its prompt carried a paragraph of permission-matcher tax
-// ("a single simple command ... no heredoc, no $(...), no &&"). It now holds
-// no Bash at all: it edits files, writes its commit message to
-// .ci-handoff/commit-msg.txt, and stops. This verb does the rest.
-//
-// That is worth more than two fewer tool grants. "Did the agent commit?" used
-// to be a claim to check — claude-code-action reports `conclusion: success`
-// for a run that did nothing. It is now a question about the tree, and the
-// tree does not have opinions.
+// The implementing agent holds no git and no shell: it edits files, writes
+// its commit message into the handoff directory, and stops. This verb does
+// the rest — which makes "did the agent commit?" a question about the tree,
+// and the tree does not have opinions, where an agent harness's own report
+// is a claim to check (claude-code-action says `conclusion: success` for a
+// run that did nothing).
 //
 // The guards are internal/commit, which carries the incident record above
 // each; the secret scan is internal/scan. This file is the sequence they run
@@ -45,10 +41,9 @@ Modes:
 Prints exactly one word on stdout — the outcome — and nothing else:
 
   needs-info  DIR/needs-info.md is non-empty. The requester gets asked.
-  success     the tree is dirty AND DIR/commit-msg.txt is non-empty. The
-              touched .tf files have been formatted, everything is
-              committed, and the subject and body are filed for the
-              pull-request stage.
+  success     the tree is dirty AND DIR/commit-msg.txt is non-empty.
+              Everything is committed, and the subject and body are filed
+              for the pull-request stage.
   failure     anything else. DIR/failure-reason.txt says what, in prose a
               requester can read.
 
@@ -223,6 +218,16 @@ func runCommit(args []string) int {
 		return giveUp(commit.ReasonRename(renamed.Code, renamed.Path))
 	}
 
+	// --- the guard's own configuration ------------------------------------
+	//
+	// See "The guard's own configuration" in internal/commit. The policy
+	// above was compiled from a file in the working tree, and the working
+	// tree is the agent's. Before that policy decides anything, refuse a
+	// change to the file it came from — whatever that file now says.
+	if path, hit := commit.ConfigChanged(cfg.File, root, changed); hit {
+		return giveUp(commit.ReasonConfigChanged(path))
+	}
+
 	// --- the allowlist ------------------------------------------------------
 	//
 	// A path is allowed if ANY paths.allow glob matches it (commit.AllowPattern
@@ -292,7 +297,7 @@ func runCommit(args []string) int {
 			fmt.Println("needs-info")
 			return 0
 		}
-		return giveUp(commit.ReasonNoMessage(changed))
+		return giveUp(commit.ReasonNoMessage(filepath.Join(filepath.Base(out), "commit-msg.txt"), changed))
 	}
 
 	// --- commit ---------------------------------------------------------------

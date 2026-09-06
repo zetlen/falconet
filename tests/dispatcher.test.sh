@@ -12,7 +12,7 @@
 
 # stdout and stderr are captured separately throughout. "Prints usage" is not
 # the assertion — "prints usage WHERE A HUMAN SEES IT AND NOT INTO THE
-# OUTCOME" is, because three of the four pipeline verbs put a single word on stdout and
+# OUTCOME" is, because four of the five pipeline verbs put a single word on stdout and
 # a dispatcher that chattered there would corrupt every one of them.
 run() { # args... -> sets OUT ERR RC
   OUT="$("$FALCONET" "$@" 2>"$WORK/err")"; RC=$?
@@ -59,6 +59,15 @@ it "and the retired plan-side verbs are gone, not listed"
 for v in validate assemble plan-env; do
   assert_not_contains "$ERR" "  $v " "usage"
 done
+
+it "and so are the setup verbs: the install is the README's steps, by hand"
+for v in doctor init; do
+  assert_not_contains "$ERR" "  $v " "usage"
+  run "$v"
+  assert_eq "2" "$RC" "$v exit code"
+  assert_contains "$ERR" "unknown verb '$v'"
+done
+run --help
 
 it "prompt is deliberately unlisted"
 assert_not_contains "$ERR" "prompt "
@@ -110,12 +119,13 @@ assert_contains "$ERR" "unknown argument"
 # out loud, because it is the property and not a side effect.
 
 PROJ="$WORK/elsewhere"
-mkdir -p "$PROJ/dns"
+mkdir -p "$PROJ/dns" "$PROJ/.github"
 git init -q -b main "$PROJ"
 git -C "$PROJ" config user.email ci@example.invalid
 git -C "$PROJ" config user.name ci
 printf 'locals {\n  a = 1\n}\n' >"$PROJ/dns/main.tf"
 printf '.falconet/\n' >"$PROJ/.gitignore"
+printf '{"paths":{"allow":["*.tf"]}}\n' >"$PROJ/.github/falconet.json"
 git -C "$PROJ" add -A
 git -C "$PROJ" commit -qm "base commit"
 

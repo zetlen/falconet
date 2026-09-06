@@ -1,14 +1,14 @@
 // Package config is one JSON file, every key optional, with defaults that
-// reproduce the origin repository's behavior exactly.
+// let a consumer start without touching any key it does not need to change.
 //
 // The defaults live here as a JSON document rather than as a fallback at each
 // call site, and the user's file is merged OVER them the way jq's `*` merges:
 // objects recurse, and everything else — arrays included — is replaced
 // wholesale. That is deliberate. Setting paths.allow means "this list instead
-// of the default", never "these in addition to *.tf" — an allowlist that
-// grows by accident is not an allowlist. A default spelled at a call site
-// drifts from the schema in docs/decisions.md the first time
-// someone edits one and not the other.
+// of the default", never "these in addition" — an allowlist that grows by
+// accident is not an allowlist. A default spelled at a call site drifts from
+// the schema in docs/decisions.md the first time someone edits one and not
+// the other.
 //
 // Discovery, in precedence order:
 //
@@ -40,11 +40,13 @@ import (
 
 // Defaults is the schema with every default, as the JSON document the bash
 // config library carried. Every key in docs/decisions.md is here but one, so
-// a verb never has to ask whether a key is set. The one is prompts: its
+// a verb never has to ask whether a key is set. The two that have no default
+// are paths.allow (an allowlist the operator did not write is a choice made
+// for them — the commit verb refuses to run without one) and prompts (its
 // default was issue #3 — a path relative to the consumer's repository, which
 // made the default an override and the shipped prompt unreachable — and the
 // shipped prompts are embedded in the binary now, so an absent key means
-// exactly that. See Schema.Prompts.
+// exactly that). See Schema.Prompts and Schema.Paths.
 const Defaults = `{
   "handoff_dir": ".falconet",
   "issue": {
@@ -60,16 +62,11 @@ const Defaults = `{
     "pr": "needs-plan-review"
   },
   "paths": {
-    "allow": ["*.tf"],
-    "deny_content": [
-      "data \"external\"",
-      "provisioner",
-      "local-exec",
-      "remote-exec",
-      "templatefile(",
-      "filebase64(",
-      "file("
-    ]
+    "allow": [],
+    "deny_content": []
+  },
+  "check": {
+    "command": []
   }
 }`
 
@@ -98,6 +95,15 @@ type Schema struct {
 		// so it has to survive here.
 		DenyContent []string `json:"deny_content"`
 	} `json:"paths"`
+	// Check is the repository's own check, as the check verb runs it: an
+	// argv, run with no shell, from the repository root. Empty means there
+	// is none, and the verb says `skipped`. An argv rather than a command
+	// line because the binary runs subprocesses with os/exec and no shell
+	// (docs/decisions.md, "The language is Go"); an operator whose check is
+	// several commands names a script or a Makefile target.
+	Check struct {
+		Command []string `json:"command"`
+	} `json:"check"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
 	// because `falconet prompt <name>` looks names up dynamically. It has no
 	// default (#3): an absent key means the prompt embedded in the binary,
@@ -118,11 +124,6 @@ type Config struct {
 	// Doc is the defaults with the file merged over them. Numbers are
 	// json.Number, so they print as they were written.
 	Doc map[string]any
-	// User is the file's own document, before the merge — what the operator
-	// actually set — or nil when no file was found. doctor reads it to tell
-	// an override from a default: a prompt path the file names must exist
-	// under the repository root, where a default names the shipped prompt.
-	User map[string]any
 	// Schema is Doc, typed.
 	Schema Schema
 }
@@ -154,13 +155,12 @@ func Load(explicit string) (*Config, error) {
 		return nil, fmt.Errorf("the built-in defaults are not valid JSON: %v", err)
 	}
 
-	var user map[string]any
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s cannot be read: %v", path, err)
 		}
-		user, err = parseObject(raw)
+		user, err := parseObject(raw)
 		if err != nil {
 			// The message names OUR file rather than leaving a bare parse
 			// error in a log with nothing around it.
@@ -169,7 +169,7 @@ func Load(explicit string) (*Config, error) {
 		doc = Merge(doc, user)
 	}
 
-	cfg := &Config{File: path, Doc: doc, User: user}
+	cfg := &Config{File: path, Doc: doc}
 	if err := cfg.decodeSchema(); err != nil {
 		return nil, fmt.Errorf("%s does not match the schema: %v", orDefault(path, "the built-in defaults"), err)
 	}

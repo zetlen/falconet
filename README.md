@@ -1,546 +1,105 @@
-# falconet
+# falconet: the tiny code cannon
 
-A falconet is a small cannon: one precise shot, aimed by hand, at a target you
-picked on purpose. This one turns a plain-language infrastructure request into
-a pull request a person can review — and then stops, because planning is the
-repository's plan bot's job and applying is a human's.
+falconet is a tool for safely running coding agents in CI by tightly controlling their inputs, their permissions, and their outputs. With it, an issue-to-pull-request pipeline for a repository is fast to set up and reliable to run: someone files an issue in ordinary words, an agent works it inside a job that holds nothing it could publish with, and a person gets a pull request — or a question, or a hand-off — every time.
 
-**Status: it works, and it is one binary.** One static Go binary runs in CI,
-where every job installs it from a release and checks its digest, and on a
-laptop, where `falconet init` does the install and `falconet doctor` checks
-it. It has run live on a real consumer since 2026-08-21 and reached pull
-requests. Each live run has also found a wiring bug that no unit test could
-see, and each is now a case in the suite. See
-[Where this stands](#where-this-stands).
+## Who are you?
 
-## What it does
+### **"I'm setting this up!"**
+You might be handling a lot of issues yourself, but you don't trust the popular agentic tools to handle issues unattended. You might not want to use paid SaaS like env0 or Spacelift. You know how the code works, you can set up issue templates and CI jobs, and you would like to maybe work less.
 
-Someone files an issue that says, in ordinary words, what they want changed.
-falconet:
+### **"I review PRs!"**
+If you're not the operator but you review PRs, you'll get used to falconet opening small and highly descriptive PRs, with steps to repro and tests to run. There will be no big stack of commits, and no danger that the agent did something with an unexpected side effect.
 
-1. assigns itself the issue and opens a branch
-2. runs **one** agent pass with a deliberately narrow toolset — it edits
-   config and writes a commit message, and holds no shell and no push token
-3. commits through deterministic guards that an agent cannot talk its way past
-4. pushes the branch the moment a commit exists, and opens a pull request
-   whose body is the agent's own account of the change, labelled for human
-   review
+### **"I'm opening issues!"**
+You are describing what you want, and don't have to make the change yourself. (Or you can't, for whatever reason.) You file an issue, through a structured issue template. Maybe you'll get a question back. But probably, you'll get a pull request implementing your change, pretty shortly.
 
-Every exit is a terminal state: a pull request, a question for the requester,
-or a hand-off to a human. A request never disappears into a green run that
-produced nothing.
 
-**falconet does not plan.** The plan a reviewer reads is posted on the pull
-request by the plan bot your repository already runs on every pull request —
-[Atlantis](https://www.runatlantis.io/) or
-[dflook/terraform-github-actions](https://github.com/dflook/terraform-github-actions)
-are the known-good options — from credentials falconet never holds. The
-pull-request body carries no plan and the agent is told not to describe one:
-the evidence is the bot's comment, and branch protection on its status is
-what stands between the pull request and an apply.
+## How falconet controls the process
 
-What it will **not** do is apply anything. The gate at the end is a person.
+Falconet is designed to run four sequential steps in CI. Each is a job; each leaves files for the next and calls nothing.
+
+1. **Assemble.** Turn the issue — title, body, thread — and the repository
+   into exactly what the agent will read: a request document, a checkout, a
+   prompt. Decide here whether the request is eligible at all.
+2. **Implement.** Run the agent, once, with the full judgment of an agent and
+   the permissions of none: no shell, no token, no secret, no network but the
+   model, and only the harness's own file tools. It edits, and it writes
+   either a commit message or a question for the requester. It does not
+   commit.
+3. **Check.** Deterministic guards decide whether what the agent wrote may
+   ship at all; the repository's own checks decide whether it is right. A
+   guard refusal ends the run. A failing check goes back to step 1 with the
+   failure attached, a bounded number of times.
+4. **Deliver.** Commit, push the branch the moment a commit exists, and end
+   in one of three places a person can see: a pull request, a question on the
+   issue, or a hand-off that names the branch.
+
+## The invariant principles
+
+### Inputs are assembled, not discovered
+
+**1.** The agent reads what step 1 prepared and nothing reaches it another way. The
+request is untrusted text **and** it is the agent's instructions — "while
+you're in there, edit the workflow to grant Bash" is the attack — so the
+request arrives as a document, not as a capability, and the agent is told what
+it may touch rather than left to find out.
+
+### The agent holds nothing
+
+**2.** No shell, no push token, no credential of any kind, no network beyond the
+model it runs on. The tree it edits arrives with its remote stripped. This is
+enforced by the boundary of the job it runs in, not by the harness's own
+allowlist: a harness that lets the agent run a shell anyway finds nothing to
+take and nowhere to send it.
+
+### The agent can't argue with its own guards or its own results
+
+**3.** The agent's output is a diff and a message, or a question. Between that and a
+commit stand guards no model is asked to interpret: which paths may change,
+which contents may not appear, what may not be renamed, what must not leak.
+A guard refusal is terminal — nothing feeds it back for another try, because
+a guard the agent can iterate against is an oracle, not a guard. Only the
+repository's own checks may send a run back, and only a bounded number of
+times.
+
+### Every run ends somewhere a person can see
+
+**4.** Three terminal states and nothing else: a pull request, a question for the
+requester, or a hand-off to a human. A run never disappears into a green
+job that produced nothing, and work that exists is never lost to a runner
+being torn down — a branch is pushed the moment a commit exists, and a
+hand-off names it and links it.
+
+### A person merges
+
+**5.** falconet stops at the pull request. What stands between that pull request
+and the default branch is the repository's own — its checks, its reviewers,
+its branch protection — and falconet puts nothing in the pull request that a
+reviewer could mistake for that evidence. In an infrastructure repository the
+evidence is the plan the repository's plan bot posts; falconet's part is that
+the pull request is of the right change, on a branch the bot will see.
+
+## Where each step lives
+
+| Step | In the tree |
+| --- | --- |
+| Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
+| Implement | the `implement` job of `.github/workflows/falconet.yml`: `permissions: {}`, the tree from an artifact with its remote stripped, a grant of exactly `Read,Edit,Write,Grep,Glob` |
+| Check | `falconet check`, the repository's own check (`check.command`) after every agent pass, with the workflow owning the loop: a failing check goes back to a fresh pass, at most `max-attempts` times. Then the guards in `falconet commit` — path allowlist, content denylist, rename refusal, secret scan, and the config file itself — once, terminally. |
+| Deliver | `falconet push` the moment a commit exists, then the pull request — or `falconet pause` for a question or a hand-off, including a change whose check still fails at the cap |
+
+[The decision register](docs/decisions.md) holds every live decision with the
+principle it serves and the observation that should retire it.
+[`docs/history/`](docs/history/) is the archive of how those decisions were
+reached. [operating](docs/operating.md) covers the credentials only the
+operator can create.
 
 ## Install it in your repository
 
-Four steps, and each ends with **Check:** — how to see that it worked before
-you go on.
-
-1. [Install the binary](#1-install-the-binary)
-2. [Mint `FALCONET_SETUP_TOKEN`](#2-mint-falconet_setup_token)
-3. [Run `falconet init`](#3-run-falconet-init)
-4. [File the canary](#4-file-the-canary)
-
-Nothing is vendored and nothing of falconet's is checked out into your
-repository: the caller workflow names a tag of this repository, and every job
-installs the binary that tag vouches for. Upgrading is changing the tag. The
-eight things `init` does and `doctor` checks are each a command in
-[the appendix](#appendix-the-manual-path) — the manual path, and the
-numbering `init` and `doctor` use when they print a line like
-`MISSING      5. label needs-info`.
-
-### 1. Install the binary
-
-Two ways, and one snag on macOS.
-
-**From the release page.**
-
-| Your machine | Asset |
-| --- | --- |
-| Apple silicon Mac | `falconet_darwin_arm64` |
-| Intel Mac | `falconet_darwin_amd64` |
-| Linux x86-64 | `falconet_linux_amd64` |
-| Linux arm64 | `falconet_linux_arm64` |
-
-Pick the tag from [the releases page](https://github.com/zetlen/falconet/releases),
-then:
-
-```sh
-tag=v0.2.0
-asset=falconet_darwin_arm64            # from the table above
-base="https://github.com/zetlen/falconet/releases/download/$tag"
-
-curl -fsSL -O "$base/$asset"
-curl -fsSL -O "$base/checksums.txt"
-
-# checksums.txt is sha256sum's own format, so the tool checks it for you.
-shasum -a 256 --ignore-missing -c checksums.txt   # Linux: sha256sum --ignore-missing -c
-
-chmod +x "$asset"
-mkdir -p ~/.local/bin
-mv "$asset" ~/.local/bin/falconet                 # anywhere on your PATH
-```
-
-Verify the checksum rather than trusting the download. A release tag is a
-mutable pointer and an asset can be replaced — the same reason `action.yml`
-pins gitleaks by digest as well as by version. falconet's own `linux_amd64`
-digest is committed in this tree at
-[`release/falconet_linux_amd64.sha256`](release/falconet_linux_amd64.sha256),
-written before the tag exists; the release workflow rebuilds those bytes on a
-runner and publishes nothing at all if they differ.
-
-**The macOS quarantine snag.** A file a **browser** downloads gets a
-`com.apple.quarantine` attribute, and Gatekeeper will not run an unsigned,
-un-notarised binary that carries one. Observed on macOS 26: it does not fail
-with a message — the process simply hangs. `curl` does not set the attribute,
-so the recipe above never trips over this; if a browser fetched the file,
-clear it **before** the first run:
-
-```sh
-xattr -d com.apple.quarantine ~/.local/bin/falconet
-```
-
-Clearing it after a denial did not reliably help in testing — Gatekeeper had
-already made up its mind about that file. Clear it first, or re-download with
-`curl`. This is documented rather than solved: signing and notarising means
-an Apple Developer account and a signing identity in CI, the level of
-commitment [docs/operating.md](docs/operating.md) declines everywhere else —
-as it declines a Homebrew tap and a `curl … | sh` install script.
-
-**With Go.**
-
-```sh
-go install github.com/zetlen/falconet/cmd/falconet@v0.2.0
-```
-
-Nothing is quarantined this way: the file is compiled locally rather than
-arriving through a browser. It builds with **your** Go, not the pinned one —
-`GOTOOLCHAIN=auto`, the default, is a floor and not a pin — so
-`falconet version` may report a Go newer than the release assets do. That is
-fine here, where nothing is compared against a digest; it is exactly what the
-release workflow must not do, and does not.
-
-**Check:** `falconet version` prints the tag and the Go it was built with — a
-v0.2.0 build on an Apple-silicon Mac says:
-
-```
-falconet v0.2.0 (go1.26.7 darwin/arm64)
-```
-
-A `go install` of a commit rather than a tag reports the pseudo-version the
-`go` command recorded instead of a tag, and a build from a checkout says
-`dev`; either runs, and both matter in step 3, where `init` pins the caller
-workflow to the version it reports.
-
-### 2. Mint `FALCONET_SETUP_TOKEN`
-
-`init` writes to your repository through GitHub's API — the labels, the
-secrets, the App — and `doctor` reads through it. Both authenticate with one
-variable, **`FALCONET_SETUP_TOKEN`**, and nothing else.
-
-On github.com → Settings → Developer settings → Personal access tokens →
-**Fine-grained tokens** → Generate new token:
-
-| Field | Set it to |
-| --- | --- |
-| Repository access | **Only select repositories** → the one you are installing into. |
-| Expiration | **7 days.** A setup credential is powerful and short-lived: this one is for steps 2–4 and never again. |
-| Repository permissions | The four below, and nothing else. (Metadata: read comes with every fine-grained token.) |
-
-| Permission | Level | For |
-| --- | --- | --- |
-| Administration | Read | the Actions-policy checks (appendix step 1) |
-| Actions | Read | the same |
-| Secrets | Read and write | the three secrets (appendix steps 3–4) |
-| Issues | Read and write | the four labels (appendix step 5) |
-
-A classic token needs `repo`. Neither kind needs Contents or Workflows:
-`init` commits the files it writes locally and never pushes.
-
-Export it in the shell you will run `init` from, without putting it in that
-shell's history:
-
-```sh
-read -rs FALCONET_SETUP_TOKEN && export FALCONET_SETUP_TOKEN   # paste the token, press Enter; nothing is echoed
-```
-
-Deliberately its own name. `GITHUB_TOKEN` and `GH_TOKEN` are **not** read —
-in CI they are the Actions token, which cannot do this and must never be
-asked to; on a laptop they are whatever you set for something else — and a
-credential this powerful should be named for what it is.
-
-**Check:** in a clone of the repository, `falconet doctor`. Without the
-token every remote line says `cannot tell … (no FALCONET_SETUP_TOKEN)` and
-the permission table above is printed on stderr; with it, those lines
-answer — `ok`, or `MISSING` with the command that fixes it on the next line,
-which is the expected state before step 3. A token
-short of a permission says which one:
-
-```
-cannot tell  3. secret FALCONET_APP_ID (403 Resource not accessible by personal access token — needs Secrets: read)
-```
-
-### 3. Run `falconet init`
-
-From the root of a **clean** clone — untracked files included, because the
-one commit `init` makes must carry only what it wrote — with the token
-exported:
-
-```sh
-falconet init
-```
-
-`falconet init -h` lists the flags: an App registered by hand, a name for
-the one it registers, `--no-browser`, `--no-commit`.
-
-What it does, in this order. Every read comes before any write, and the
-first write is the one that is harmless to repeat, so a token short of a
-permission fails before anything hard to undo has happened:
-
-1. **Reads.** The tree is clean (a dirty one is refused, exit 1, before
-   anything else); an existing config parses — then, through the token, the
-   repository, its issues, its Actions policy, its secrets and its labels.
-   Issues disabled, or an Actions policy that refuses outside workflows
-   (appendix step 1), is reported `MISSING` and left for you: `init` never
-   changes a repository setting.
-2. **The labels** (appendix step 5): `infra-request`, `needs-info`,
-   `ready-for-human`, `needs-plan-review`, each created unless it exists.
-3. **The secret that is a value** (appendix step 4). `ANTHROPIC_API_KEY` is
-   read from a no-echo prompt when stdin is a terminal, and from stdin
-   otherwise — `falconet init … < key-file`, or piped — never from an
-   argument, which would sit in shell history; an empty answer skips it. It
-   is sealed to the repository's public key and stored; the value is never
-   echoed, and can never be read back. A secret that already exists is left
-   alone unless `--replace-secrets`.
-4. **The App** (appendix step 3), by manifest. `init` serves a page on
-   localhost and opens it in your browser. The page sends the App's
-   configuration to GitHub — the three repository permissions, no webhook,
-   installable only on this account — and you click **Create GitHub App**
-   there. GitHub sends the browser back with a code; `init` exchanges the
-   code for the App's ID and private key and seals both straight into
-   `FALCONET_APP_ID` and `FALCONET_APP_PRIVATE_KEY`. **The key never touches
-   disk**: there is no `.pem` to download and nothing to delete afterwards.
-   Then the App's install page opens; click **Install**, then **Only select
-   repositories**, and pick this repository, and `init` waits — ten minutes
-   by default, `--app-timeout` — until it sees the installation. For an App
-   you registered by hand instead: `--app-id N --app-key file.pem`.
-   `--no-browser` prints each URL for you to open; `--no-app` leaves step 3
-   for you.
-5. **The files** (appendix steps 2, 6 and 7), then **one commit**:
-   `.falconet/` in `.gitignore`; `.github/falconet.json` naming the prompt;
-   `prompts/implement.md`, the shipped prompt copied in so you can edit its
-   standing-facts block; and `.github/workflows/infra-requests.yml`, the
-   caller, with `uses:` pinned to the version of the binary that wrote it —
-   `@v0.2.0` from a release build. (A `dev` build, or a `go install` of an
-   untagged commit, has no tag to name and pins `main`, which `doctor` then
-   notes as unpinned; put the tag there yourself, step 4.) Committed,
-   **never pushed**: pushing a workflow file through the API needs a scope
-   the token does not have and should not, pushing over your own git
-   credentials needs nothing, and the last step stays in your hands.
-
-Every step is one line on stdout in `doctor`'s format, then a summary, then
-**`Left for you:`** — the push first, then anything it skipped, then the
-canary, then the check. A run through the manifest flow with a v0.2.0
-build, against the test suite's fake GitHub (the App ID and the key id are
-the fake's fixtures; yours will differ):
-
-```
-ok           1. the working tree is clean
-ok           1. the repository has issues enabled
-ok           1. allowed_actions is all
-note         1. default_workflow_permissions is read (fine: the caller workflow grants what it needs)
-done         5. label infra-request created
-done         5. label needs-info created
-done         5. label ready-for-human created
-done         5. label needs-plan-review created
-done         4. secret ANTHROPIC_API_KEY stored (sealed to key 568250167242549743)
-done         3. secret FALCONET_APP_ID stored (sealed to key 568250167242549743)
-done         3. secret FALCONET_APP_PRIVATE_KEY stored (sealed to key 568250167242549743)
-done         3. the GitHub App falconet-zetlen-wayfinders-infra (ID 12345) is registered, installed on zetlen/wayfinders-infra, and its two secrets are stored
-done         2. .falconet/ added to .gitignore
-done         6. .github/falconet.json written (prompts.implement: prompts/implement.md)
-done         6. prompts.implement names prompts/implement.md, copied from the shipped prompt
-done         7. .github/workflows/infra-requests.yml written (uses zetlen/falconet/.github/workflows/falconet.yml@v0.2.0)
-done         committed "Install falconet" (4 files)
-init: 3 ok, 13 done, 0 skipped, 0 missing, 0 cannot tell
-
-Left for you:
-  1. git push origin main
-  2. step 6 — edit the standing-facts block in prompts/implement.md: it describes the repository falconet was extracted from (its registrar sandbox, its scratch tenant), and the agent will believe it of this one until it says what is true here
-  3. step 8 — file a canary issue: the smallest change the repository can carry (one DNS record, one tag), labelled infra-request, then watch the run; once it has reached a pull request, pin the ref in uses: to the SHA or tag you ran
-  4. then: falconet doctor
-```
-
-Without a token `init` still writes the files and commits them, and lists
-steps 3–5 under `Left for you:` in the appendix's words — it degrades to the
-manual path, never to nothing. A run that ends early says where: a refused
-write is `stopped at step N; what was done before it stands, and a second
-run carries on from here`, exit 1; a browser that never came back leaves the
-App under `Left for you:` and exits 0. Every step is idempotent, so the
-answer to anything unfinished is the same command again.
-
-Do the `Left for you:` list in order. The push is its first item; the edit to
-`prompts/implement.md`'s standing-facts block (appendix step 6) is worth
-making before it, in the same push.
-
-**Check:** `falconet doctor`, in the same clone, after the push. Every line
-`ok` and exit 0. It never writes anything — every call it makes is a read.
-This is its output on the clone the `init` run above left, against the same
-fake GitHub (which is why nothing is missing):
-
-```
-ok           1. the repository has issues enabled
-ok           1. allowed_actions is all
-note         1. default_workflow_permissions is read (fine: the caller workflow grants what it needs)
-note         1. runners must be Linux x64 (not checked: runs-on is the caller's input, and ubuntu-latest is the default)
-ok           2. .falconet/ is gitignored
-ok           3. secret FALCONET_APP_ID exists (a value can never be read back, so the name is the check)
-ok           3. secret FALCONET_APP_PRIVATE_KEY exists (a value can never be read back, so the name is the check)
-ok           4. secret ANTHROPIC_API_KEY exists (a value can never be read back, so the name is the check)
-ok           5. label infra-request
-ok           5. label needs-info
-ok           5. label ready-for-human
-ok           5. label needs-plan-review
-ok           6. .github/falconet.json parses
-ok           6. prompts.implement names prompts/implement.md, which exists
-ok           7. .github/workflows/infra-requests.yml exists
-ok           7. it uses zetlen/falconet/.github/workflows/falconet.yml@v0.2.0
-ok           7. permissions grants contents: write, issues: write, pull-requests: write
-doctor: 15 ok, 0 missing, 0 cannot tell
-```
-
-`note` lines are not checks. A `MISSING` line carries the command that fixes
-it on the next line; a `cannot tell` says why — no token, or a permission the
-token is short of. Two things `doctor` cannot see. That the App is
-**installed**: it holds no key to ask with, so `init`'s `done 3.` line —
-which it prints only once it has seen the installation — is the check, and a
-run that fails at `actions/create-github-app-token` with *Could not find
-installation* is the other way to find out. And that the workflow is
-registered on GitHub: `gh workflow list` after the push, or the Actions tab.
-
-### 4. File the canary
-
-Pick the smallest change your repository can carry — one DNS record, one
-tag — and file it the way a requester would, via the form or:
-
-```sh
-gh issue create --label infra-request \
-  --title "Canary: add a TXT record for falconet" \
-  --body "Please add a TXT record named falconet-canary on example.com with the value \"hello\"."
-```
-
-Then watch. `gh run watch` follows it, or the Actions tab:
-
-| When | What you should see |
-| --- | --- |
-| within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the issue is assigned and the branch exists. |
-| next | **implement**: one agent pass, then every guard, then the commit. The agent's only output that outlives the run is its commit message. |
-| next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then the pull request. |
-| within ~15 minutes | One of exactly three endings on the issue, below. |
-| always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
-
-The three endings:
-
-| Ending | What it looks like | What to do |
-| --- | --- | --- |
-| **A pull request**, labelled `needs-plan-review` | Title is the agent's commit subject. Body is its explanation, and nothing else; your plan bot's comment with the plan follows. | Read the plan the bot posted. It should show the canary's resources and nothing else — anything else is drift, not the agent. Then **close the PR without merging** unless you mean to apply it; in a repository that deploys on merge, the merge *is* the apply. Delete the branch, close the issue. |
-| **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. That comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. |
-| **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, and the text names which. |
-
-The ending that is *not* on that list — a red run and an issue with only the
-acknowledgment, or nothing at all — is a failed gate, and it is silent. See
-[Troubleshooting](#troubleshooting).
-
-**Pin a tag.** The ref in `uses:` is the one coordinate: the workflow at
-`@v0.2.0` installs, in every job, the binary whose digest the tree at
-`v0.2.0` holds. `init` wrote the tag of the binary that ran it. If you wrote
-the caller by hand, put the tag there — never `main`, which moves, and which
-`doctor` notes as unpinned:
-
-```yaml
-    uses: zetlen/falconet/.github/workflows/falconet.yml@v0.2.0
-```
-
-If you are upgrading a caller from the bash era, **delete its `falconet-ref:`
-input** as well. It no longer exists — there is no checkout left for it to
-choose — and a reusable workflow rejects an input it does not declare when
-the caller's file is loaded, so the run is a `startup_failure` with nothing
-on the issue. `doctor` says so:
-
-```
-MISSING      8. falconet-ref is no longer an input; remove it
-             the run would be a startup_failure: a reusable workflow rejects an input it does not declare when the caller's file is loaded
-```
-
-**Check:** one of the three endings on the issue — and on a pull request,
-your plan bot's comment showing the canary's resources and nothing else. No
-comment means the bot is not planning falconet's pull requests; that is the
-bot's configuration, and it has to be fixed before the next request.
-
-## How it is built
-
-Four verbs, one per stage. They never call each other; they pass files
-through the handoff directory, so the same sequence runs in CI and on a
-workstation. Uniform exit codes: **0** an outcome was determined, **1**
-refused or a check failed, **2** usage. The verbs that decide something
-print exactly one word on stdout.
-
-| Verb | What it does | Words |
-| --- | --- | --- |
-| `prepare --issue N` | eligibility gate, assignment, branch, the handoff | `ready` `in-flight` `ineligible` |
-| `commit` | every guard, then the commit the agent cannot make | `success` `needs-info` `failure` |
-| `push --branch B` | the branch onto the remote, the moment a commit exists | — |
-| `pause --issue N --label L` | a terminal state, said where the requester reads it | `success` `failure` |
-
-Three more are for a person at a keyboard, and they are the whole of the
-install path above:
-
-| Verb | What it does | Exit |
-| --- | --- | --- |
-| `doctor` | checks the repository it stands in against the appendix's steps 1–7, read-only, one line per check | 0 every check `ok`; 1 otherwise |
-| `init` | does the appendix's steps 2–7, each idempotent and reported one line, then one commit and never a push | 0 everything attempted succeeded (a skipped step is not a failure); 1 a dirty tree, a refused write, a repository that cannot be reached |
-| `version` | the tag and the Go it was built with | 0 |
-
-`prompt`, `config` and `scan` exist unlisted —
-public in that they work, not vocabulary, by
-[the register](docs/decisions.md#stage-level-verbs-one-json-config-file)'s
-criterion that a thing is a verb if and only if a caller invokes it directly. `-h` on any of them says
-what it does.
-
-The reusable workflow runs the four as four jobs — **gate**, **implement**,
-**publish**, **contain** — and the boundaries between the jobs are the
-security model: the agent's job has `permissions: {}` and no secret but the
-model key; the scripted jobs hold the token and do the mechanics.
-[`.github/workflows/falconet.yml`](.github/workflows/falconet.yml) documents
-the trade it makes and why.
-
-What a run needs, in CI: git, gitleaks and the binary, and nothing else.
-[`action.yml`](action.yml) installs the two as the first step of every job —
-gitleaks and falconet by version and digest, falconet's digest being the one
-committed in this tree at [`release/`](release/). No OpenTofu: the plan bot
-brings its own. On a workstation, the same, plus a browser for
-`init`'s App step. The binary needs neither `jq` nor `gh`: the verbs speak to
-`GITHUB_API_URL` themselves. (The workflow still uses `gh` in two of its own
-`run:` steps, on GitHub's runner, where it already is.)
-
-The same verbs run by hand, against the repository you are standing in — no
-workflow. `prepare` and `pause` read `GH_TOKEN` (then `GITHUB_TOKEN`) and
-`GITHUB_REPOSITORY=owner/name`; `prepare` falls back to the origin remote,
-and `pause` — which operates on an issue rather than a tree — deliberately
-does not. The rest need nothing:
-
-```sh
-falconet commit
-```
-
-### Design commitments
-
-- **Deterministic mechanics, agent judgment.** The agent decides *what* the
-  change is. The binary does the branching, committing, pushing and the
-  pull request — so those steps cannot be skipped, improvised, or argued
-  out of.
-- **Guards are incident-shaped.** Every one of them exists because something
-  went wrong once. They are documented with the incident that caused them,
-  in the comment above the guard, and the port moved those comments into Go
-  verbatim: the operator reads Go, and the guards are the product.
-- **One agent, one context.** An earlier design ran a second reviewing agent;
-  measurements showed the second cold context cost more than it caught.
-- **The plan is the evidence, and it is not falconet's.** The plan bot posts
-  it whole on the pull request; the agent is told not to describe it and the
-  body carries none, because a human approving a summary of evidence is not
-  review. Since 2026-08-26 falconet runs no `tofu` at all: a fifth of the
-  tree had reimplemented what Atlantis and dflook do, and it was cut.
-- **Opinionated on purpose.** GitHub and Claude Code are assumed. An
-  OpenTofu or Terraform repository is the shape. Being agnostic across forges
-  is an explicit non-goal.
-
-## Why it exists
-
-It was built inside an OpenTofu repository and worked well enough that the
-surrounding repo became mostly pipeline: ~4,700 lines of workflow and shell
-against ~1,000 lines of actual infrastructure. Two attempts to escape that —
-adopting an off-the-shelf agentic workflow, or trimming in place — both
-concluded the same way: the workflow is a good tool wearing a repository as a
-costume. So it becomes a tool.
-[The founding record](docs/history/0002-extract-the-pipeline-into-falconet.md)
-has the measurements that killed the off-the-shelf option.
-
-## Where this stands
-
-| Piece | State |
-| --- | --- |
-| `cmd/falconet/`, `internal/` — the binary | four verbs, two setup verbs and `version`; the standard library plus `golang.org/x/crypto/nacl/box` for the sealed box the secrets API demands |
-| `tests/` | 13 files through the binary (`make test`), with `go test ./...` beside it; the wiring invariants are [`tests/contract.test.sh`](tests/contract.test.sh) |
-| `release/` + `.github/workflows/release.yml` | the digest in the tree before the tag, four assets and `checksums.txt` per tag |
-| the plan | not falconet's: the repository's plan bot, on the pull request |
-| `prompts/` | embedded in the binary; the standing-facts block is the origin's |
-| Live runs | yes, on a real consumer, on the bash (2026-08-21) and on the binary since v0.2.0. Each found a bug that only integration finds. The plan side was removed on 2026-08-26 and has not yet run live in the new shape against a plan bot |
-
-[The charter](docs/charter.md) is what falconet is for, in one page: the six
-invariants that hold, the non-goals, and the line between those and everything
-that is merely how it is built today. [The decision register](docs/decisions.md)
-holds every live decision, with the invariant it serves, the observation that
-should retire it, and why. [`docs/history/`](docs/history/) is how those
-decisions were reached, kept for its incidents and measurements; it is not a
-description of the tree. [operating](docs/operating.md) covers the credentials only the
-operator can create; [AGENTS.md](AGENTS.md) is what to read before changing
-anything here.
-
-## Running the tests
-
-```sh
-make test                    # build, go test ./..., then the suite through dist/falconet
-bash tests/run.sh            # the suite alone (make build first)
-bash tests/run.sh prepare    # just the files whose name contains "prepare"
-make check                   # go vet, staticcheck, errcheck, govulncheck at ci.yml's pins
-```
-
-The suite is the acceptance bar and the incident record. Every case spawns
-`$FALCONET <verb>` — `dist/falconet`, or another build of the same contract —
-and reads stdout, the exit code and files on disk; nothing reaches inside its
-subject. It stubs `gitleaks` with a bash script handed in through
-`$GITLEAKS`, whose argv is part of the contract. GitHub is
-[`tests/fixtures/fake-github.py`](tests/fixtures/fake-github.py), a loopback
-server that answers from fixtures and records what it was asked, with
-`GITHUB_API_URL` pointing at it. Pushes land only in bare repositories under
-a temp directory; nothing touches the network, GitHub or any credential. No test stubs `gh` anywhere — the files that once did put a
-tripwire on `PATH`, so a verb that shelled out to it would fail loudly before
-the real one could carry a test token anywhere.
-
-`go test ./...` covers what the suite cannot see from outside a process: unit
-and property tests (`testing/quick`) beside the guard logic — a pause
-comment's truncation never splits a line and never exceeds its budget, the
-fence outruns every backtick run, the denylist matches in config order, the config merge, the
-slug and the in-flight pattern, the sealed box opening with the private key,
-the App manifest and its JWT, the dispatcher's lists in step with what it
-implements. `go vet`, `staticcheck`, `errcheck` and `govulncheck` run in CI
-beside it, and `make check` runs the same four at the same pinned versions
-on a laptop: an ignored error is a red build. The suite needs bash, git, jq,
-awk and python3 (stdlib only); `go test` needs Go.
-
-## Appendix: the manual path
-
-The eight steps `falconet init` does, by hand, and what `falconet doctor`
-checks against — the specification of each write and each check, and the
-numbering both verbs use. Every `gh` command here runs from inside the
-repository you are installing into; `gh` and `jq` are the manual path's
-tools, on your machine, not things falconet needs.
-
-It stays in this file on purpose, at its full length. It is the honest
-measure of what installing this thing costs a person, and shortening the
-document does not shorten the install — every step here is one `init` has to
-do correctly, and one `doctor` has to be able to check. Move it to its own
-file and the cost stops being visible; the length is the point.
+Eight steps, by hand, and each ends with **Check:** — how to see that it
+worked before you go on. Every `gh` command here runs from inside the
+repository you are installing into; `gh` and `jq` are your tools, on your
+machine, not things falconet needs.
 
 1. [Check the repository qualifies](#1-check-the-repository-qualifies)
 2. [Ignore the handoff directory](#2-ignore-the-handoff-directory)
@@ -549,7 +108,11 @@ file and the cost stops being visible; the length is the point.
 5. [Create the four labels](#5-create-the-four-labels)
 6. [Write `.github/falconet.json`](#6-write-githubfalconetjson)
 7. [Add the caller workflow](#7-add-the-caller-workflow)
-8. [Run a canary issue](#8-run-a-canary-issue)
+8. [File the canary](#8-file-the-canary)
+
+Nothing is vendored and nothing of falconet's is checked out into your
+repository: the caller workflow names a tag of this repository, and every job
+installs the binary that tag vouches for. Upgrading is changing the tag.
 
 ### 1. Check the repository qualifies
 
@@ -557,30 +120,26 @@ file and the cost stops being visible; the length is the point.
   whatever already posts a plan when a person opens a pull request; it must
   plan pull requests opened by the App from step 3 too. falconet never runs
   `tofu`, and a pull request nothing plans is a pull request nobody can
-  review. Not checked by `doctor` — it cannot see another bot — which is why
-  the canary in step 8 ends by reading the bot's comment.
+  review. Nothing can check this for you, which is why step 8 ends by
+  reading the bot's comment.
 - **Issues enabled.** `gh api repos/{owner}/{repo} --jq .has_issues` → `true`.
 - **Actions may run workflows from outside the repository.**
   `gh api repos/{owner}/{repo}/actions/permissions --jq .allowed_actions`
   must be `all`, or `selected` with `zetlen/falconet`, `actions/*` and
   `anthropics/claude-code-action` in the list.
   A repository restricted to local actions stops before any of this runs.
-- **Linux x64 runners.** The action installs pinned `linux_x64` release
-  assets of gitleaks and of falconet itself and checks their digests, so
-  macOS or ARM fails the checksum.
-- **A clean tree on a fresh checkout.** Two verbs read `git status`. If a
+- **Linux x64 runners.** The action installs a pinned `linux_x64` release
+  asset of gitleaks and checks its digest, so macOS or ARM fails the
+  checksum; falconet itself is compiled for whatever the runner is.
+- **A clean tree on a fresh checkout.** Three verbs read `git status`. If a
   hook or generator leaves untracked files behind on checkout, gitignore them.
 
 If `gh api repos/{owner}/{repo}/actions/permissions/workflow` says
 `default_workflow_permissions` is `read` — the default for new repositories —
 that is fine: step 7's caller workflow grants what it needs explicitly.
 
-`doctor` checks the second and third bullets — issues are enabled, the
-Actions policy admits those three — and reports the policy as `MISSING` when
-it is wrong; the
-runner is a `note` (it is the caller's `runs-on`), and the clean tree on a
-fresh checkout is not checked. Neither `doctor` nor `init` changes a
-repository setting.
+**Check:** the `has_issues` and `allowed_actions` calls above answer `true` and `all` — or
+`selected`, with the three names in `selected-actions`'s `patterns_allowed`.
 
 ### 2. Ignore the handoff directory
 
@@ -602,10 +161,8 @@ human who runs `git add -A`.
 ### 3. Create the GitHub App and store its two secrets
 
 A GitHub App registered purely as a credential: no webhook, nothing hosted.
-`init` registers one by manifest from your browser and the private key never
-touches disk (step 3 of the install above). By hand, on **github.com →
-Settings → Developer settings → GitHub Apps → New GitHub App** (under the
-organisation's settings if the repository belongs to one):
+On **github.com → Settings → Developer settings → GitHub Apps → New GitHub
+App** (under the organisation's settings if the repository belongs to one):
 
 | Field | Set it to |
 | --- | --- |
@@ -630,9 +187,9 @@ gh secret set FALCONET_APP_PRIVATE_KEY < ~/Downloads/<app-name>.<date>.private-k
 rm ~/Downloads/<app-name>.<date>.private-key.pem
 ```
 
-The whole PEM, header and footer lines included. Or hand the two to `init`,
-which seals them and runs the rest of the steps:
-`falconet init --app-id <the App ID> --app-key ~/Downloads/<the .pem>`.
+The whole PEM, header and footer lines included, and then the download
+deleted: the repository secret is the only copy that should exist outside
+GitHub.
 
 **Check:** `gh secret list` shows both, and the repository's **Settings →
 GitHub Apps** lists the App as installed. A run that fails at
@@ -654,7 +211,9 @@ An **API key** from the Anthropic console, not a Claude Code subscription
 token: if you already run `anthropics/claude-code-action` with
 `claude_code_oauth_token`, that secret is a different thing and will not work
 here. A dedicated key keeps falconet's spend a separate number — set a budget
-alert on it. The agent pass is capped at 40 turns and 30 minutes.
+alert on it. Each agent pass is capped at 40 turns; a run makes at most
+three passes (step 7's `max-attempts`), and the agent's job is capped at
+60 minutes.
 
 **Check:** `gh secret list` shows `ANTHROPIC_API_KEY`.
 
@@ -675,9 +234,7 @@ done
 
 All four before the first run: `pause` says `failure` and fails its step
 when the label it was asked for cannot be put on the issue, which is at
-precisely the moment falconet is trying to tell somebody something. `init`
-creates them with a colour and a description each; `doctor` reports each
-one that is missing.
+precisely the moment falconet is trying to tell somebody something.
 
 An issue form with `labels: ["infra-request"]` in its front matter means
 requesters never have to label anything. A checkbox whose text is `Not
@@ -688,57 +245,71 @@ from the agent.
 
 ### 6. Write `.github/falconet.json`
 
-Optional — every key has a default. `init` writes only the prompt override:
+One key is required, `paths.allow`: the paths the agent may change. It has
+no default, because an allowlist you did not write is a choice made for you
+— a default that admitted `*.tf` in a Pulumi repository would be exactly
+that — and `commit` refuses to run until it names something. The smallest
+useful file is that key and, if the repository has one, the check that
+decides whether the agent's change is right:
 
 ```json
 {
-  "prompts": {
-    "implement": "prompts/implement.md"
-  }
+  "paths": { "allow": ["dns/*.tf"] },
+  "check": { "command": ["make", "test"] }
 }
 ```
 
 The file is merged **over** the defaults: naming one key changes one thing.
 Arrays replace wholesale rather than append, because an allowlist that grows
 by accident is not an allowlist. A malformed file is a hard failure with the
-parse error, never a silent fall back to defaults.
+parse error, never a silent fall back to defaults. And the file is never the
+agent's to change, whatever it says the agent may touch: a run that edits
+it, or creates one where none was committed, is refused before its contents
+are consulted.
 
 Every key, with its default:
 
 | Key | Default | What it is |
 | --- | --- | --- |
-| `paths.allow` | `["*.tf"]` | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. |
-| `paths.deny_content` | `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` | Constructs refused anywhere in a changed `.tf`, in this order. |
+| `paths.allow` | none — **required** | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
+| `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. For an OpenTofu repository the origin's list was `data "external"`, `provisioner`, `local-exec`, `remote-exec`, `templatefile(`, `filebase64(`, `file(` — the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
+| `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
 | `issue.queue_label` | `infra-request` | The label that makes an issue eligible. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
 | `issue.branch_prefix` | `issue-` | Branches are `<prefix><number>-<slug>`. |
 | `issue.in_flight_prefixes` | `["issue-", "claude/issue-"]` | An open PR from a branch with any of these prefixes and this number means "already in flight". |
 | `labels.needs_info` / `labels.human` / `labels.pr` | `needs-info` / `ready-for-human` / `needs-plan-review` | Step 5's labels, if you named them differently. |
-| `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. |
+| `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. Either is rendered by `falconet prompt implement`: `{handoff}`, `{workspace}`, `{allow}` and `{deny}` are substituted from this file. |
 | `prompts.pause_needs_info` | the shipped [`prompts/pause-needs-info.md`](prompts/pause-needs-info.md), embedded in the binary | Likewise, for the question posted back to a requester. |
 | `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
 
-**The one default that does not transfer is the prompt.** The shipped
-[`prompts/implement.md`](prompts/implement.md) carries a "standing facts"
-block describing the repository this came from — its registrar sandbox, its
-scratch tenant — and the copy embedded in the binary is that one. To change
-it, copy [the file](prompts/implement.md) into your repository as
-`prompts/implement.md` (which is what `init` does — byte for byte, so the
-two placeholders below stay placeholders), replace that block with what is
-true of yours, and point `prompts.implement` at the copy. `{handoff}` and
-`{workspace}` in it are substituted at run time, by `falconet prompt
-implement` — which is why that command's output is not the copy to commit:
-it has already put this machine's paths where the placeholders were.
+**The shipped prompt names nothing of any particular repository's.** It
+tells the agent what `paths.allow` and `paths.deny_content` say — the
+guard's own config, so what the agent is told it may touch is what the
+commit stage enforces — and binds it to your repository's `AGENTS.md` and
+README. Standing facts you want the agent to take as given (what is a
+sandbox and what is live, where each kind of thing lives, which files it
+must never weaken) go in `AGENTS.md`, where they bind a person too. A prompt
+of your own is for when the wording itself should differ: copy
+[the file](prompts/implement.md) into your repository as
+`prompts/implement.md` byte for byte, so the placeholders stay
+placeholders, edit it, and point `prompts.implement` at the copy.
+`{handoff}`, `{workspace}`, `{allow}` and `{deny}` in it are substituted at
+run time, by `falconet prompt implement` — which is why that command's
+output is not the copy to commit: it has already put this machine's paths
+and this file's lists where the placeholders were.
 
-**Check:** `jq -e . .github/falconet.json > /dev/null && echo parses`, and
-every `prompts.*` path names a file under the repository root — `doctor`'s
-`6.` lines.
+**Check:** `jq -e '.paths.allow | length > 0' .github/falconet.json` → `true`;
+every `prompts.*` path names a file under the repository root:
+`test -f "$(jq -r .prompts.implement .github/falconet.json)"`; and, from a
+clean checkout, `falconet check` prints `pass` (or `skipped`, with no
+`check.command`) — it runs the command exactly as the agent job will.
 
 ### 7. Add the caller workflow
 
-One file, `.github/workflows/infra-requests.yml`, and this is the whole of it
-— `init` writes exactly this, with `uses:` pinned to its own version:
+One file, `.github/workflows/infra-requests.yml`, and this is the whole of
+it:
 
 <!-- caller-workflow-template -->
 ```yaml
@@ -789,6 +360,7 @@ jobs:
 | `issue` | yes | — | The issue number to work. |
 | `config` | no | `.github/falconet.json` | Path to the config file. |
 | `runs-on` | no | `ubuntu-latest` | Must stay Linux x64. |
+| `max-attempts` | no | `3` | How many agent passes a run may spend getting `check.command` to pass: 1, 2 or 3. Each pass is a fresh agent context with the check's failure in front of it; at the cap the work is committed, pushed and handed off. With no `check.command` the first pass is the only one. |
 
 Three things about this file that are not obvious:
 
@@ -804,72 +376,186 @@ Three things about this file that are not obvious:
   from a person on an issue paused `needs-info` is the way back in.
 - **The ref in `uses:` must be a literal** — GitHub does not expand
   expressions there — and it is the one coordinate: the workflow at that ref
-  installs, in every job, the binary whose digest that ref's tree holds.
+  compiles falconet, in every job, from this repository's tree at that ref.
   `main` is where the template starts and it moves; put a tag there —
-  `@v0.2.0` — which is what `init` writes, and what step 4 of the install
-  says. There is no `falconet-ref` input any more: the bash-era caller
-  passed it to choose which falconet the jobs checked out, nothing is
-  checked out now, and a caller still passing it is rejected when the file
-  is loaded.
+  `@v1.0.0` — as step 8 says.
 - **It coexists with a stock `claude.yml`.** If you already run
   `anthropics/claude-code-action` on issue events, that one starts on an
   `@claude` mention and this one on the queue label. Don't write `@claude` in
   an infra request unless you want both.
 
-**Check:** after pushing, `gh workflow list` shows `infra requests`. Before
-pushing, `falconet doctor`'s three `7.` lines: the file exists, it uses the
-reusable workflow, and its `permissions:` block grants what the widest job
-declares.
+**Check:** before pushing, read the file against the template above: it
+uses the reusable workflow, and its `permissions:` block grants `contents:
+write`, `issues: write` and `pull-requests: write`, which is what the widest
+job inside declares. After pushing, `gh workflow list` shows `infra
+requests`.
 
-### 8. Run a canary issue
+### 8. File the canary
 
-Step 4 of the install above, unchanged: file the smallest change the
-repository can carry, watch the table, expect one of the three endings, read
-the plan bot's comment on the pull request, and make sure the ref in `uses:`
-is a tag.
+Pick the smallest change your repository can carry — one DNS record, one
+tag — and file it the way a requester would, via the form or:
+
+```sh
+gh issue create --label infra-request \
+  --title "Canary: add a TXT record for falconet" \
+  --body "Please add a TXT record named falconet-canary on example.com with the value \"hello\"."
+```
+
+Then watch. `gh run watch` follows it, or the Actions tab:
+
+| When | What you should see |
+| --- | --- |
+| within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the issue is assigned and the branch exists. |
+| next | **implement**: one agent pass, then `falconet check` — your `check.command`, or `skipped` — and, if it failed, another pass with the failure in front of it, up to `max-attempts`. Then every guard, once, and the commit. The agent's only output that outlives the run is its commit message. |
+| next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then the pull request. |
+| within ~15 minutes, or ~45 with three passes | One of exactly three endings on the issue, below. |
+| always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
+
+The three endings:
+
+| Ending | What it looks like | What to do |
+| --- | --- | --- |
+| **A pull request**, labelled `needs-plan-review` | Title is the agent's commit subject. Body is its explanation, and nothing else; your plan bot's comment with the plan follows. | Read the plan the bot posted. It should show the canary's resources and nothing else — anything else is drift, not the agent. Then **close the PR without merging** unless you mean to apply it; in a repository that deploys on merge, the merge *is* the apply. Delete the branch, close the issue. |
+| **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. That comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. |
+| **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, and the text names which — or the check still failing at the cap, in which case the branch is pushed, the check's output is folded under the comment, and the change is yours to finish or discard. |
+
+The ending that is *not* on that list — a red run and an issue with only the
+acknowledgment, or nothing at all — is a failed gate, and it is silent. See
+[Troubleshooting](#troubleshooting).
+
+**Pin a tag.** The ref in `uses:` is the one coordinate: the workflow at
+`@v1.0.0` compiles, in every job, the binary from this repository's tree at
+`v1.0.0`. Put the tag there — never `main`, which moves:
+
+```yaml
+    uses: zetlen/falconet/.github/workflows/falconet.yml@v1.0.0
+```
+
+If you are upgrading a caller from the bash era, **delete its `falconet-ref:`
+input** as well. It no longer exists — there is no checkout left for it to
+choose — and a reusable workflow rejects an input it does not declare when
+the caller's file is loaded, so the run is a `startup_failure` with nothing
+on the issue.
+
+**Check:** one of the three endings on the issue — and on a pull request,
+your plan bot's comment showing the canary's resources and nothing else. No
+comment means the bot is not planning falconet's pull requests; that is the
+bot's configuration, and it has to be fixed before the next request.
 
 ### Troubleshooting
 
 | What you see | Why | Do |
 | --- | --- | --- |
-| The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares, or passes an input the workflow does not declare — `falconet-ref`, from a bash-era caller. GitHub checks both when the workflow file is loaded, so nothing runs and nobody is told — including the requester. Until 2026-08-21 this README prescribed `contents: read`, which `publish` exceeds. | Step 7's `permissions:` block, verbatim; no `falconet-ref:`. `falconet doctor` reports both. |
+| The run is `startup_failure`: no jobs, no logs, and nothing on the issue at all | The caller grants less than a job inside declares, or passes an input the workflow does not declare — `falconet-ref`, from a bash-era caller. GitHub checks both when the workflow file is loaded, so nothing runs and nobody is told — including the requester. | Step 7's `permissions:` block, verbatim; no `falconet-ref:`. |
 | **gate** is red and the issue has no comment | `prepare` hard-failed before the acknowledgment — the one failure the requester never hears about, because `contain` is conditioned on the gate having said `ready`. | Open the run; the last lines of **Prepare** name the cause. The usual one is the next row. |
 | A pull request with no plan comment on it | Your plan bot is not planning pull requests the App opens — a bot that only plans a member's pull requests, or a path filter falconet's branch does not match. | The bot's configuration. Nothing in falconet decides this. |
 | `prepare: working tree is dirty before the agent ran:`, listing paths | Something in your repository creates untracked files on checkout. | Gitignore them. |
-| `init: the working tree is dirty, and the commit init makes must carry only what it writes; commit or stash these first:` | `init` refuses a dirty clone for the same reason. | Commit or stash, then `init` again. |
-| `init: could not create label infra-request: POST …/labels: 403 Resource not accessible by personal access token — the token needs Issues: write`, or `init: could not store secret …: … — the token needs Secrets: write`, then `stopped at step N; what was done before it stands, and a second run carries on from here` | `FALCONET_SETUP_TOKEN` lacks a permission from the table in step 2 of the install. `init` writes the labels first so this happens before anything hard to undo. | Regenerate the token with the permission named, export it, `init` again. |
-| `falconet doctor` says `cannot tell … (403 … — needs Secrets: read)`, or `Issues: read`, `Administration: read` | The same token, read side. | The same. |
-| `init: state mismatch — refusing the code` on the terminal, *falconet init: state mismatch — refusing the code* in the browser | GitHub's redirect carried a `state` that is not the one this run sent — a stale tab from an earlier `init`, most likely. One is refused and `init` keeps waiting for the right redirect; a second ends step 3 as `skipped 3. … (the App was not registered: two redirects arrived with the wrong state)`, with nothing stored. | Close old tabs and run `init` again; it carries on from where it stopped. |
-| `skipped 3. … (the App was not registered: no redirect from GitHub within 10m)` | The browser never came back: the page was not opened, or **Create GitHub App** was not clicked in time. | `init` again. `--no-browser` prints the URL to open by hand; `--app-timeout` lengthens the wait. |
-| `cannot tell  3. the App is installed (timed out after 10m — install it at https://github.com/apps/<name>/installations/new, then run falconet doctor)` | The App is registered and both secrets are stored; the install click did not happen in time. | Open that URL → **Install** → **Only select repositories** → this repository. `Left for you:` repeats it. |
-| `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | The row above; or step 3. |
+| `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | Step 3: the App's **Install App** page with this repository selected, and `FALCONET_APP_ID` against the App ID on its page. |
 | `Resource not accessible by integration` | The caller's `permissions:` block is missing, or the App lacks one of its three permissions. | Steps 3 and 7. |
-| `sha256sum: WARNING: 1 computed checksum did NOT match` in the install step | The runner is not Linux x64 — both gitleaks' and falconet's pinned assets are the Linux x86-64 ones, and the digest is checked before anything is installed — or a release asset was replaced, which is what the digest in the tree exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
-| `the installed falconet reports '…', not v0.2.0` in the install step | The asset at that release runs but is not the version the tree pins. | The same as the row above. |
+| `sha256sum: WARNING: 1 computed checksum did NOT match` in the gitleaks install step | The runner is not Linux x64 — gitleaks' pinned asset is the Linux x86-64 one, and the digest is checked before anything is installed — or the asset was replaced, which is what the digest exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
+| `go: github.com/zetlen/falconet/cmd/falconet@vX.Y.Z: … unknown revision` in the falconet install step | The ref on the workflow's `uses:` line — the ref the action compiles falconet at — names a tag that does not exist: typed by hand, or not yet pushed. | Pin a tag from the tags page. |
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
+| `paths.allow is empty — set it in .github/falconet.json` in the Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
+| Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
+| `check: could not run [...]` in a Check step, and the run ends in **contain**'s hand-off | `check.command` names a program the runner does not have, or its first element is not on `PATH`. A check that could not run is neither a pass nor a failure the agent can act on, so the job stops. | Step 6: an argv the runner can start, or a setup step of your own before the check runs. Test it with `falconet check` from a clean checkout. |
+| Paused `ready-for-human`: *the repository's own check fails on it and I could not get it passing* | The agent's change failed `check.command` on every pass it was allowed. The branch is pushed and the check's output is in the comment. | Read the output. A check that fails on the base tree too fails every run; fix that first. |
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted if it could be, and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
-| The PR's explanation talks about a sandbox or a tenant you do not have | The shipped prompt's standing facts are the origin's. | Step 6, `prompts.implement`. |
+| The PR's explanation talks about a sandbox or a tenant you do not have | `prompts.implement` names a copy of the shipped prompt from before it stopped carrying the origin's standing facts. | Step 6: edit the copy, or delete it and the key so the shipped prompt is used. |
 
 ### Known limits
 
-- **The change is not validated before the pull request.** No `tofu
-  validate`, no `tofu fmt`: a syntactically broken change reaches the pull
-  request, and the plan bot is what says so. The guards that remain are the
-  path allowlist, the content denylist and the secret scan.
+- **The change is checked only as well as `check.command` checks it.** With
+  no command configured, nothing validates or formats the change before the
+  pull request, and the plan bot is what says so. The guards — the path
+  allowlist, the content denylist, the secret scan — decide whether a change
+  may ship, never whether it is right.
+- **A check that fails on the base tree fails every run.** The check runs
+  after the agent's first pass, not before it, and does not know which
+  failures the agent caused. Keep the default branch green, or the loop
+  spends its passes on a failure nobody asked the agent to fix.
 - **The plan bot is yours to run.** falconet cannot tell whether one is
   configured, or whether it plans the App's pull requests; the canary is the
   check.
 - **A failed gate is silent to the requester.** See the first troubleshooting
   row. Watch the first run.
-- **`@main` moves.** Pin a tag; `init` does.
-- **`doctor` cannot see the installation.** It holds no App key to ask with.
-  `init` confirms the install when it makes it; afterwards, the repository's
-  Settings → GitHub Apps, or the first run.
+- **`@main` moves.** Pin a tag.
+- **Nothing checks that the App is installed.** The repository's Settings →
+  GitHub Apps says, and so does the first run's `create-github-app-token`
+  step.
 - **Never put issue text in `args`.** If you call `action.yml` directly, its
   `args` input is split on whitespace and reaches a shell. Issue titles,
   bodies and comments are attacker-controlled, and the reason every verb
   takes files rather than strings is so that text never travels that way.
+
+## The binary on your machine
+
+Nothing in the install needs it: every job of the caller workflow compiles
+its own from this repository at the tag the workflow names, and the eight
+steps are `gh` and a browser. On a laptop the binary runs the verbs by hand
+— the same `prepare`, `check`, `commit`, `push` and `pause` the workflow
+runs, from a checkout, with the loop as a shell loop around `claude -p` and
+`falconet check` — and the test suite runs through it.
+
+```sh
+go install github.com/zetlen/falconet/cmd/falconet@v1.0.0
+```
+
+That is the whole of it. Name the newest tag from
+[the tags page](https://github.com/zetlen/falconet/tags); the `go` command
+fetches the module at that tag through Go's module proxy, checks it against
+the checksum database, compiles it for the machine you are on, and leaves it
+at `$(go env GOPATH)/bin/falconet` — put that directory on your `PATH` if it
+is not there already. It is the same command the action runs in every CI
+job, at the tag your caller workflow names. It needs a Go at least as new as
+the `go` line in this repository's `go.mod`; `GOTOOLCHAIN=auto`, the
+default, fetches one if yours is older.
+
+No release page, no asset to pick, no checksum to compare by hand, and
+nothing for macOS to quarantine: the file was compiled here, not fetched by
+a browser.
+
+**Check:** `falconet version` prints the tag and the Go it was built with — a
+v1.0.0 build on an Apple-silicon Mac says:
+
+```
+falconet v1.0.0 (go1.26.7 darwin/arm64)
+```
+
+A `go install` of a commit rather than a tag reports the pseudo-version the
+`go` command recorded instead of a tag, and a build from a checkout says
+`dev`; either runs.
+
+## Running the tests
+
+```sh
+make test                    # build, go test ./..., then the suite through dist/falconet
+bash tests/run.sh            # the suite alone (make build first)
+bash tests/run.sh prepare    # just the files whose name contains "prepare"
+make check                   # go vet, staticcheck, errcheck, govulncheck at ci.yml's pins
+```
+
+The suite is the acceptance bar and the incident record. Every case spawns
+`$FALCONET <verb>` — `dist/falconet`, or another build of the same contract —
+and reads stdout, the exit code and files on disk; nothing reaches inside its
+subject. It stubs `gitleaks` with a bash script handed in through
+`$GITLEAKS`, whose argv is part of the contract. GitHub is
+[`tests/fixtures/fake-github.py`](tests/fixtures/fake-github.py), a loopback
+server that answers from fixtures and records what it was asked; the verbs
+reach it through the real `gh`, whose requests follow `GITHUB_API_URL`, so
+the adapter is exercised end to end and a test token goes nowhere but
+loopback. Pushes land only in bare repositories under a temp directory;
+nothing touches the network, GitHub or any credential.
+
+`go test ./...` covers what the suite cannot see from outside a process: unit
+and property tests (`testing/quick`) beside the guard logic — a pause
+comment's truncation never splits a line and never exceeds its budget, the
+fence outruns every backtick run, the denylist matches in config order, the config merge, the
+slug and the in-flight pattern, the dispatcher's lists in step with what it
+implements. `go vet`, `staticcheck`, `errcheck` and `govulncheck` run in CI
+beside it, and `make check` runs the same four at the same pinned versions
+on a laptop: an ignored error is a red build. The suite needs bash, git, jq,
+awk, python3 (stdlib only) and `gh`; `go test` needs Go.
 
 ## Support
 

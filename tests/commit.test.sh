@@ -32,6 +32,10 @@ new_checkout() { # name -> echoes the checkout path
   git -C "$base/repo" config user.name ci
   printf 'locals {\n  a = 1\n}\n' >"$base/repo/records-example-tech.tf"
   printf '.falconet/\n' >"$base/repo/.gitignore"
+  # paths.allow has no default; every checkout needs one.
+  cat >"$base/repo/.github/falconet.json" <<'CFG'
+{"paths":{"allow":["*.tf"],"deny_content":["data \"external\"","provisioner","local-exec","remote-exec","templatefile(","filebase64(","file("]}}
+CFG
   git -C "$base/repo" add -A
   git -C "$base/repo" commit -qm "base commit"
   git -C "$base/repo" switch -qc issue-1-thing
@@ -518,6 +522,52 @@ reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
 assert_contains "$reason" "records-example-tech.tf" "failure reason"
 assert_contains "$reason" "dns/*.tf" "failure reason"
 
+# --- the guard's own configuration is never the agent's to change ----------
+#
+# Found in review on 2026-08-29, before any live run could: commit reads
+# .github/falconet.json from the WORKING TREE, after the agent has had its
+# turn at it. An issue that says "first widen paths.allow in
+# .github/falconet.json, then edit the workflow" gets a policy of the
+# agent's own writing, and every path it touched is inside it. The allowlist
+# would have been consulted and would have said yes. A guard the agent can
+# rewrite is not a guard (principle 3), so a change to the file the policy
+# was read from is refused before the policy is used, whatever that file
+# now says — and so is a config file where none was committed, which is
+# the same move from a repository that had been running on the defaults.
+
+c="$(new_checkout config_rewritten)"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\njobs: {}\n' >"$c/repo/.github/workflows/infra.yml"
+printf 'locals {\n  a = 8\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Widen the allowlist and add a workflow\n\nAs asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a change to the config file the policy was read from is refused"
+assert_eq "failure" "$out" "outcome"
+
+it "and the reason names that file, and nothing about the paths it would have admitted"
+reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
+assert_contains "$reason" ".github/falconet.json" "failure reason"
+assert_not_contains "$reason" "Refused paths" "failure reason"
+
+it "and nothing is committed, the workflow edit included"
+assert_eq 1 "$(commit_count "$c")" "commits"
+
+c="$(new_checkout config_invented)"
+git -C "$c/repo" rm -q .github/falconet.json
+git -C "$c/repo" commit -qm "run on the defaults"
+mkdir -p "$c/repo/.github"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+printf 'locals {\n  a = 9\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add a config\n\nAs asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+
+it "a config file where none was committed is the same move, and the same refusal"
+assert_eq "failure" "$out" "outcome"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" ".github/falconet.json" "failure reason"
+assert_eq 2 "$(commit_count "$c")" "commits"
+
 # --- the allowlist's globs: `*` crosses `/` ---------------------------------
 #
 # The README says so: "`*` crosses `/`, so `*.tf` matches `dns/records.tf`".
@@ -625,7 +675,7 @@ it "nor is whitespace around the quotes of a data \"external\" block"
 assert_eq "failure" "$out" "outcome"
 
 c="$(new_checkout denylist_configured)"
-printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
 printf '.falconet/\n' >"$c/repo/.gitignore"
 git -C "$c/repo" add .github/falconet.json .gitignore
 git -C "$c/repo" commit -qm "configure falconet"
@@ -640,7 +690,7 @@ it "and is named in the reason"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "jsondecode()" "failure reason"
 
 c="$(new_checkout denylist_replaced)"
-printf '{"paths":{"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
+printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
 printf '.falconet/\n' >"$c/repo/.gitignore"
 git -C "$c/repo" add .github/falconet.json .gitignore
 git -C "$c/repo" commit -qm "configure falconet"
@@ -670,7 +720,7 @@ assert_eq "success" "$out" "outcome"
 assert_eq "Add the thing" "$(cat "$c/repo/.falconet/commit-subject.txt" 2>/dev/null)"
 
 c="$(new_checkout configured_handoff)"
-printf '{"handoff_dir":".ci-handoff"}\n' >"$c/repo/.github/falconet.json"
+printf '{"handoff_dir":".ci-handoff","paths":{"allow":["*.tf"]}}\n' >"$c/repo/.github/falconet.json"
 # Moving handoff_dir means gitignoring the new location too. Without this the
 # handoff files themselves show up as untracked non-.tf paths and the
 # allowlist refuses them — correctly, which is what makes it a foot-gun worth

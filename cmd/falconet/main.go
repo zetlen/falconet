@@ -8,7 +8,7 @@
 //
 //	falconet <verb> [args]
 //
-// The four pipeline verbs are the stages of the pipeline (docs/decisions.md).
+// The five pipeline verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
 // `prompt`, `scan` and `config` are unlisted on purpose: public in the
@@ -37,21 +37,14 @@ import (
 	"github.com/zetlen/falconet/internal/handoff"
 )
 
-// version is stamped at build time: -ldflags "-X main.version=v0.1.0", which
-// is what the Makefile's release targets pass and what a release asset
-// carries. A binary built any other way says "dev" — except the one other way
-// ADR-0006 D6 blesses, `go install …@<tag>`, which passes no ldflags at all
-// and is handled in runVersion.
-var version = "dev"
-
 const usageText = `Usage: falconet <verb> [args]
 
   prepare   gate an issue, assign it, open a branch, lay out the handoff
+  check     run the repository's own check on the tree the agent left, and say
+            whether it passed
   commit    read the agent's work off the tree and commit it through the guards
   push      get the branch onto the remote the moment a commit exists
   pause     put an issue into a terminal state and say so where it will be read
-  doctor    check a repository against the install steps, and say which are missing
-  init      do the install steps: the labels, the secrets, the files, one commit
   version   print the version and the toolchain this binary was built with
 
 Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
@@ -61,27 +54,24 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // dispatcher's whole knowledge of what exists; a name in neither is a usage
 // error.
 var (
-	verbs    = []string{"prepare", "commit", "push", "pause", "doctor", "init", "version"}
+	verbs    = []string{"prepare", "check", "commit", "push", "pause", "version"}
 	unlisted = []string{"prompt", "scan", "config"}
 )
 
 // native is what this binary answers for: one entry per name in the two
-// lists above, and main_test.go holds the three in step. Through the port
-// (ADR-0006 D3 step 2) a known verb without an entry here was handed to its
-// bash script by a fallback; #19 deleted the scripts and the fallback with
-// them, so a verb that is known and not implemented is a build defect the
-// test refuses, never a runtime path.
+// lists above, and main_test.go holds the three in step — a verb that is
+// known and not implemented is a build defect the test refuses, never a
+// runtime path.
 var native = map[string]func(args []string) int{
 	"version": runVersion,
 	"prepare": runPrepare,
 	"config":  runConfig,
+	"check":   runCheck,
 	"commit":  runCommit,
 	"scan":    runScan,
 	"push":    runPush,
 	"pause":   runPause,
 	"prompt":  runPrompt,
-	"doctor":  runDoctor,
-	"init":    runInit,
 }
 
 func main() {
@@ -144,32 +134,25 @@ func runVersion(args []string) int {
 	return 0
 }
 
-// resolvedVersion is what this binary calls itself: the build-time stamp,
-// else the module version the go command recorded, else "dev". version
-// prints it; init pins the caller workflow's `uses:` to it (ADR-0006 D6:
-// one coordinate).
+// resolvedVersion is what this binary calls itself: the module version the
+// go command recorded, else "dev". version prints it.
 //
-// `go install github.com/zetlen/falconet/cmd/falconet@v0.1.0` is the
-// second install path ADR-0006 D6 names, and it accepts no ldflags: the
-// module proxy hands the go command a source zip, so nothing can stamp
-// `version` on the way through and every binary installed that way would
-// have said "dev" — for the one audience, people on laptops, whose only
-// way to know what they are running is this line. The go command records
-// the module version it resolved, so ask for it.
-//
-// Only when the stamp is absent, so a release asset always reports the
-// tag it was built for and never something a proxy computed. "(devel)" is
-// what a local `go build` puts there, which is what "dev" already says.
+// There is no build-time stamp. Every falconet that is not a checkout build
+// is `go install github.com/zetlen/falconet/cmd/falconet@<ref>` — in CI
+// through action.yml, on a laptop by hand — and that path accepts no
+// ldflags: the module proxy hands the go command a source zip, so nothing
+// could stamp a version on the way through. What the go command does
+// record is the version it resolved the ref to, in the binary's build
+// info: the tag itself for a tag, a pseudo-version for a branch or a
+// commit. So ask for that. "(devel)" is what a local `go build` from a
+// checkout puts there, and that is "dev".
 func resolvedVersion() string {
-	v := version
-	if v == "dev" {
-		if info, ok := debug.ReadBuildInfo(); ok {
-			if m := info.Main.Version; m != "" && m != "(devel)" {
-				v = m
-			}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if m := info.Main.Version; m != "" && m != "(devel)" {
+			return m
 		}
 	}
-	return v
+	return "dev"
 }
 
 // --- config -----------------------------------------------------------------

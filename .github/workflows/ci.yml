@@ -4,8 +4,7 @@
 # script handed in through $GITLEAKS, pushes only into bare repositories
 # under a temp directory, and never touches the network, GitHub or any
 # credential — which is why it can run here with no secrets
-# and no permissions at all. It runs once, through the binary this job builds:
-# since #19 there is nothing else in the tree that can answer it.
+# and no permissions at all. It runs once, through the binary this job builds.
 name: ci
 
 on:
@@ -45,12 +44,11 @@ jobs:
       - name: Go version
         run: go version
 
-      # vet, staticcheck and errcheck are the fail-closed discipline ADR-0006
-      # D1 chose instead of a type system: an ignored error is a red build.
-      # They are pinned dev tools, not module dependencies. govulncheck joined
-      # them with the one module dependency (#11): golang.org/x/crypto, for
-      # the sealed box, is the first thing in go.mod a vulnerability report
-      # could name, and a red build is how that report is read.
+      # vet, staticcheck and errcheck are the fail-closed discipline: an
+      # ignored error is a red build.
+      # They are pinned dev tools, not module dependencies. govulncheck reads
+      # the standard library and go.mod the same way: a vulnerability report
+      # that names either is a red build, and that is how it is read.
       - name: Vet, lint, and refuse ignored errors
         run: |
           set -euo pipefail
@@ -62,12 +60,12 @@ jobs:
           "$(go env GOPATH)/bin/errcheck" ./...
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      # The records: every ADR names the charter invariant it serves and the
-      # observation that should retire it, every accepted record is indexed in
-      # the register, and nothing links a file that is not in the tree. Its own
-      # unit tests run in the step below; this one is here so a broken record
-      # fails under its own name instead of inside `go test ./...`.
-      - name: The records agree
+      # The records: every register row cites a principle the README declares
+      # and links a section of the register that exists, and nothing in the
+      # prose links a file that is not in the tree. Its own unit tests run in
+      # the step below; this one is here so a broken record fails under its
+      # own name instead of inside `go test ./...`.
+      - name: Docs lint
         run: go run ./tools/docslint
 
       - name: Unit tests

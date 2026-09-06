@@ -7,24 +7,17 @@ import (
 	"testing/fstest"
 )
 
-// A corpus that agrees with itself: one invariant, one decision that serves
-// it, one section that records it. Every case below is this, broken in one
-// place, so a case names the break it exists for.
+// A corpus that agrees with itself: one principle, one decision that serves
+// it, one section that records it, and one retired row. Every case below is
+// this, broken in one place, so a case names the break it exists for.
 func corpus() fstest.MapFS {
 	return fstest.MapFS{
-		"docs/charter.md": &fstest.MapFile{Data: []byte(`# What falconet is for
-
-## The invariants
-
-### I1 · A person decides the apply
-
-falconet plans; it never applies.
-`)},
 		"docs/decisions.md": &fstest.MapFile{Data: []byte(`# The decision register
 
 | Decision | Serves | Reopen when | Record |
 | --- | --- | --- | --- |
 | It never applies | I1 | never | [never applies](#it-never-applies) |
+| An installer | retired | never | [never applies](#it-never-applies) |
 
 ## It never applies
 
@@ -32,8 +25,19 @@ Prose. See [operating](operating.md).
 `)},
 		"docs/operating.md":             &fstest.MapFile{Data: []byte("# Operating\n")},
 		"docs/history/0002-a-record.md": &fstest.MapFile{Data: []byte("# ADR-0002 — A record\n\nHow it was reached.\n")},
-		"README.md":                     &fstest.MapFile{Data: []byte("# falconet\n\nSee [the charter](docs/charter.md).\n")},
-		"AGENTS.md":                     &fstest.MapFile{Data: []byte("# Working on falconet\n\nRead [the register](docs/decisions.md).\n")},
+		"README.md": &fstest.MapFile{Data: []byte(`# falconet
+
+## The invariant principles
+
+### A person decides the apply
+
+**1.** falconet plans; it never applies.
+
+## Where this stands
+
+See [the register](docs/decisions.md).
+`)},
+		"AGENTS.md": &fstest.MapFile{Data: []byte("# Working on falconet\n\nRead [the register](docs/decisions.md).\n")},
 	}
 }
 
@@ -80,13 +84,13 @@ func TestEachBreakIsRefused(t *testing.T) {
 		break_ func(fstest.MapFS) fstest.MapFS
 		want   string
 	}{
-		{"Serves cites an invariant the charter does not declare", func(f fstest.MapFS) fstest.MapFS {
+		{"Serves cites a principle the README does not declare", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "docs/decisions.md", "| I1 |", "| I9 |")
-		}, "cites I9, which docs/charter.md does not declare"},
+		}, "cites I9, which README.md does not declare"},
 
-		{"Serves names no invariant at all", func(f fstest.MapFS) fstest.MapFS {
+		{"Serves names no principle at all", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "docs/decisions.md", "| I1 |", "| the reviewer |")
-		}, "names no invariant"},
+		}, "names no principle"},
 
 		{"an empty cell", func(f fstest.MapFS) fstest.MapFS {
 			return sub(f, "docs/decisions.md", "| never |", "| |")
@@ -108,20 +112,22 @@ func TestEachBreakIsRefused(t *testing.T) {
 			return sub(f, "docs/history/0002-a-record.md", "How it was reached.", "See [ADR-0001](0001-gone.md).")
 		}, "there is no docs/history/0001-gone.md in this tree"},
 
-		{"an invariant no decision serves", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/charter.md", "### I1 · A person decides the apply",
-				"### I2 · Nobody's business\n\nUnserved.\n\n### I1 · A person decides the apply")
-		}, "I2 is cited by no decision"},
+		{"a principle whose lead disagrees with its position", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "README.md", "**1.** falconet plans", "**2.** falconet plans")
+		}, "is principle 1 by position but its lead says **2.**"},
 
-		{"one invariant id declared twice", func(f fstest.MapFS) fstest.MapFS {
-			return sub(f, "docs/charter.md", "### I1 · A person decides the apply",
-				"### I1 · Something else\n\nProse.\n\n### I1 · A person decides the apply")
-		}, "declared twice"},
+		{"a principle with no numbered lead", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "README.md", "**1.** falconet plans", "falconet plans")
+		}, "has no `**1.**` lead"},
 
-		{"no charter", func(f fstest.MapFS) fstest.MapFS {
-			delete(f, "docs/charter.md")
+		{"no principles section", func(f fstest.MapFS) fstest.MapFS {
+			return sub(f, "README.md", "## The invariant principles", "## Some other heading")
+		}, "no `## The invariant principles` section"},
+
+		{"no README", func(f fstest.MapFS) fstest.MapFS {
+			delete(f, "README.md")
 			return f
-		}, "docs/charter.md: missing"},
+		}, "README.md: missing"},
 
 		{"no register", func(f fstest.MapFS) fstest.MapFS {
 			delete(f, "docs/decisions.md")
@@ -153,8 +159,36 @@ func TestEachBreakIsRefused(t *testing.T) {
 	}
 }
 
+// A principle no decision serves yet is allowed: principles may be declared
+// ahead of the decisions that will serve them, and the register only has to
+// be right about what it does cite.
+func TestAnUnservedPrincipleIsAllowed(t *testing.T) {
+	f := sub(corpus(), "README.md", "**1.** falconet plans; it never applies.",
+		"**1.** falconet plans; it never applies.\n\n### Nobody's business\n\n**2.** Unserved, and that is fine.")
+	found, err := lint(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("an unserved principle produced findings: %v", found)
+	}
+}
+
+// A `### ` heading outside the principles section is prose, not a principle:
+// it gets no id, and nothing asks it for a lead.
+func TestAHeadingOutsideTheSectionIsNotAPrinciple(t *testing.T) {
+	f := sub(corpus(), "README.md", "## Where this stands", "## Where this stands\n\n### Not a principle\n\nProse with no lead.")
+	found, err := lint(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("a heading outside the section produced findings: %v", found)
+	}
+}
+
 // The suite's own subject is this repository. Every other case above proves
-// the tool can say no; this one is the tree saying the records agree.
+// the tool can say no; this one is the tree passing its own check.
 func TestTheRecordsInThisRepository(t *testing.T) {
 	found, err := lint(os.DirFS("../.."))
 	if err != nil {
