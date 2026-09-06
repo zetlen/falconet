@@ -13,18 +13,19 @@
 #   FALCONET=/path/to/another/falconet tests/run.sh
 #
 # runs the same suite against another build of the same contract. The suite
-# is the acceptance bar and the incident record; `go test ./...` covers what
-# it cannot see from outside a process, and `make test` runs both. They need
-# bash, git, jq, awk, python3 (stdlib only) and gh. GitHub is
+# holds what can only be seen from outside the process: exit codes, the word
+# on stdout, the files left on disk, the state of the git repository, the
+# calls that reached the fake GitHub, and the argv the gitleaks stub was
+# handed. `go test ./...` holds the logic, and `make test` runs both. The
+# suite needs bash, git, gh, jq, awk and python3 (stdlib only). GitHub is
 # tests/fixtures/fake-github.py, served on loopback: the verbs reach it
 # through the real gh, whose requests follow GITHUB_API_URL, so a test token
-# goes nowhere but loopback. gitleaks is a bash stub handed in through
-# $GITLEAKS, pushes land only in bare repositories under a temp directory,
-# and nothing touches the network, GitHub or any credential — which is why
-# .github/workflows/ci.yml can run the whole suite on every pull request
-# from a GitHub-hosted runner. Run it locally too, before changing anything
-# under cmd/ or internal/: CI reports, and only the `protecc main` ruleset
-# decides whether a red report can be merged past.
+# goes nowhere but loopback. gitleaks and the harness are bash stubs, the
+# scanner handed in through $GITLEAKS, pushes land only in bare
+# repositories under a temp directory, and nothing touches the network,
+# GitHub or any credential — which is why .github/workflows/ci.yml can run
+# the whole suite on every pull request from a GitHub-hosted runner. Run it
+# locally too, before changing anything under cmd/ or internal/.
 
 set -uo pipefail
 

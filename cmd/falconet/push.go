@@ -4,44 +4,33 @@ package main
 // on it, so no terminal path in the pipeline can throw the work away.
 //
 // This verb is a subprocess sequence and nothing else — two or three git
-// commands and one line into $GITHUB_ENV — so the record lives here rather
-// than in an internal package: the comment above each step is the step.
+// commands and one line into $GITHUB_ENV — so the requirements are stated
+// here rather than in an internal package: the comment above each step is
+// the step.
 //
 // ---------------------------------------------------------------------------
-// The incident
+// Why the push is immediate and unconditional
 // ---------------------------------------------------------------------------
-// Until run 32093607680 (issue #36), the only `git push` in
-// .github/workflows/infra-issues.yml lived inside the `Open the pull request`
-// stage, behind `REVIEW == 'approved'`. Every other way out of the pipeline —
-// validation failed twice, the post-review amend broke validation, the review
-// did not approve — left the implementing agent's commit on the runner's disk
-// and nowhere else, and the runner is destroyed minutes later. That run parked
-// issue #36 with:
-//
-//	I prepared this change, but the automated review stage did not return a
-//	usable verdict, so I have not opened a pull request. This one needs a
-//	person.
-//
-// `git ls-remote --heads origin 'issue-36*'` returned nothing. The comment
-// handed a human a pointer to work that no longer existed anywhere. A promise
-// of a prepared change with no prepared change behind it is worse than
-// silence, because a person acts on it.
+// A runner is destroyed minutes after its job ends. A hand-over comment that
+// names work existing only on that runner names nothing, and a person acts
+// on it: a promise of a prepared change with no prepared change behind it
+// is worse than silence.
 //
 // So this verb runs the moment there is a commit to push — directly after
-// the commit verb, before validation, and before any of the branches that
-// decide what to do with the change. There is no second push and nothing to
-// amend: the repair loops are gone, and each run makes exactly one commit and
-// pushes it once. Pushing is unconditional on the verdict: the remote is
-// where work lives, and a branch with no pull request costs nothing (the
-// in-flight check in stage 1 and the terminal-state check at the bottom of
-// the workflow both key on OPEN PULL REQUESTS, not on branches, so an
-// abandoned branch never suppresses a later run).
+// the commit verb, and before any of the branches that decide what to do
+// with the change. There is no second push and nothing to amend: each run
+// makes exactly one commit and pushes it once. Pushing is unconditional on
+// the outcome: the remote is where work lives, and a branch with no pull
+// request costs nothing (the in-flight check in prepare and the
+// terminal-state check in the workflow's contain job both key on OPEN PULL
+// REQUESTS, not on branches, so an abandoned branch never suppresses a later
+// run).
 //
 // ---------------------------------------------------------------------------
 // Why --force-with-lease
 // ---------------------------------------------------------------------------
-// Not for an amend. Nothing in this pipeline rewrites history any more: no
-// agent holds git at all, and the commit verb appends one commit and stops.
+// Not for an amend. Nothing in this pipeline rewrites history: no agent
+// holds git at all, and the commit verb appends one commit and stops.
 // The flag is here for the one thing this push cannot see — a branch of this
 // name that was already on the remote before the run started, and was never
 // fetched.
@@ -51,7 +40,7 @@ package main
 // (git remembers it as the remote-tracking ref). It says no to a tip that
 // arrived from anywhere else, and it says no to a branch we hold no lease on
 // at all — that one is refused as "stale info" rather than clobbered. The
-// claim stage already renames the branch when `git ls-remote` finds a
+// prepare verb already renames the branch when `git ls-remote` finds a
 // collision, so this should be unreachable; this is what happens when it
 // becomes reachable anyway, and a refused push naming a lease we do not hold
 // is the right answer there — better than `--force`, which would silently
@@ -64,25 +53,21 @@ package main
 // ---------------------------------------------------------------------------
 // The remote URL is rewritten first, and rewritten TOKENLESS.
 //
-// It has to be rewritten at all because claude-code-action unsets the
-// credential actions/checkout left in .git/config and points `origin` at its
-// own GitHub App token, which it revokes when its step ends; every push in
-// this pipeline now happens directly after an agent step, so every one of them
-// meets a dead token unless it fixes the remote first. It has to be rewritten
-// WITHOUT a credential in it because a credential embedded in a remote URL
-// takes precedence over any credential helper: leave the revoked one in the
-// URL and the helper below is never consulted, and the push meets that dead
-// token anyway.
+// It is rewritten at all so that this push depends on nothing a checkout
+// left behind: whatever credential or remote the tree arrived with, the
+// push goes to $GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git with the token
+// this verb holds. It is rewritten WITHOUT a credential in it because a
+// credential embedded in a remote URL takes precedence over any credential
+// helper: leave one in the URL and the helper below is never consulted.
 //
 // The token reaches git through a one-shot credential helper passed with `-c`
-// on the command line, and so lands in neither of the two places the old
-// `https://x-access-token:$GH_TOKEN@...` URL put it (issue #41):
+// on the command line, and so lands in neither of the two places a
+// `https://x-access-token:$GH_TOKEN@...` URL would put it:
 //
-//   - NOT in .git/config, where it used to sit for the rest of the job. That
-//     is the part that mattered: the origin ran `tofu plan` over .tf files an
-//     agent had just written, and then handed a second agent Read over the
-//     same workspace. A `file("${path.module}/.git/config")` in agent-authored
-//     HCL, or a plain Read by the reviewer, found the token sitting there.
+//   - NOT in .git/config, where it would sit for the rest of the job and be
+//     readable by anything with a file read over the workspace — a
+//     `file("${path.module}/.git/config")` in agent-authored HCL, say, which
+//     the repository's own checks would evaluate and post.
 //   - NOT in argv, because the helper string names `$GH_TOKEN` and never its
 //     value: it is expanded by the shell git runs for the helper, not by this
 //     process, so the value never appears in this process's command line —
@@ -93,12 +78,10 @@ package main
 // already configured, so ours is the only one asked.
 //
 // Be exact about what that leaves open, because "the token is unreachable" is
-// a stronger claim than the truth. GH_TOKEN is still in the job environment —
-// the scripted steps genuinely need it. Both agent steps blank it in their own
-// `env:` blocks, which is a best-effort tightening rather than a closed door
-// (see the comment there), and /proc/self/environ remains an untested read
-// path for an agent whose Read tool may accept absolute paths outside the
-// workspace.
+// a stronger claim than the truth. GH_TOKEN is in the environment of the job
+// this verb runs in — the scripted steps genuinely need it — and this verb's
+// hygiene is not what keeps it from the agent. The agent runs in a job that
+// holds no token at all; that boundary is the workflow's, not this verb's.
 //
 // Requires GH_TOKEN, GITHUB_SERVER_URL and GITHUB_REPOSITORY for all of that;
 // with GH_TOKEN unset the remote is left exactly as it is and the push is made

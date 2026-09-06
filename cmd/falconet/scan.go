@@ -1,7 +1,7 @@
 package main
 
-// scan — the unlisted door to internal/scan, so that scan.test.sh spawns the
-// guard through the same binary as every verb. Not vocabulary: see the
+// scan — the unlisted door to internal/scan, so that the shell suite spawns
+// the guard through the same binary as every verb. Not vocabulary: see the
 // package's header for why it is not a verb and must not become one.
 
 import (

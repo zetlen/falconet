@@ -18,9 +18,9 @@ package main
 // the tree as it stands, and leaves one of two states in the handoff
 // directory: check-failure.txt, holding the command, how it ended and the
 // end of its output; or no such file. The caller owns the iteration — in
-// CI, the attempts unrolled in .github/workflows/falconet.yml, each
-// conditioned on the word this verb printed the time before; on a
-// workstation, a shell loop.
+// CI, the loop step in .github/workflows/falconet.yml, which runs
+// `falconet implement` and then this verb and turns on the word this verb
+// printed; on a workstation, a shell loop.
 //
 // The command is an argv, not a command line: os/exec, no shell, no quoting
 // (docs/decisions.md, "The language is Go"). It runs with this process's

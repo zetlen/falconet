@@ -57,7 +57,7 @@ func TestDefaultsStandAlone(t *testing.T) {
 	}
 	want := map[string]string{
 		"handoff_dir":        ".falconet",
-		"issue.queue_label":  "infra-request",
+		"issue.queue_label":  "falconet",
 		"labels.human":       "ready-for-human",
 		"blocking_labels[3]": "wontfix",
 	}
@@ -201,7 +201,7 @@ func TestGetAndArray(t *testing.T) {
 		}
 		return Raw(v)
 	}
-	if got := get(".issue.queue_label"); got != "infra-request" {
+	if got := get(".issue.queue_label"); got != "falconet" {
 		t.Errorf("got %q", got)
 	}
 	if got := get(".nope.deeper"); got != "null" {

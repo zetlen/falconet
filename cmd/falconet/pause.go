@@ -1,13 +1,10 @@
 package main
 
-// pause — put an infra-request issue into a terminal state and say so, in
+// pause — put an issue into a terminal state and say so, in
 // plain language, where the requester will see it. The comment and the two
-// rules it is held to are internal/pause, which carries the record; this file
-// is the flags, the body file, the three GitHub calls, and the exit code.
-//
-// It was `park` until #5's rename was taken, the commit after #15 landed the
-// port. No alias: there are no users yet, and two words for one verb is the
-// drift #5 was filed to prevent.
+// rules it is held to are internal/pause, which states the reason for each;
+// this file is the flags, the body file, the three GitHub calls, and the
+// exit code.
 //
 // GitHub calls go through the `Client` adapter in internal/github, backed by
 // `gh api`, against the repository GITHUB_REPOSITORY names. That variable is
@@ -25,7 +22,7 @@ import (
 	"github.com/zetlen/falconet/internal/pause"
 )
 
-const pauseUsageText = `pause — put an infra-request issue into a terminal state and say so, in
+const pauseUsageText = `pause — put an issue into a terminal state and say so, in
 plain language, where the requester will see it.
 
 Modes:
@@ -38,12 +35,12 @@ Modes:
     --preamble    the plain-language sentence the requester reads first
     --body        extra detail appended after the preamble. A file that is
                   missing or empty is no detail, not an error: a run paused
-                  before it planned has no plan.
+                  before the agent ran has no detail.
     --body-title  if given, --body is folded into a collapsed <details>
                   block and fenced as code. Use it for machine output
-                  (validation logs, plan errors); omit it when --body is
+                  (a failing check, a stack trace); omit it when --body is
                   already prose written for a human.
-    --unassign    release the claim (see the workflow's claim step)
+    --unassign    release the claim (the assignment prepare made)
     --branch      the pushed working branch carrying the commits this run
                   made, named and linked immediately under the preamble.
                   Pass it wherever a commit exists; pass nothing (or an
@@ -163,9 +160,8 @@ func runPause(args []string) int {
 		return 1
 	}
 
-	// Config is read where this verb stands, as it always was: pause never
-	// needed the repository root, because it operates on an issue and not on
-	// a tree.
+	// Config is read where this verb stands: pause operates on an issue and
+	// not on a tree, and has no need of the repository root.
 	cfg, err := config.Load(explicit)
 	if err != nil {
 		return failure("falconet: %v", err)
@@ -189,9 +185,9 @@ func runPause(args []string) int {
 
 	// `[[ -s FILE ]]`: a missing or empty body is no body — the workflow
 	// passes the handoff file a step MAY have written, and a run paused
-	// before it planned has no plan. A directory, or a file that exists and
-	// cannot be read, is a mechanical failure: the bash posted a comment with
-	// nothing where the detail should have been.
+	// before the agent ran has no detail. A directory, or a file that exists and
+	// cannot be read, is a mechanical failure: a comment with nothing where
+	// the detail should be must not be posted.
 	var body []byte
 	if bodyPath != "" {
 		info, err := os.Stat(bodyPath)

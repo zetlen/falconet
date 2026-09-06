@@ -80,9 +80,9 @@ they run on the pull request and post their output there — a
 plan, a test report, whatever this repository's checks produce —
 and a reviewer reads that, not your prediction of it.
 
-You have no git and no shell. Editing the files and writing that
-message IS committing, as far as you are concerned; a later
-scripted step does the rest.
+Do not commit, whatever tools you have. Editing the files and
+writing that message IS committing, as far as you are concerned;
+a later scripted step does the rest.
 
 You may edit files whose path matches {allow}. Nothing else — not
 the workflow, not the scripts, not AGENTS.md. A commit touching

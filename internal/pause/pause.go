@@ -1,6 +1,6 @@
 // Package pause is the hand-over comment the pause verb posts, and the two
 // rules the verb holds it to — the pause-label allowlist and the cap — with
-// the record of why above each. The verb itself, cmd/falconet/pause.go, is the
+// the reason above each. The verb itself, cmd/falconet/pause.go, is the
 // flags, the body file, the three GitHub calls, and the exit code.
 //
 // Nothing here touches the filesystem or the network: the verb hands in the
@@ -10,23 +10,19 @@
 // can carry.
 //
 // The staged pipeline has several places a request can legitimately stop:
-// the implementing agent needs more information, validation failed, the
-// reviewing agent did not approve, or a step simply died. Every one of them
-// comes through pause, so "stopped" always means the same three things
-// happened — a comment, a label, and the claim released — and never means
-// "silently nothing". A request that vanishes into an empty green run is the
-// failure mode this repository cares about most.
+// the agent needs more information, the repository's own check still fails
+// at the attempt cap, no change could be prepared, or a step simply died.
+// Every one of them comes through pause, so "stopped" always means the same
+// three things happened — a comment, a label, and the claim released — and
+// never means "silently nothing". A request that vanishes into an empty
+// green run is the failure mode this repository cares about most.
 //
 // # The branch pointer
 //
-// --branch exists because of run 32093607680 (issue #36), which parked an
-// issue saying "I prepared this change ... This one needs a person" when the
-// only push in the pipeline sat behind an approved review, so the prepared
-// change had been destroyed with the runner and the branch had never reached
-// the remote. Work is pushed as soon as it exists now (the push verb); this
-// is the other half of that fix — the hand-over comment says WHERE it is, in
-// a link a person can click, rather than describing work the reader has no
-// way to find.
+// --branch is how the hand-over comment says WHERE the work is, in a link a
+// person can click. Work is pushed as soon as it exists (the push verb), and
+// a comment that describes work the reader has no way to find promises
+// nothing; a comment that says "I prepared this change" must point at it.
 //
 // The pointer goes directly under the sentence that mentions it, and before
 // any collapsed <details> block a reader might not open. One fixed wording,
@@ -41,7 +37,7 @@
 //
 // --body is extra detail appended after the preamble. With --body-title it
 // is folded into a collapsed <details> block and fenced as code: that is for
-// machine output (validation logs, plan errors). Without it the body is
+// machine output (a failing check, a stack trace). Without it the body is
 // pasted as it is: that is for a --body that is already prose written for a
 // human (needs-info.md, failure-reason.txt), which must not be fenced.
 //
@@ -154,12 +150,12 @@ func Where(runURL string) string {
 	return "the Actions tab of this repository"
 }
 
-// Truncate is `head -c limit | sed '$d'`, then the note: the first limit
-// bytes, less whatever follows the last line break among them. The line the
-// budget fell inside goes whole — and so does a line that ended exactly at
-// the budget, because sed could not tell the two apart and neither could a
-// reader handed half of one. What remains is empty or ends in a newline, so
-// the note always starts a line of its own.
+// Truncate is the first limit bytes, less whatever follows the last line
+// break among them, then the note. The line the budget fell inside goes
+// whole — and so does a line that ended exactly at the budget, so that one
+// rule covers both and a reader is never handed half a line. What remains
+// is empty or ends in a newline, so the note always starts a line of its
+// own.
 func Truncate(body []byte, limit int, where string) []byte {
 	if limit < 0 {
 		limit = 0

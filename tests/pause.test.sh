@@ -153,19 +153,6 @@ assert_contains "$(cat "$WORK/empty.log")" "issues/36/labels" "API calls"
 it "and no --unassign releases nothing"
 assert_not_contains "$(cat "$WORK/empty.log")" "assignees" "API calls"
 
-# --- outside Actions, name the branch but invent no URL ---------------------
-
-( unset GITHUB_SERVER_URL
-  pause local -- --issue 36 --label ready-for-human --branch issue-36-thing \
-    --preamble "Parked." )
-comment="$(cat "$WORK/local.comment")"
-
-it "with no GITHUB_SERVER_URL the branch is named but not linked"
-assert_contains "$comment" 'branch `issue-36-thing`' "comment"
-
-it "with no GITHUB_SERVER_URL no URL is fabricated"
-assert_not_contains "$comment" "http" "comment"
-
 # --- where to post, and with what -------------------------------------------
 #
 # GITHUB_REPOSITORY is the one source for the repository — the variable
@@ -301,74 +288,12 @@ assert_contains \
   "$(git -C "$checkout/remote.git" show --name-only --format= issue-36-onboard)" \
   "records-papernapkin-tech.tf" "files on the remote branch"
 
-# --- the body: prose unfenced, machine output fenced, and the cap -----------
+# --- the body: a file that is not there is no body ----------------------------
 #
-# --body is extra detail under the preamble. Without --body-title it is
-# prose written for a human (needs-info.md, failure-reason.txt) and is pasted
-# as it is. With --body-title it is machine output (validation logs, plan
-# errors) and is folded into a collapsed <details> block and fenced as code,
-# so a requester sees one line and a click rather than a wall of tofu.
-
-printf 'First question?\n\nSecond question, with `code` in it.\n' >"$WORK/prose.md"
-pause prose -- \
-  --issue 36 \
-  --label needs-info \
-  --branch "" \
-  --body "$WORK/prose.md" \
-  --preamble "Before I can prepare this change I need a bit more from you:"
-comment="$(cat "$WORK/prose.comment")"
-
-it "a prose body is appended as it is, under the preamble"
-assert_contains "$comment" $'from you:\n\nFirst question?\n\nSecond question, with `code` in it.' "comment"
-
-it "and is not fenced or collapsed"
-assert_not_contains "$comment" '<details>' "comment"
-assert_not_contains "$comment" '```' "comment"
-
-printf 'Error: Unsupported argument\n\n  on dns/records.tf line 3\n' >"$WORK/log.txt"
-pause fenced -- \
-  --issue 36 \
-  --label ready-for-human \
-  --branch "" \
-  --body "$WORK/log.txt" \
-  --body-title "validation output" \
-  --run-url https://example.invalid/run/7 \
-  --preamble "I prepared this change, but it did not validate. This one needs a person."
-comment="$(cat "$WORK/fenced.comment")"
-
-it "a titled body is folded into a collapsed block, fenced as code"
-assert_contains "$comment" \
-  $'<details><summary>validation output</summary>\n\n```\nError: Unsupported argument\n\n  on dns/records.tf line 3\n```\n\n</details>\n' \
-  "comment"
-
-it "and the run log is cited after it"
-assert_contains "$comment" $'</details>\n\n(Run log: https://example.invalid/run/7)' "comment"
-
-# The bash closed the fence with printf '```' straight after `cat`, so a log
-# whose last line had no newline carried the fence on that line, where
-# markdown does not see it: the block never closed, and the run link and the
-# </details> rendered inside it.
-printf 'Error: no newline at the end' >"$WORK/nonl.txt"
-pause nonl -- \
-  --issue 36 --label ready-for-human --branch "" \
-  --body "$WORK/nonl.txt" --body-title "validation output" --preamble "Parked."
-comment="$(cat "$WORK/nonl.comment")"
-
-it "a titled body without a trailing newline still closes its fence"
-assert_contains "$comment" $'Error: no newline at the end\n```\n\n</details>' "comment"
-
-# A log that itself contains a ``` line would otherwise close the fence early
-# and spill the rest of the output, and the </details>, into the comment as
-# markdown. The fence outruns any backtick run the body carries, as the
-# pull-request body's does.
-printf 'before\n```\nafter\n' >"$WORK/ticks.txt"
-pause ticks -- \
-  --issue 36 --label ready-for-human --branch "" \
-  --body "$WORK/ticks.txt" --body-title "validation output" --preamble "Parked."
-comment="$(cat "$WORK/ticks.comment")"
-
-it "a body carrying a fence of its own is fenced with a longer one"
-assert_contains "$comment" $'\n````\nbefore\n```\nafter\n````\n\n</details>' "comment"
+# --body is extra detail under the preamble, read from a file. How it is
+# rendered — prose pasted as it is, machine output fenced and collapsed, and
+# the cap — is internal/pause's business and is tested there. What is seen
+# from outside is which files count as "no body" and which are a refusal.
 
 it "a --body that names no file is no body, not an error"
 pause nobody -- \
@@ -391,63 +316,6 @@ pause dirbody -- \
 assert_eq 1 "$?" "exit code"
 assert_eq "failure" "$(cat "$WORK/dirbody.out")" "stdout"
 assert_eq "" "$(cat "$WORK/dirbody.log")" "API calls"
-
-# The cap. A GitHub comment holds 65,536 characters; the body is cut at
-# 60,000 bytes so that the preamble, the branch pointer, the run link and the
-# cut note itself always fit beside it. As everywhere else in this pipeline,
-# content is dropped loudly or not at all: whole lines only, and a note in
-# place of the rest that says where the rest is.
-
-# 1,250 lines of 48 bytes each: exactly 60,000 bytes, not over the cap.
-awk 'BEGIN { for (i = 1; i <= 1250; i++) printf "line %04d %s\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }' \
-  >"$WORK/exact.txt"
-pause exact -- \
-  --issue 36 --label ready-for-human --branch "" \
-  --body "$WORK/exact.txt" --body-title "plan" --preamble "Parked."
-comment="$(cat "$WORK/exact.comment")"
-
-it "a body of exactly 60,000 bytes is posted whole"
-assert_contains "$comment" "line 1250 " "comment"
-assert_not_contains "$comment" "cut here" "comment"
-
-# One byte more, and the cut lands on a line boundary: the last (partial)
-# line inside the budget goes too, never half a line.
-awk 'BEGIN { for (i = 1; i <= 1250; i++) printf "line %04d %s\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; printf "x" }' \
-  >"$WORK/over.txt"
-pause over -- \
-  --issue 36 --label ready-for-human --branch "" \
-  --body "$WORK/over.txt" --body-title "plan" \
-  --run-url https://example.invalid/run/9 --preamble "Parked."
-comment="$(cat "$WORK/over.comment")"
-
-it "one byte over the cap is cut, and the cut says so"
-assert_contains "$comment" "[ ... cut here: the rest is in the run log," "comment"
-
-it "and the note points at the run log"
-assert_contains "$comment" $'cut here: the rest is in the run log,\n      https://example.invalid/run/9 ]' "comment"
-
-it "and the cut is on a line boundary: the line the budget fell inside is gone"
-assert_contains "$comment" "line 1249 " "comment"
-assert_not_contains "$comment" "line 1250 " "comment"
-
-it "and the cut note is inside the fence, so it renders as part of the output"
-assert_contains "$comment" $'      https://example.invalid/run/9 ]\n```\n\n</details>' "comment"
-
-# A body with lines far longer than the budget: the cut drops the one line
-# it fell inside, which can be most of the body. Loud, and whole-line.
-awk 'BEGIN { printf "short first line\n"; for (i = 0; i < 70000; i++) printf "y"; printf "\n" }' \
-  >"$WORK/longline.txt"
-pause longline -- \
-  --issue 36 --label ready-for-human --branch "" \
-  --body "$WORK/longline.txt" --preamble "Parked."
-comment="$(cat "$WORK/longline.comment")"
-
-it "a line the budget falls inside is dropped whole, not split"
-assert_not_contains "$comment" "yyyy" "comment"
-assert_contains "$comment" $'short first line\n' "comment"
-
-it "and without --run-url the note points at the Actions tab"
-assert_contains "$comment" "the Actions tab of this repository ]" "comment"
 
 # --- the pause labels come from config --------------------------------------
 #

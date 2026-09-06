@@ -21,7 +21,7 @@ CMD  := ./cmd/falconet
 
 .DEFAULT_GOAL := build
 
-.PHONY: build check lint-docs hooks test clean
+.PHONY: build check test clean
 
 # The development binary, out of tree, unstamped: the exact command AGENTS.md
 # and ci.yml name, so the suite runs against what those two describe.
@@ -37,22 +37,6 @@ check:
 	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 	$(GO) run github.com/kisielk/errcheck@v1.20.0 ./...
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
-
-# The records' own shape: every row of the register names the README
-# principle it serves and links the section that records it, and no document
-# links a file that is not here. `go test ./...` runs the same check against
-# this tree (TestTheRecordsInThisRepository), so this target is for reading
-# the findings, and for the pre-push hook.
-lint-docs:
-	$(GO) run ./tools/docslint
-
-# Turn the committed hook on for this clone. It is core.hooksPath, not a copy
-# into .git/hooks, so the hook a person runs is the hook in the tree — and one
-# `git config` undoes it. Hooks are a convenience and not the gate: CI runs
-# the same check, and `--no-verify` exists.
-hooks:
-	@git config core.hooksPath .githooks
-	@echo "core.hooksPath = .githooks; pre-push now runs 'make lint-docs'"
 
 test: build
 	$(GO) test ./...

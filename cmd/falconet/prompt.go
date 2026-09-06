@@ -20,10 +20,8 @@ package main
 //	{handoff}     the absolute handoff directory
 //	{workspace}   the absolute repository root
 //
-// The origin's prompt spelled these as `${{ github.workspace }}/.ci-handoff/`,
-// an Actions template expression that means nothing anywhere else — and the
-// whole point of a CLI-first design is that the same prompt text is what runs
-// locally.
+// Neither is an Actions template expression: the same prompt text is what
+// runs in CI and on a workstation.
 //
 // Two are what let one prompt serve every repository:
 //
@@ -31,15 +29,11 @@ package main
 //	              or `docs/*.md` or `config/**`
 //	{deny}        paths.deny_content, the same way, in config order
 //
-// The shipped prompt used to name the origin repository's allowlist and
-// denylist by hand — `.tf` files, `data "external"`, `provisioner` — beside
-// a block of standing facts about its registrar sandbox and its scratch
-// tenant, so every adopter's agent was told about a guard the config might
-// not agree with and a sandbox it did not have. The guard reads the config;
-// the prompt reads the same config, so what the agent is told it may touch
-// is what the commit stage will enforce, and the prompt carries nothing of
-// any particular repository's. Standing facts belong in the repository's
-// own AGENTS.md, which the prompt binds the agent to, or in an override.
+// The guard reads the config; the prompt reads the same config, so what the
+// agent is told it may touch is what the commit stage will enforce, and the
+// prompt carries nothing of any particular repository's. Standing facts
+// belong in the repository's own AGENTS.md, which the prompt binds the agent
+// to, or in an override.
 //
 // An empty paths.deny_content has nothing to name, and a sentence reading
 // "contains ." is worse than no sentence: every paragraph (a run of lines
@@ -47,11 +41,8 @@ package main
 // empty. The paragraph is the unit so that the prompt's author, not this
 // verb, decides where the sentence about refused content starts and ends.
 //
-// The shipped copy is the prompts package, embedded in this binary: the bash
-// read it from the tool's own checkout, and its default config pointed every
-// consumer at a path in their own repository instead (issue #3). There is no
-// default to point anywhere now; the config key is an override or it is
-// absent.
+// The shipped copy is the prompts package, embedded in this binary. No
+// default points anywhere; the config key is an override or it is absent.
 //
 // Exit codes: 0 = printed, 1 = no such prompt, 2 = usage error.
 
@@ -169,6 +160,25 @@ func runPrompt(args []string) int {
 		return 1
 	}
 
+	out, rc := resolvePrompt(name, cfg, root, outDir)
+	if rc != 0 {
+		return rc
+	}
+	if _, err := os.Stdout.WriteString(out + "\n"); err != nil {
+		fmt.Fprintf(os.Stderr, "falconet: cannot write to stdout: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// resolvePrompt is the whole of a prompt lookup: the config's override if
+// there is one and the shipped copy otherwise, rendered against the handoff
+// directory (outDir, or the config's, resolved and not created) and the
+// repository root. It is shared by the prompt verb, which prints the text,
+// and the implement verb, which hands it to the harness. Returns the text
+// and 0, or "" and the exit code the verb should end with, having said why
+// on stderr.
+func resolvePrompt(name string, cfg *config.Config, root, outDir string) (string, int) {
 	key := strings.ReplaceAll(name, "-", "_")
 	var text []byte
 	if override := cfg.Schema.Prompts[key]; override != "" {
@@ -178,18 +188,19 @@ func runPrompt(args []string) int {
 		}
 		if !isRegularFile(path) {
 			fmt.Fprintf(os.Stderr, "prompt: '%s' points at a file that is not there: %s\n", name, override)
-			return 1
+			return "", 1
 		}
+		var err error
 		text, err = os.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "falconet: cannot read %s: %v\n", path, err)
-			return 1
+			return "", 1
 		}
 	} else {
 		var ok bool
 		if text, ok = prompts.Read(name); !ok {
 			fmt.Fprintf(os.Stderr, "prompt: no prompt named '%s'\n", name)
-			return 1
+			return "", 1
 		}
 	}
 
@@ -197,18 +208,12 @@ func runPrompt(args []string) int {
 	// read, and a caller asking what the text says should not leave a directory
 	// behind. handoff.Init creates, so this repeats its resolution instead.
 	hd := handoff.Resolve(outDir, cfg, root)
-
-	out := render(string(text), hd, root, cfg.Schema.Paths.Allow, cfg.Schema.Paths.DenyContent)
-	if _, err := os.Stdout.WriteString(out + "\n"); err != nil {
-		fmt.Fprintf(os.Stderr, "falconet: cannot write to stdout: %v\n", err)
-		return 1
-	}
-	return 0
+	return render(string(text), hd, root, cfg.Schema.Paths.Allow, cfg.Schema.Paths.DenyContent), 0
 }
 
 // render substitutes the four placeholders into a prompt's text. Trailing
-// newlines are stripped and the caller puts exactly one back: what
-// `out="$(cat "$path")"` followed by `printf '%s\n'` always printed.
+// newlines are stripped and the caller puts exactly one back, so the output
+// ends in one newline whatever the file ended in.
 //
 // Paragraphs naming {deny} go first, when there is nothing to deny; then one
 // pass replaces every placeholder, so a value is never itself scanned for

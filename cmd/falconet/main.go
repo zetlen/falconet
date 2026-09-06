@@ -1,5 +1,5 @@
-// falconet — turn a plain-language infrastructure request into a pull request
-// a person can review, and stop there.
+// falconet — turn a request filed as an issue into a pull request a person
+// can review, and stop there.
 //
 // This is a dispatcher and nothing else. It resolves a verb and hands over,
 // so the verb owns its own stdout, its own exit code, and its own argument
@@ -8,7 +8,7 @@
 //
 //	falconet <verb> [args]
 //
-// The five pipeline verbs are the stages of the pipeline (docs/decisions.md).
+// The six pipeline verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
 // `prompt`, `scan` and `config` are unlisted on purpose: public in the
@@ -40,6 +40,7 @@ import (
 const usageText = `Usage: falconet <verb> [args]
 
   prepare   gate an issue, assign it, open a branch, lay out the handoff
+  implement run the agent, once, on the tree as it stands
   check     run the repository's own check on the tree the agent left, and say
             whether it passed
   commit    read the agent's work off the tree and commit it through the guards
@@ -54,7 +55,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // dispatcher's whole knowledge of what exists; a name in neither is a usage
 // error.
 var (
-	verbs    = []string{"prepare", "check", "commit", "push", "pause", "version"}
+	verbs    = []string{"prepare", "implement", "check", "commit", "push", "pause", "version"}
 	unlisted = []string{"prompt", "scan", "config"}
 )
 
@@ -63,15 +64,16 @@ var (
 // known and not implemented is a build defect the test refuses, never a
 // runtime path.
 var native = map[string]func(args []string) int{
-	"version": runVersion,
-	"prepare": runPrepare,
-	"config":  runConfig,
-	"check":   runCheck,
-	"commit":  runCommit,
-	"scan":    runScan,
-	"push":    runPush,
-	"pause":   runPause,
-	"prompt":  runPrompt,
+	"version":   runVersion,
+	"prepare":   runPrepare,
+	"config":    runConfig,
+	"implement": runImplement,
+	"check":     runCheck,
+	"commit":    runCommit,
+	"scan":      runScan,
+	"push":      runPush,
+	"pause":     runPause,
+	"prompt":    runPrompt,
 }
 
 func main() {
@@ -159,8 +161,8 @@ func resolvedVersion() string {
 //
 // Print what internal/config and internal/handoff would tell a verb. Unlisted
 // on purpose: the libraries have no process to spawn at, and the suite's rule
-// is that no test reaches inside its subject. This is that process, and
-// config.test.sh is what it answers to.
+// is that no test reaches inside its subject. This is that process, and the
+// shell suite is what it answers to.
 
 const configUsageText = `config — print what the config file resolves to, and where the handoff goes.
 
