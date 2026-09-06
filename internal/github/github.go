@@ -98,8 +98,8 @@ func ParseRemoteURL(remote, host string) (owner, name string, err error) {
 		// scp-like: [user@]HOST:path. The colon is the split, and there is
 		// no slash before it. Only an '@' BEFORE the colon is a user: the
 		// path after it may carry one (`host:o/r@v1` is a remote git
-		// accepts), and taking the first '@' anywhere once sliced past the
-		// colon and panicked.
+		// accepts), and taking the first '@' anywhere would slice past the
+		// colon.
 		colon := strings.Index(remote, ":")
 		if colon < 0 || strings.Contains(remote[:colon], "/") {
 			return "", "", fmt.Errorf("%q is not a git remote URL", remote)

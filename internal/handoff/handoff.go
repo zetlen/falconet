@@ -2,9 +2,8 @@
 // that knows $GITHUB_ENV is optional.
 //
 // Verbs never call each other. They leave files for each other in
-// handoff_dir (default .falconet/, gitignored), exactly as the stage scripts
-// always did, which is what lets the identical sequence run on a workstation
-// with no GitHub context around it.
+// handoff_dir (default .falconet/, gitignored), which is what lets the
+// identical sequence run on a workstation with no GitHub context around it.
 //
 // If you move handoff_dir, gitignore the new location. The commit verb's path
 // allowlist looks at everything the working tree reports as changed, so an

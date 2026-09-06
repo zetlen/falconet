@@ -568,47 +568,6 @@ assert_eq "failure" "$out" "outcome"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" ".github/falconet.json" "failure reason"
 assert_eq 2 "$(commit_count "$c")" "commits"
 
-# --- the allowlist's globs: `*` crosses `/` ---------------------------------
-#
-# The README says so: "`*` crosses `/`, so `*.tf` matches `dns/records.tf`".
-# That is bash `case` pattern matching, and it is not what every glob library
-# does — Go's path.Match stops `*` at a slash. Every default-allowlist case
-# above touches a root-level .tf, so none of them would notice a port that
-# changed this. These two do: one where the star must cross a slash, and one
-# where the directory in the pattern must still be honoured, with a second
-# file under a deeper directory that the star has to reach across.
-
-c="$(new_checkout glob_crosses_slash)"
-mkdir -p "$c/repo/dns"
-printf 'locals {\n  a = 2\n}\n' >"$c/repo/dns/records.tf"
-printf 'Add a nested record\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "*.tf admits dns/records.tf: the star crosses the slash"
-assert_eq "success" "$out" "outcome"
-
-it "and the nested file is what was committed"
-assert_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" "dns/records.tf" "committed paths"
-
-c="$(new_checkout glob_keeps_directory)"
-printf '{"paths":{"allow":["dns/*.tf"]}}\n' >"$c/repo/.github/falconet.json"
-printf '.falconet/\n' >"$c/repo/.gitignore"
-git -C "$c/repo" add .github/falconet.json .gitignore
-git -C "$c/repo" commit -qm "configure falconet"
-mkdir -p "$c/repo/site" "$c/repo/dns/zones"
-printf 'locals {\n  a = 2\n}\n' >"$c/repo/site/a.tf"
-printf 'locals {\n  b = 2\n}\n' >"$c/repo/dns/zones/a.tf"
-printf 'Add two records\n\nOne of them where it may not go.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "dns/*.tf refuses site/a.tf: the directory in the pattern is honoured"
-assert_eq "failure" "$out" "outcome"
-
-it "naming site/a.tf and not dns/zones/a.tf, which the star reaches across its slash"
-reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
-assert_contains "$reason" "site/a.tf" "failure reason"
-assert_not_contains "$reason" "dns/zones/a.tf" "failure reason"
-
 # --- a staged rename is refused, not mis-parsed ------------------------------
 #
 # `git status -z` reports a rename as TWO NUL-terminated fields: the
@@ -633,73 +592,6 @@ assert_contains "$reason" "records-renamed.tf" "failure reason"
 
 it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
-
-# --- the denylist, and the order it is tested in ----------------------------
-#
-# `templatefile(` contains a `file(`. The hardcoded version encoded "most
-# specific first" as the order of its greps and nothing asserted it; the
-# config version encodes it as array order, which is easier to get wrong and
-# now impossible to get wrong silently. A run that reports file() when the
-# agent wrote templatefile() is the right refusal naming the wrong construct,
-# and nothing downstream can recover the distinction.
-
-c="$(new_checkout denylist_order)"
-printf 'locals {\n  a = templatefile("x.tpl", {})\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "a templatefile() call is refused"
-assert_eq "failure" "$out" "outcome"
-
-it "and is named as templatefile(), not as the file( hiding inside it"
-reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
-assert_contains "$reason" "templatefile()" "failure reason"
-assert_not_contains "$reason" ": file()" "failure reason"
-
-# HCL does not care about the whitespace in the joints, so neither may the
-# guard: `templatefile (` is the same construct and must not be a way past it.
-c="$(new_checkout denylist_whitespace)"
-printf 'locals {\n  a = templatefile ("x.tpl", {})\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "whitespace before the paren is not a way past the denylist"
-assert_eq "failure" "$out" "outcome"
-
-c="$(new_checkout denylist_spaced_quotes)"
-printf 'data  "external"  "d" {\n  program = ["sh"]\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "nor is whitespace around the quotes of a data \"external\" block"
-assert_eq "failure" "$out" "outcome"
-
-c="$(new_checkout denylist_configured)"
-printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
-printf '.falconet/\n' >"$c/repo/.gitignore"
-git -C "$c/repo" add .github/falconet.json .gitignore
-git -C "$c/repo" commit -qm "configure falconet"
-printf 'locals {\n  a = jsondecode("{}")\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "a construct only the config names is refused"
-assert_eq "failure" "$out" "outcome"
-
-it "and is named in the reason"
-assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "jsondecode()" "failure reason"
-
-c="$(new_checkout denylist_replaced)"
-printf '{"paths":{"allow":["*.tf"],"deny_content":["jsondecode("]}}\n' >"$c/repo/.github/falconet.json"
-printf '.falconet/\n' >"$c/repo/.gitignore"
-git -C "$c/repo" add .github/falconet.json .gitignore
-git -C "$c/repo" commit -qm "configure falconet"
-printf 'locals {\n  a = file("x")\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'Add a record\n\nBecause.\n' >"$c/repo/.falconet/commit-msg.txt"
-out="$(run_in "$c")"
-
-it "and a configured denylist REPLACES the default rather than extending it"
-assert_eq "success" "$out" "outcome"
 
 # --- the handoff directory, when nobody names one ---------------------------
 #

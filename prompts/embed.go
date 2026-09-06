@@ -1,18 +1,13 @@
 // Package prompts is the shipped prompts, embedded in the binary.
 //
-// They are embedded because of issue #3. The bash `prompt` verb documented
-// "with no override the shipped prompts/<name>.md is printed" and could not
-// do it: the default config itself set prompts.implement to
-// prompts/implement.md, a path relative to the CONSUMER's repository, so a
-// consumer that had not copied the prompts in met "points at a file that is
-// not there", and the shipped copy — in the tool's own checkout — was
-// unreachable by any documented move. A binary has no checkout for a
-// default to fail to resolve against: the prompt is in it, the default
-// config no longer names a path, and the config key is an override and
-// nothing else. The bug is impossible rather than fixed.
+// They are embedded so that "with no override the shipped prompts/<name>.md
+// is printed" needs no checkout to be true: the prompt is in the binary, the
+// default config names no path, and the config key is an override and
+// nothing else. A consumer's repository need not carry a copy for the
+// default to resolve.
 //
-// The .md files stay beside this file, at the path the README links and the
-// path the first consumer's AGENTS.md prescribes diffing its copy against.
+// The .md files stay beside this file, at the path the README links, so a
+// consumer with a copy of its own has something to diff it against.
 package prompts
 
 import "embed"
@@ -25,10 +20,9 @@ import "embed"
 var FS embed.FS
 
 // Read returns the shipped prompt called name — the file name without its
-// .md — and whether there is one. The bash built "<tool>/prompts/$NAME.md"
-// from the name as given, so `prompt ../README` printed falconet's own
-// README; an embed.FS opens nothing but a clean relative file name, so a
-// name with a path in it is simply not a prompt.
+// .md — and whether there is one. An embed.FS opens nothing but a clean
+// relative file name, so a name with a path in it (`../README`, say) is
+// simply not a prompt rather than a file read off the tool's own tree.
 func Read(name string) ([]byte, bool) {
 	data, err := FS.ReadFile(name + ".md")
 	if err != nil {

@@ -64,6 +64,14 @@ func (g *GH) do(method, path string, in, out any) error {
 	}
 
 	cmd := exec.Command("gh", args...)
+	// The header above is what authenticates the request, on every host.
+	// GH_TOKEN is what lets gh start at all: inside GitHub Actions, gh
+	// refuses to run with no token in its environment, whatever the
+	// request carries, and the token a verb resolved is not necessarily
+	// in the environment gh inherits.
+	if g.token != "" {
+		cmd.Env = append(os.Environ(), "GH_TOKEN="+g.token)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

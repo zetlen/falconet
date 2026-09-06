@@ -3,12 +3,12 @@ package main
 // prepare — decide whether an issue is this pipeline's to work, and if it
 // is, assign it and lay out everything the implementing agent will need.
 //
-// The gate — the rules, their order, the two modes, and the record of why —
-// is internal/prepare, and so are the request's markdown and the branch
+// The gate — the rules, their order, the two modes, and the reason for each
+// — is internal/prepare, and so are the request's markdown and the branch
 // name. This file is the flags, the event file, the GitHub calls, the
-// clean-tree assertion, the handoff files and git, in the script's
-// order, and the exit code. It changes directory to the repository root and
-// stays there, as every verb that works on a tree does.
+// clean-tree assertion, the handoff files and git, in order, and the exit
+// code. It changes directory to the repository root and stays there, as
+// every verb that works on a tree does.
 //
 // Prints exactly one word on stdout — the outcome — and nothing else:
 //
@@ -25,7 +25,7 @@ package main
 //
 //	issue.json          the one snapshot every later step reads
 //	ack.md              the comment posted to the requester (entry only)
-//	request.md          the request in markdown — both agents read this first
+//	request.md          the request in markdown — the agent reads this first
 //	base-sha.txt        the commit this run started from
 //	branch.txt          the working branch
 //
@@ -82,7 +82,7 @@ to stderr, because "ineligible" on its own is not a diagnostic.
 Outputs on the ready path, written into the handoff directory:
   issue.json          the one snapshot every later step reads
   ack.md              the comment posted to the requester (entry only)
-  request.md          the request in markdown — both agents read this first
+  request.md          the request in markdown — the agent reads this first
   base-sha.txt        the commit this run started from
   branch.txt          the working branch
 
@@ -106,9 +106,9 @@ func prepareUsage() int {
 }
 
 // eventPayload is the part of a webhook payload the gate reads, every field
-// optional, as jq read them: `.issue.labels[]?.name`, `.issue.body // ""`,
-// `.issue.state // "open"`, `.action // ""`, whether `.issue.pull_request` is
-// set, and `.comment.user.type`.
+// optional: `.issue.labels[].name`, `.issue.body` (null is ""),
+// `.issue.state` (null is "open"), `.action` (null is ""), whether
+// `.issue.pull_request` is set, and `.comment.user.type`.
 type eventPayload struct {
 	Action string `json:"action"`
 	Issue  struct {
@@ -128,8 +128,8 @@ type eventPayload struct {
 
 // readEvent reads the gate's inputs from the event file. The file must
 // exist and parse; a payload whose top-level value is null or false is "not
-// valid JSON", as `jq -e .` reported it, and one that is not an object at all
-// is refused by name rather than read as an issue with nothing on it.
+// valid JSON", and one that is not an object at all is refused by name
+// rather than read as an issue with nothing on it.
 func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
 	var ev prepare.Event
 	var snap prepare.Snapshot
@@ -165,7 +165,7 @@ func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
 		snap.State = *p.Issue.State
 	}
 	ev.Action = p.Action
-	// jq's `if .issue.pull_request then`: anything but null and false.
+	// Set means anything but null and false.
 	pr := bytes.TrimSpace(p.Issue.PullRequest)
 	ev.PullRequest = len(pr) > 0 && string(pr) != "null" && string(pr) != "false"
 	ev.Bot = p.Comment.User.Type == "Bot"
@@ -272,8 +272,8 @@ func runPrepare(args []string) int {
 	if issueArg == "" {
 		return prepareUsage()
 	}
-	// The event schema used to guarantee this was an integer. A CLI caller
-	// guarantees nothing, and the number goes into a regex and a branch name.
+	// A CLI caller guarantees nothing about this argument, and the number
+	// goes into a regex and a branch name.
 	if !digits.MatchString(issueArg) {
 		fmt.Fprintln(os.Stderr, "--issue must be a number")
 		return 2
@@ -426,13 +426,11 @@ func runPrepare(args []string) int {
 
 	// --- rule 4: no open pull request is already carrying it --------------------
 	//
-	// See internal/prepare for the record. The list is fetched whole, then
+	// See internal/prepare for the reasoning. The list is fetched whole, then
 	// inspected: the first call that needs GitHub on the event path. A list
-	// that cannot be fetched is a mechanical failure here, where the bash
-	// captured `gh pr list` with no check and fell through to ready on an
-	// empty answer — a gate that said ready on an unknown. Refusing is the
-	// departure, and it is the right one: in-flight is the one rule whose
-	// wrong answer opens a second pull request on the same issue.
+	// that cannot be fetched is a mechanical failure, never an empty answer:
+	// a gate that says ready on an unknown is wrong, and in-flight is the one
+	// rule whose wrong answer opens a second pull request on the same issue.
 	if err := connect(); err != nil {
 		return die("prepare: could not list open pull requests for #%d: %v", number, err)
 	}
@@ -457,12 +455,11 @@ func runPrepare(args []string) int {
 	// The tree must be clean before anything else happens.
 	//
 	// The agent's outcome is read from the state of the tree, so the tree has
-	// to be clean before it starts or the reading is a lie. The origin
-	// asserted this AFTER the assignment, the acknowledgment and the branch —
-	// so a dirty tree thanked the requester, assigned the issue, cut a branch
-	// and then died. The human-facing skill put it in preflight. Preflight is
-	// right, and this is as early as it can go while still being free: after
-	// the gate, which touches nothing, and before the first mutating call.
+	// to be clean before it starts or the reading is a lie. This is as early
+	// as the check can go while still being free: after the gate, which
+	// touches nothing, and before the first mutating call. Asserted any
+	// later, a dirty tree would thank the requester, assign the issue and cut
+	// a branch before dying.
 	if err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Run(); err != nil {
 		return die("prepare: %s is not a git repository", root)
 	}
@@ -501,12 +498,11 @@ func runPrepare(args []string) int {
 	// later.
 	//
 	// A 404 is not a failure to clear it: GitHub answers "Label does not
-	// exist" when the label is not on the issue, and `gh issue edit
-	// --remove-label` removed nothing and said nothing in that case — which
-	// is what a retry of a re-entry run that had already cleared it, or a
-	// person clearing it between the event and the run, looks like. The
-	// contradiction the hard failure guards against cannot be standing if
-	// the label is already gone.
+	// exist" when the label is not on the issue, which is what a retry of a
+	// re-entry run that had already cleared it, or a person clearing it
+	// between the event and the run, looks like. The contradiction the hard
+	// failure guards against cannot be standing if the label is already
+	// gone.
 	if mode == prepare.ReEntry {
 		err := client.RemoveIssueLabel(owner, name, number, rules.NeedsInfo)
 		var apiErr *github.Error
@@ -573,9 +569,9 @@ func runPrepare(args []string) int {
 		}
 	}
 
-	// The request, in markdown, on disk. Both agents read this file; neither
-	// has gh. Built from the snapshot taken before the acknowledgment was
-	// posted, which is why the acknowledgment is not in it: the agents should
+	// The request, in markdown, on disk. The agent reads this file; it has
+	// no gh. Built from the snapshot taken before the acknowledgment was
+	// posted, which is why the acknowledgment is not in it: the agent should
 	// read the requester's words, not this pipeline's.
 	thread := make([]prepare.Comment, 0, len(snap.comments))
 	for _, c := range snap.comments {
@@ -588,8 +584,8 @@ func runPrepare(args []string) int {
 	}
 	say("wrote request.md (%d lines)", bytes.Count([]byte(request), []byte{'\n'}))
 
-	// The branch name is mechanics, not judgment (internal/prepare.Slug
-	// carries the record): the prefix, the number, the slug.
+	// The branch name is mechanics, not judgment (internal/prepare.Slug says
+	// how): the prefix, the number, the slug.
 	branch := prepare.BranchName(rules.BranchPrefix, number, prepare.Slug(snap.issue.Title))
 
 	// A previous run can leave this branch on the remote — its PR closed, or
@@ -628,7 +624,7 @@ func runPrepare(args []string) int {
 	// script rather than by an agent's tooling, so without this the commit
 	// verb dies on "Please tell me who you are". Set only when unset: on a
 	// workstation this is a real repository with a real author, and
-	// overwriting that would be a surprise the origin never had to consider.
+	// overwriting that would be a surprise.
 	if exec.Command("git", "config", "user.email").Run() != nil {
 		for _, kv := range [][2]string{
 			{"user.name", "github-actions[bot]"},

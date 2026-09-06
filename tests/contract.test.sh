@@ -56,13 +56,16 @@ pause_calls="$(awk '
 
 # --- the agent holds nothing it could publish with -------------------------
 
-it "the agent's tool grant is exactly the five file tools, on every agent invocation"
-assert_contains "$wf" '--allowedTools "Read,Edit,Write,Grep,Glob"' "workflow"
-assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
-  "$(grep -c -- '--allowedTools "Read,Edit,Write,Grep,Glob"' <<<"$wf_code")" "grants per agent invocation"
+it "the agent job holds exactly one secret, the model key, and exports it under the caller's name"
+loop_step="$(awk '/name: Implement, and check, until the check passes or the cap/{f=1; print; next} f && /^      - /{exit} f' <<<"$implement_job")"
+assert_eq 1 "$(grep -c 'secrets\.' <<<"$implement_job")" "secret references in the implement job"
+assert_contains "$loop_step" 'MODEL_API_KEY: ${{ secrets.model-api-key }}' "the loop step"
+assert_contains "$loop_step" 'export "$MODEL_API_KEY_ENV=$MODEL_API_KEY"' "the loop step"
+assert_eq 0 "$(grep -c 'anthropic' <<<"$implement_job")" "harness-specific names in the implement job"
 
-it "and names no Bash tool, which is the whole boundary"
-assert_not_contains "$wf" 'Bash(' "workflow"
+it "and the default harness grants the five file tools and no shell"
+assert_contains "$(grep -A8 '"harness"' "$REPO_ROOT/internal/config/config.go")" '"Read,Edit,Write,Grep,Glob"' "the default harness.command"
+assert_not_contains "$(grep -A8 '"harness"' "$REPO_ROOT/internal/config/config.go")" 'Bash' "the default harness.command"
 
 it "the agent job holds no permissions at all"
 assert_contains "$wf" "permissions: {}" "workflow"
@@ -81,7 +84,7 @@ assert_not_contains "$implement_job" "steps.token.outputs.token" "implement job"
 
 # --- exactly one of each thing that must happen once -----------------------
 
-it "nothing plans: the plan bot on the pull request does that"
+it "nothing plans: the repository's own checks on the pull request do that"
 assert_eq 0 "$(grep -c -E 'verb: (validate|assemble)|falconet plan-env|plan-env:' <<<"$wf_code")" "plan-side steps"
 assert_not_contains "$action_code" "setup-opentofu" "action"
 
@@ -104,37 +107,46 @@ assert_eq 1 "$(grep -c 'verb: commit' <<<"$wf_code")" "commit steps"
 # failure-reason file — is a guard the agent can iterate against, and this
 # is where it would show up.
 
-agent_steps="$(grep -c 'claude-code-action' <<<"$implement_job")"
+it "the agent runs through the implement verb, and only inside the loop"
+assert_eq 1 "$(grep -c 'falconet implement' <<<"$implement_job")" "implement invocations"
+assert_contains "$loop_step" 'falconet implement $FALCONET_CONFIG_FLAG' "the loop step"
+assert_eq 0 "$(grep -c 'claude-code-action\|claude_args\|allowedTools' <<<"$wf_code")" "harness-specific steps in the workflow"
 
-it "the repository's own check runs after every agent pass"
-assert_eq "$agent_steps" "$(grep -c 'verb: check' <<<"$implement_job")" "check steps per agent step"
+it "the repository's own check runs after every agent pass, and the loop turns on its word"
+assert_eq 1 "$(grep -c 'falconet check' <<<"$implement_job")" "check invocations"
+assert_contains "$loop_step" 'word="$(falconet check $FALCONET_CONFIG_FLAG)"' "the loop step"
+assert_contains "$loop_step" '[ "$word" = fail ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ] || break' "the loop step"
 
-it "and there are three attempts, which is what the max-attempts input describes"
-assert_eq 3 "$agent_steps" "agent invocations"
+it "and the cap is the max-attempts input"
+assert_contains "$loop_step" 'MAX_ATTEMPTS: ${{ inputs.max-attempts }}' "the loop step"
 assert_contains "$wf_code" "max-attempts:" "the workflow's inputs"
-assert_contains "$wf_code" "default: 3" "the max-attempts default"
 
-it "the first attempt is unconditional"
-first="$(awk '/name: Implement the change$/{f=1} f && /uses: anthropics/{print "uses"; exit} f && /if:/{print "if"; exit}' <<<"$implement_job")"
-assert_eq "uses" "$first" "the first agent step's first key"
-
-it "and every further attempt is conditioned on the check before it saying fail, and on the cap"
-assert_eq 2 "$(grep -c "if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2" <<<"$implement_job")" "attempt 2's conditions (agent and check)"
-assert_eq 2 "$(grep -c "if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3" <<<"$implement_job")" "attempt 3's conditions (agent and check)"
-
-it "and on nothing else: no condition in the agent job reads the commit's outcome or a guard's file"
+it "and on nothing else: nothing in the loop reads the commit's outcome or a guard's file"
+assert_eq 0 "$(grep -c 'steps.commit\|failure-reason\|verb: commit' <<<"$loop_step")" "guard references in the loop"
 assert_eq 0 "$(grep 'if:' <<<"$implement_job" | grep -c 'steps.commit\|failure-reason\|outcome == .failure.')" "retry conditions naming a guard"
 
-it "the commit runs after the last check, and is not conditioned on its word"
-last_check="$(grep -n 'verb: check' <<<"$implement_job" | tail -1 | cut -d: -f1)"
+it "the harness is installed by the caller's snippet, before the loop and after the tree arrives"
+assert_contains "$implement_job" 'run: ${{ inputs.harness-setup }}' "the implement job"
+setup_at="$(grep -n 'inputs.harness-setup' <<<"$implement_job" | cut -d: -f1)"
+loop_at="$(grep -n 'falconet implement' <<<"$implement_job" | cut -d: -f1)"
+branch_at="$(grep -n 'name: Take the working branch' <<<"$implement_job" | cut -d: -f1)"
+assert_eq "true" "$([[ "$branch_at" -lt "$setup_at" && "$setup_at" -lt "$loop_at" ]] && echo true || echo false)" \
+  "branch ($branch_at) < harness setup ($setup_at) < loop ($loop_at)"
+
+it "and that snippet is the only template expression inside a run: block"
+assert_eq 1 "$(grep -c 'run: \${{' <<<"$wf_code")" "run: lines that are expressions"
+
+it "the commit runs after the loop, and is not conditioned on its word"
+loop_at="$(grep -n 'falconet check' <<<"$implement_job" | cut -d: -f1)"
 commit_at="$(grep -n 'verb: commit' <<<"$implement_job" | cut -d: -f1)"
-assert_eq "true" "$([[ -n "$last_check" && -n "$commit_at" && "$last_check" -lt "$commit_at" ]] && echo true || echo false)" \
-  "the last check ($last_check) precedes the commit ($commit_at)"
+assert_eq "true" "$([[ -n "$loop_at" && -n "$commit_at" && "$loop_at" -lt "$commit_at" ]] && echo true || echo false)" \
+  "the loop ($loop_at) precedes the commit ($commit_at)"
 commit_step="$(awk '/name: Commit$/{f=1} f && /verb: commit/{print; exit} f' <<<"$implement_job")"
 assert_not_contains "$commit_step" "if:" "the commit step"
 
 it "and the job reports the word of the last check that ran"
-assert_contains "$implement_job" "check: \${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}" "the implement job's outputs"
+assert_contains "$implement_job" 'check: ${{ steps.loop.outputs.check }}' "the implement job's outputs"
+assert_contains "$loop_step" 'echo "check=$word" >> "$GITHUB_OUTPUT"' "the loop step"
 
 it "the pull request is opened only when that word is not fail"
 pr_step="$(awk '/name: Open the pull request/{f=1} f && /gh pr create/{exit} f' <<<"$publish_job")"
@@ -235,10 +247,9 @@ assert_eq 3 "$(grep -c -- '--template' <<<"$contain_job")" "gh --template uses i
 it "the workflow names review-verdict zero times"
 assert_not_contains "$wf" "review-verdict" "workflow"
 
-it "and there is no second agent: every invocation is the implementing one, on the same prompt"
-assert_eq "$(grep -c 'claude-code-action' <<<"$wf_code")" \
-  "$(grep -c 'prompt: ${{ steps.prompt.outputs.text }}' <<<"$wf_code")" "agent invocations on the implement prompt"
-assert_eq 0 "$(grep -c 'falconet prompt review' <<<"$wf_code")" "review prompts"
+it "and there is no second agent: the implement verb is the only way an agent runs"
+assert_eq 0 "$(grep -c 'falconet prompt' <<<"$wf_code")" "prompts resolved outside the implement verb"
+assert_eq 0 "$(grep -c 'review' <<<"$implement_job")" "review steps in the agent job"
 
 # --- the pull request describes the change, not the request ----------------
 
@@ -362,9 +373,9 @@ assert_eq "" "$unmet" "steps running falconet before their job installed it"
 it "and every job installs exactly once"
 assert_eq 4 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
 
-# Three verbs read `git status`: prepare refuses a dirty tree, commit
+# Four verbs read `git status`: prepare refuses a dirty tree, commit
 # refuses every changed path outside the allowlist, untracked included, and
-# check refuses a config the agent changed. The
+# implement and check refuse a config the agent changed. The
 # handoff directory is written INSIDE the consumer's tree, it is not the
 # agent's, and it is not anything a consumer's .gitignore can be relied on
 # to know about. The tool's own checkout used to sit beside it — a composite
@@ -380,10 +391,13 @@ unexcluded="$(awk '
   function flush(   verb) {
     if (buf ~ /name: Keep the handoff out of the working tree/)
       excluded[job] = 1
+    verb = ""
     if (buf ~ /uses: zetlen\/falconet@/) {
       verb = buf; sub(/.*verb: /, "", verb); sub(/[^a-z].*/, "", verb)
-      if (verb ~ /^(prepare|check|commit)$/ && !excluded[job]) print job "/" verb
+    } else if (buf ~ /[ (]falconet (prepare|implement|check|commit)/) {
+      verb = buf; sub(/.*[ (]falconet /, "", verb); sub(/[^a-z].*/, "", verb)
     }
+    if (verb ~ /^(prepare|implement|check|commit)$/ && !excluded[job]) print job "/" verb
     buf = ""
   }
   /^  [a-z][a-z-]*:$/ { flush(); job = $1; sub(/:$/, "", job) }

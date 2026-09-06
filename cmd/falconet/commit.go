@@ -7,15 +7,14 @@ package main
 // its commit message into the handoff directory, and stops. This verb does
 // the rest — which makes "did the agent commit?" a question about the tree,
 // and the tree does not have opinions, where an agent harness's own report
-// is a claim to check (claude-code-action says `conclusion: success` for a
-// run that did nothing).
+// is a claim to check (a harness exits 0 for a run that did nothing).
 //
-// The guards are internal/commit, which carries the incident record above
-// each; the secret scan is internal/scan. This file is the sequence they run
-// in, the subprocesses between them — git and gitleaks — the files, and the exit
-// code. It changes directory to the repository root and stays there, as the
-// script did: every path git reports is relative to that root, and every
-// path built from those reports only resolves correctly from there.
+// The guards are internal/commit, which states the requirement above each;
+// the secret scan is internal/scan. This file is the sequence they run in,
+// the subprocesses between them — git and gitleaks — the files, and the exit
+// code. It changes directory to the repository root and stays there: every
+// path git reports is relative to that root, and every path built from
+// those reports only resolves correctly from there.
 
 import (
 	"errors"
@@ -49,7 +48,7 @@ Prints exactly one word on stdout — the outcome — and nothing else:
 
 needs-info wins over an ordinary success: an agent that both committed work
 and asked a question keeps its commit, because the push step runs before
-the park, which is the ordering run 32093607680 taught this pipeline. A
+the pause, so nothing prepared is ever lost. A
 path or content violation is decided BEFORE needs-info is even consulted,
 though, and beats it regardless of whether questions were also written: a
 refused run commits nothing, so there is no committed work to protect, and
@@ -231,8 +230,8 @@ func runCommit(args []string) int {
 	// --- the allowlist ------------------------------------------------------
 	//
 	// A path is allowed if ANY paths.allow glob matches it (commit.AllowPattern
-	// says what a glob means). An allowed path that no longer exists on disk
-	// is neither scanned nor refused: a deleted file cannot carry new
+	// says what a glob means). An allowed path that is absent from disk is
+	// neither scanned nor refused: a deleted file cannot carry new
 	// executable content.
 	var denied, existing []string
 	for _, path := range changed {
@@ -264,8 +263,8 @@ func runCommit(args []string) int {
 		}
 	}
 
-	// Both refusals below run before either needs-info exit — Ruling B: a
-	// denied run commits nothing, so there is no committed work for
+	// Both refusals below run before either needs-info exit: a denied run
+	// commits nothing, so there is no committed work for
 	// needs-info's ordering to protect, and an issue that both tried to
 	// escalate and asked a question should fail loudly rather than park
 	// quietly.
@@ -338,7 +337,7 @@ func runCommit(args []string) int {
 	// The diff, now that there is one to read, and still before the commit:
 	// the branch is pushed immediately after this verb returns, so a
 	// credential that reaches a commit reaches the remote — and from there
-	// into whatever the plan bot posts on the pull request.
+	// into whatever the repository's own checks post on the pull request.
 	if rc, done := refuseOnSecret(nil, true); done {
 		return rc
 	}

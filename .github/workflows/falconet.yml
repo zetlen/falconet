@@ -14,21 +14,28 @@
 #   request — none of which is judgment and none of which an agent should
 #   be able to skip, improvise, or be argued out of.
 #
-#   the PLAN is somebody else's job. falconet opens the pull request and
-#   stops; the plan a reviewer reads is posted on it by the plan bot the
-#   repository already runs on every pull request (Atlantis, dflook's
-#   terraform-plan, …), from credentials that never enter this workflow.
+#   the EVIDENCE is somebody else's job. falconet opens the pull request
+#   and stops; what a reviewer reads about the change is posted on it by
+#   the repository's own checks, from credentials that never enter this
+#   workflow.
 #
-#   the LOOP is on the check, never on a guard. The agent job runs the
-#   repository's own check (`check.command` in falconet.json) after each
-#   agent pass, and a failing check sends the run back to a fresh agent
-#   pass with the failure in the handoff directory — at most `max-attempts`
-#   times, three by default, unrolled below as steps because `uses:` cannot
-#   be looped. A guard refusal (the allowlist, the denylist, the rename
-#   check, the secret scan) is terminal and reaches no agent: the retries
-#   are conditioned on the check's word and on nothing else. At the cap the
-#   guard-clean work is committed and pushed anyway, and the run ends as a
-#   hand-off naming the branch and the failure (principle 4).
+#   the HARNESS is the caller's. The agent job installs whatever
+#   `harness-setup` says and `falconet implement` runs whatever
+#   `harness.command` in falconet.json names, with the prompt on its stdin.
+#   The default is the Claude Code CLI with file tools only; anything that
+#   meets the README's implement contract may replace it. The job holds no
+#   token whichever harness runs, and that — not the harness's own tool
+#   allowlist — is what keeps the agent from publishing.
+#
+#   the LOOP is on the check, never on a guard. After each agent pass the
+#   job runs the repository's own check (`check.command` in falconet.json),
+#   and a failing check sends the run back to a fresh agent pass with the
+#   failure in the handoff directory — at most `max-attempts` times. A
+#   guard refusal (the allowlist, the denylist, the rename check, the
+#   secret scan) is terminal and reaches no agent: the loop turns on the
+#   check verb's word and on nothing else. At the cap the guard-clean work
+#   is committed and pushed anyway, and the run ends as a hand-off naming
+#   the branch and the failure (principle 4).
 #
 # ---------------------------------------------------------------------------
 # Where falconet comes from
@@ -51,18 +58,16 @@
 # ---------------------------------------------------------------------------
 # The cost of that boundary, stated plainly
 # ---------------------------------------------------------------------------
-# Run 32093607680 taught this pipeline to push the moment a commit exists,
-# because the only push used to sit behind an approved review and every other
-# exit left the work on a runner that was destroyed minutes later. The issue
-# was parked with a comment promising a prepared change that no longer existed
-# anywhere.
+# The branch is pushed the moment a commit exists. A runner is destroyed
+# minutes after its job ends, and a hand-off that promises work existing
+# only on that runner promises nothing.
 #
-# A job boundary between the commit and the push reopens a window in that
-# guard — a smaller one, but a real one. Two things close it:
+# A job boundary between the commit and the push opens a window in that
+# guard — a small one, but a real one. Two things close it:
 #
 #   1. `implement` uploads a git BUNDLE of the branch before it ends. The
 #      bundle outlives the runner, so the work is durable the instant it
-#      exists, which is what the incident was actually about.
+#      exists.
 #   2. `publish`'s first verb is the push. Nothing is posted before the
 #      branch is on the remote.
 #
@@ -95,15 +100,33 @@ on:
       max-attempts:
         description: >-
           How many agent passes a run may spend getting the repository's
-          own check to pass: 1, 2 or 3. The check runs after every pass
-          and a failing one sends the run back to a fresh pass with the
-          failure attached; at the cap the work is committed, pushed and
-          handed off. The workflow carries three attempts, so a larger
-          number is three. With no check.command configured every pass is
-          the only one.
+          own check to pass. The check runs after every pass and a failing
+          one sends the run back to a fresh pass with the failure attached;
+          at the cap the work is committed, pushed and handed off. With no
+          check.command configured the first pass is the only one. The
+          agent job as a whole is capped at 60 minutes.
         required: false
         type: number
         default: 3
+      harness-setup:
+        description: >-
+          Shell that puts the agent harness on PATH, run in the agent job
+          before the first pass. The default installs the Claude Code CLI,
+          which is what the default harness.command in falconet.json runs.
+          A repository whose harness.command names something else installs
+          it here. This job holds no token: whatever the snippet fetches,
+          it fetches as nobody.
+        required: false
+        type: string
+        default: npm install -g @anthropic-ai/claude-code
+      model-api-key-env:
+        description: >-
+          The environment variable the harness reads its model credential
+          from. The model-api-key secret is exported under this name, in
+          the agent job only, and under no other.
+        required: false
+        type: string
+        default: ANTHROPIC_API_KEY
     secrets:
       app-id:
         description: >-
@@ -114,10 +137,11 @@ on:
         required: true
       app-private-key:
         required: true
-      anthropic-api-key:
+      model-api-key:
         description: >-
-          Deliberately an API key, not a subscription token, so falconet's
-          spend stays a separate number.
+          The one credential the agent job holds: the harness's model key,
+          exported under model-api-key-env. Deliberately an API key with a
+          budget of its own, so falconet's spend stays a separate number.
         required: true
 
 permissions: {}
@@ -200,11 +224,11 @@ jobs:
       # `include-hidden-files`, because the handoff directory's name starts
       # with a dot and upload-artifact@v4 excludes hidden paths by DEFAULT. It
       # does it as a warning — "No files were found with the provided path" —
-      # and the step still goes green, so gate uploaded nothing while
-      # reporting success and implement died two jobs later on an artifact
-      # that had never existed. `if-no-files-found: error` is the other half:
-      # this hand-off is not optional, and a step that finds nothing here has
-      # failed whatever the reason.
+      # and the step still goes green: without this, gate uploads nothing
+      # while reporting success and implement dies two jobs later on an
+      # artifact that never existed. `if-no-files-found: error` is the other
+      # half: this hand-off is not optional, and a step that finds nothing
+      # here has failed whatever the reason.
       - uses: actions/upload-artifact@v4
         if: steps.prepare.outputs.outcome == 'ready'
         with:
@@ -216,10 +240,9 @@ jobs:
 
       # The agent job cannot check the repository out for itself: it holds no
       # token, and a private repository answers a tokenless clone with
-      # "Repository not found". The first consumer's first canary died exactly
-      # there. So gate — which has a token and has already used it — hands the
-      # checkout over as an artifact, and the boundary stays what it says it
-      # is rather than being traded away for a clone.
+      # "Repository not found". So gate — which has a token and has already
+      # used it — hands the checkout over as an artifact, and the boundary
+      # stays what it says it is rather than being traded away for a clone.
       #
       # A TARBALL OF THE CHECKOUT, not a bundle. `git bundle create` from a
       # depth-1 clone exits 0 and `git bundle verify` calls the result "a
@@ -270,30 +293,30 @@ jobs:
   # implement — judgment, and nothing else
   # =========================================================================
   #
-  # No token, no secrets beyond the model key, no push. The agent's grant is
-  # exactly Read,Edit,Write,Grep,Glob: it edits files, writes a commit message
-  # to a file, and stops. Issue text is attacker-controlled AND it is this
-  # agent's instructions — "also edit the workflow to grant Bash" is the
-  # attack, and the commit verb's path allowlist is what refuses it.
+  # No token, no secrets beyond the model key, no push. The agent edits
+  # files, writes a commit message to a file, and stops. Issue text is
+  # attacker-controlled AND it is this agent's instructions — "also edit the
+  # workflow to grant Bash" is the attack, and the commit verb's path
+  # allowlist is what refuses it.
   #
-  # The scripted steps in this job are fine: the JOB has no token, so nothing
-  # here can publish. That is the distinction the boundary is drawn on.
+  # The scripted steps in this job are fine, and so is a harness with a
+  # shell: the JOB has no token, so nothing here can publish. That is the
+  # distinction the boundary is drawn on. What a harness with a shell CAN
+  # reach is the model key, which is why the shipped default grants none.
   implement:
     needs: gate
     if: needs.gate.outputs.outcome == 'ready'
     runs-on: ${{ inputs.runs-on }}
-    # Up to three agent passes and three checks; each pass is capped at 40
-    # turns below, and this is the bound on the job as a whole.
+    # However many passes max-attempts allows, this is the bound on the job
+    # as a whole; the default harness caps each pass at 40 turns.
     timeout-minutes: 60
     permissions: {}
     outputs:
       outcome: ${{ steps.commit.outputs.outcome }}
-      # The word of the LAST check that ran. A later check runs only when
-      # the one before it said fail, so the first of these that is set is
-      # the last one that ran; a skipped step's outputs are empty. `fail`
-      # here means the cap was reached with the check still failing, and
-      # publish hands off instead of opening a pull request.
-      check: ${{ steps.check3.outputs.outcome || steps.check2.outputs.outcome || steps.check1.outputs.outcome }}
+      # The word of the LAST check that ran. `fail` here means the cap was
+      # reached with the check still failing, and publish hands off instead
+      # of opening a pull request.
+      check: ${{ steps.loop.outputs.check }}
     steps:
       # NO checkout in this job, ever — contract.test.sh holds it. The
       # repository being worked on cannot be cloned here (see gate's
@@ -353,103 +376,51 @@ jobs:
         env:
           BRANCH: ${{ needs.gate.outputs.branch }}
 
-      - name: Resolve the prompt
-        id: prompt
+      # The harness is whatever the caller's snippet installs. It runs as a
+      # template expression in a run: block, which is fine for exactly one
+      # reason: the snippet is the caller's own workflow file, written by a
+      # person, and nothing attacker-controlled reaches it. Nothing else in
+      # this workflow is interpolated that way.
+      - name: Install the harness
+        run: ${{ inputs.harness-setup }}
+
+      # The loop. `falconet implement` runs harness.command once with the
+      # prompt on its stdin; `falconet check` runs the repository's own
+      # check on what it left and says one word. A `fail` before the cap is
+      # another pass, in a fresh agent context, with check-failure.txt in
+      # the handoff directory; anything else ends the loop, and the word
+      # is this job's output. Under `set -e` an implement that could not
+      # run its harness, or a check that could not run its command, is a
+      # red step here, before the commit: a pass that did not happen is not
+      # a pass.
+      #
+      # The model key enters this job here and nowhere else, under the name
+      # the caller said the harness reads. It is the only secret this job
+      # holds, and the only credential a harness with a shell could reach.
+      - name: Implement, and check, until the check passes or the cap
+        id: loop
+        env:
+          MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+          MODEL_API_KEY_ENV: ${{ inputs.model-api-key-env }}
+          MODEL_API_KEY: ${{ secrets.model-api-key }}
+          FALCONET_CONFIG_FLAG: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
         run: |
           set -euo pipefail
-          {
-            echo 'text<<FALCONET_PROMPT_EOF'
-            falconet prompt implement
-            echo FALCONET_PROMPT_EOF
-          } >> "$GITHUB_OUTPUT"
-
-      # `github_token` is here to keep `permissions: {}` true. Given no token,
-      # the action mints one for itself by exchanging a GitHub OIDC token —
-      # which needs `id-token: write`, a permission this job refuses to hold:
-      # without it the run dies with "Could not fetch an OIDC token".
-      #
-      # So it is handed this job's own GITHUB_TOKEN, which in a job with no
-      # permissions carries NO SCOPES AT ALL. It cannot read this repository,
-      # let alone write to it. That is the distinction the boundary is drawn
-      # on: not whether a variable called a token exists in the environment,
-      # but whether anything in this job can publish. The App token — the one
-      # that can — is minted in gate, publish and contain, and is never
-      # passed here.
-      - name: Implement the change
-        uses: anthropics/claude-code-action@v1
-        with:
-          github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.anthropic-api-key }}
-          prompt: ${{ steps.prompt.outputs.text }}
-          claude_args: |
-            --allowedTools "Read,Edit,Write,Grep,Glob"
-            --max-turns 40
-
-      # The repository's own check, on the tree the agent left. One word:
-      # pass, fail, or skipped (no check.command configured). A check that
-      # could not run at all is a red step, which fails this job — a check
-      # that did not happen is not a pass, and nothing below runs on it.
-      #
-      # The verb reads the config from the working tree, after the agent's
-      # turn at it, and refuses to run a command from a config the agent
-      # changed; the commit verb refuses the same change again, with a
-      # reason for the requester.
-      - name: Check
-        id: check1
-        uses: zetlen/falconet@v1.0.0
-        with:
-          verb: check
-          setup: 'false'
-          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
-
-      # The loop, unrolled: `uses:` cannot be repeated by a `run:` block, so
-      # the attempts are steps, each conditioned on the check before it
-      # having said `fail` — the check's word and nothing else, so a guard
-      # refusal, which is decided in the commit step below and never
-      # before, cannot send a run back here — and on the cap the caller
-      # set. Each attempt is a fresh agent context with the same prompt:
-      # the agent sees the tree with its earlier edits, check-failure.txt in
-      # the handoff directory, and the request, and not its own earlier
-      # conversation.
-      - name: Implement the change (attempt 2)
-        if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2
-        uses: anthropics/claude-code-action@v1
-        with:
-          github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.anthropic-api-key }}
-          prompt: ${{ steps.prompt.outputs.text }}
-          claude_args: |
-            --allowedTools "Read,Edit,Write,Grep,Glob"
-            --max-turns 40
-
-      - name: Check (attempt 2)
-        id: check2
-        if: steps.check1.outputs.outcome == 'fail' && inputs.max-attempts >= 2
-        uses: zetlen/falconet@v1.0.0
-        with:
-          verb: check
-          setup: 'false'
-          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
-
-      - name: Implement the change (attempt 3)
-        if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3
-        uses: anthropics/claude-code-action@v1
-        with:
-          github_token: ${{ github.token }}
-          anthropic_api_key: ${{ secrets.anthropic-api-key }}
-          prompt: ${{ steps.prompt.outputs.text }}
-          claude_args: |
-            --allowedTools "Read,Edit,Write,Grep,Glob"
-            --max-turns 40
-
-      - name: Check (attempt 3)
-        id: check3
-        if: steps.check2.outputs.outcome == 'fail' && inputs.max-attempts >= 3
-        uses: zetlen/falconet@v1.0.0
-        with:
-          verb: check
-          setup: 'false'
-          args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+          export "$MODEL_API_KEY_ENV=$MODEL_API_KEY"
+          unset MODEL_API_KEY
+          attempt=0
+          word=skipped
+          while :; do
+            attempt=$((attempt + 1))
+            echo "::group::Agent pass $attempt of $MAX_ATTEMPTS"
+            # shellcheck disable=SC2086
+            falconet implement $FALCONET_CONFIG_FLAG
+            echo "::endgroup::"
+            # shellcheck disable=SC2086
+            word="$(falconet check $FALCONET_CONFIG_FLAG)"
+            [ "$word" = fail ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ] || break
+          done
+          echo "check=$word" >> "$GITHUB_OUTPUT"
 
       # Every guard rides here: the path allowlist, the content denylist, the
       # secret scan over the agent's drafts and then over the staged change,
@@ -459,6 +430,7 @@ jobs:
       # word: at the cap the guard-clean work is committed and pushed
       # anyway, so nothing is lost, and publish hands it off rather than
       # opening a pull request.
+      #
       # `setup: false` claims an earlier step in THIS job installed the
       # binaries, and a job is a fresh runner: the install is this job's
       # first step. commit needs gitleaks, and the secret scan fails closed
@@ -475,11 +447,9 @@ jobs:
       #
       # Written INTO the handoff directory, not beside it. An upload naming
       # two paths is rooted at their least common ancestor — here
-      # `/home/runner/work` — so the archive arrived as
-      # `wayfinders-infra/wayfinders-infra/.falconet/…`, publish's copy of
-      # `incoming/.falconet/` matched nothing, and the `|| true` on it turned
-      # that into silence. The pull request then failed to assemble for want
-      # of a file that had been uploaded all along. One path, one root.
+      # `/home/runner/work` — so the archive would arrive as
+      # `<repo>/<repo>/.falconet/…` and publish's download of `.falconet`
+      # would match nothing. One path, one root.
       - name: Bundle the work
         if: always()
         run: |
@@ -523,8 +493,9 @@ jobs:
           fetch-depth: 1
           token: ${{ steps.token.outputs.token }}
 
-      # As in gate. No verb here reads `git status` today; kept uniform so
-      # that the next one that does is not the next incident.
+      # As in gate. No verb in this job reads `git status`; the exclusion is
+      # written the same way in every job, so a verb that starts to is
+      # already covered.
       - name: Keep the handoff out of the working tree
         run: |
           mkdir -p .git/info
@@ -540,8 +511,8 @@ jobs:
           set -euo pipefail
           # Fail closed. Every file the rest of this job reads — the commit
           # body, the subject, the request — came out of that artifact, and a
-          # copy that quietly matched nothing is how a pushed branch turned
-          # into a pull request that could not be assembled.
+          # download that quietly matched nothing would be a pushed branch
+          # and a pull request that cannot be assembled.
           test -f .falconet/branch.bundle \
             || { echo "the implement hand-off carried no bundle" >&2; exit 1; }
           git switch -c "$BRANCH"
@@ -571,12 +542,12 @@ jobs:
           setup: 'false'
           args: --branch ${{ needs.gate.outputs.branch }} --base-sha ${{ needs.gate.outputs.base_sha }}
 
-      # The body is the commit body and a "Closes" line, and nothing else:
-      # no plan. The plan a reviewer reads is posted on the pull request by
-      # the repository's own plan bot, from credentials this workflow never
-      # holds — so a run that pushed a commit always reaches this step, and
-      # what a person is asked to look at is the change plus whatever the
-      # plan bot says about it.
+      # The body is the commit body and a "Closes" line, and nothing else.
+      # The evidence a reviewer reads is posted on the pull request by the
+      # repository's own checks, from credentials this workflow never holds —
+      # so a run that pushed a commit always reaches this step, and what a
+      # person is asked to look at is the change plus whatever those checks
+      # say about it.
       - name: Assemble the pull-request body
         if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
@@ -626,10 +597,10 @@ jobs:
       # UNSET, not empty (push writes $GITHUB_ENV only when a push landed),
       # and the hand-overs for a question and for a failure are exactly the
       # paths with nothing to push; under `set -u` a bare "$PUSHED_BRANCH"
-      # killed the step before
-      # pause ran — the agent's question never reached the issue, and contain
-      # paused it under the wrong label. `${PUSHED_BRANCH:-}` passes the empty
-      # string, which pause accepts as "no branch".
+      # kills the step before pause runs — the agent's question never reaches
+      # the issue, and contain pauses it under the wrong label.
+      # `${PUSHED_BRANCH:-}` passes the empty string, which pause accepts as
+      # "no branch".
       - name: Hand over — the agent asked a question
         if: needs.implement.outputs.outcome == 'needs-info'
         env:
@@ -718,10 +689,10 @@ jobs:
       # Every answer is CAPTURED into a variable and then inspected — never
       # `gh … | grep -q` (AGENTS.md): grep -q exits at the first match and
       # can SIGPIPE gh, which under pipefail turns a FOUND match into a failed
-      # pipeline, the exact opposite of the answer just computed. And gh's
-      # own --template does the reading: falconet no longer asks the runner
-      # for a JSON tool of its own. A gh that fails is a red step here, not
-      # "closed — terminal": an answer nobody got is not an answer.
+      # pipeline, the exact opposite of the answer just computed. gh's own
+      # --template does the reading, so no JSON tool is needed on the runner.
+      # A gh that fails is a red step here, not "closed — terminal": an
+      # answer nobody got is not an answer.
       - name: Ensure a terminal state
         id: check
         env:

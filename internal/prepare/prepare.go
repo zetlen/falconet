@@ -12,23 +12,20 @@
 // pattern and the opt-out match be held to properties rather than to the
 // handful of fixtures a suite can carry.
 //
-// # Where this came from, and the one thing it changes
+// # Why eligibility is code and not a workflow `if:`
 //
-// This verb is the only one with no ancestor script. It was inline YAML in the
-// origin workflow's first stage, and its eligibility half was not even that —
-// it was a job-level `if:` expression, evaluated before checkout. That is why
-// it moves: an `if:` runs before the repository exists, so it can never read
-// the config file, and gating there would fork eligibility into YAML-in-CI and
-// nothing-locally for a project whose whole rule is one code path. The cost is
-// runner-seconds on ineligible events. Paid willingly (ADR-0003).
+// A job-level `if:` is evaluated before checkout, so it can never read the
+// config file, and gating there would fork eligibility into YAML-in-CI and
+// nothing-locally for a project whose whole rule is one code path. The cost
+// is runner-seconds on ineligible events.
 //
 // # needs-info is both a blocking label and the way back in
 //
-// The origin admitted two kinds of run: an issue gains the queue label while
-// carrying no parked state, or a human replies on an issue that is already
-// parked needs-info. The second is the re-entry path, and issue #25 is why it
-// exists — the requester answered the question, and clearing the label by hand
-// is something requesters usually cannot do.
+// There are two kinds of run: an issue gains the queue label while carrying
+// no parked state, or a human replies on an issue that is already parked
+// needs-info. The second is the re-entry path: the requester answered the
+// question, and clearing the label by hand is something requesters usually
+// cannot do.
 //
 // So needs-info blocks a first entry and admits a reply, and a flat precedence
 // list cannot say both. Two modes:
@@ -128,8 +125,7 @@ func NotAWayIn(ev *Event) bool {
 }
 
 // Open is rule 0's reading of the state: `gh` says OPEN, a webhook says open,
-// and a payload that carries no state at all is read as open, as the bash's
-// `case` did.
+// and a payload that carries no state at all is read as open.
 func Open(state string) bool {
 	switch state {
 	case "open", "OPEN", "":
@@ -160,23 +156,21 @@ func Blocked(labels []string, mode Mode, r Rules) (label string, blocked bool) {
 }
 
 // OptOutPattern is rule 2's pattern: a checked markdown checkbox carrying the
-// configured text, matched case-insensitively. The origin's CI form was an
-// unanchored substring test, which meant the sentence appearing anywhere —
-// quoted from another issue, say — opted the issue out; the human-facing
-// skill anchored it to a list item. Anchored is right, and the
-// leading-whitespace tolerance is a widening of both, because issue forms
-// indent nested checkboxes.
+// configured text, matched case-insensitively. Anchored to a list item, so
+// the sentence appearing anywhere else — quoted from another issue, say —
+// does not opt the issue out; leading whitespace is tolerated because issue
+// forms indent nested checkboxes.
 //
 // A configured value is data, and it is about to be part of a regex: the text
 // is quoted, so every character in it means itself. The whitespace class is
-// ASCII's, as grep's was under the C locale CI ran in.
+// ASCII's.
 func OptOutPattern(text string) *regexp.Regexp {
 	return regexp.MustCompile(`(?i)^[[:space:]]*[-*] \[[xX]\] ` + regexp.QuoteMeta(text))
 }
 
-// OptedOut is whether any line of the body is the ticked box. Per line, as
-// grep read it: the pattern is anchored at a line's start and nowhere else,
-// so a CR before the line break, or text after the sentence, changes nothing.
+// OptedOut is whether any line of the body is the ticked box. Per line: the
+// pattern is anchored at a line's start and nowhere else, so a CR before
+// the line break, or text after the sentence, changes nothing.
 func OptedOut(body string, pattern *regexp.Regexp) bool {
 	for _, line := range strings.Split(body, "\n") {
 		if pattern.MatchString(line) {
@@ -186,7 +180,7 @@ func OptedOut(body string, pattern *regexp.Regexp) bool {
 	return false
 }
 
-// Gate is rules 0 to 3, in the bash's order, and returns the reason the issue
+// Gate is rules 0 to 3, in order, and returns the reason the issue
 // is ineligible — the line that goes to stderr, because "ineligible" on its
 // own is not a diagnostic — or "" when every one of them admits it. Rule 4,
 // the open pull requests, is InFlight: it needs the network, and is asked
@@ -194,9 +188,9 @@ func OptedOut(body string, pattern *regexp.Regexp) bool {
 func Gate(issue int, s Snapshot, mode Mode, r Rules) string {
 	// --- rule 0: the issue is open ------------------------------------------
 	//
-	// The origin checked this on both admission paths. It is the cheapest
-	// and most obviously terminal fact, and the containment step checked it
-	// first too. `gh` says OPEN, a webhook says open.
+	// The cheapest and most obviously terminal fact, and the one the
+	// workflow's contain job checks first as well. `gh` says OPEN, a webhook
+	// says open.
 	if !Open(s.State) {
 		return fmt.Sprintf("issue #%d is %s", issue, s.State)
 	}
@@ -236,16 +230,12 @@ type Pull struct {
 // its branch, a leftover branch is the ordinary state of a retried issue, and
 // keying on branches would let one suppress every later run on the issue.
 //
-// The regex is built from config and passed through the ENVIRONMENT, never
-// spliced into the filter text. And the result is captured whole before it is
-// inspected: never `gh ... | grep -q`, because grep -q exits at the first match
-// and can SIGPIPE gh, which under pipefail turns a FOUND match into a non-zero
-// pipeline — the opposite of the answer just computed.
-//
-// Here the first of those is regexp.QuoteMeta on every prefix, and the second
-// is a slice: the verb fetches the whole list, then InFlight walks it. And a
-// list that could not be fetched at all is a refusal, not an empty list: the
-// bash's unchecked `gh pr list` fell open on a failure and went on to ready.
+// The pattern is built from config with regexp.QuoteMeta on every prefix, so
+// a configured prefix is data and never a pattern. The answer is computed
+// over the whole list: the verb fetches it, then InFlight walks it, so no
+// early exit can turn a found match into a non-answer. And a list that
+// could not be fetched at all is a refusal, not an empty list: a gate that
+// says ready on an unknown opens a second pull request on the same issue.
 
 // InFlightPattern is `^(prefix1|prefix2…)<issue>-`, every prefix quoted so
 // that a `.` or a `+` in one means itself. issue.in_flight_prefixes is the
@@ -280,7 +270,7 @@ func InFlight(issue int, pulls []Pull, r Rules) []string {
 }
 
 // InFlightReason is the stderr line for a found match: the matches
-// comma-joined, as `tr '\n' ','` joined them.
+// comma-joined.
 func InFlightReason(issue int, hits []string) string {
 	return fmt.Sprintf("issue #%d already has an open PR: %s — nothing to do", issue, strings.Join(hits, ","))
 }
@@ -294,15 +284,15 @@ type Comment struct {
 	Body      string
 }
 
-// Request is request.md: the issue, then the comment thread oldest first,
-// byte for byte what the bash's `jq -r` wrote — the heading, two newlines, the
-// body, two newlines, and then, when there are comments, the thread heading
-// and each comment as `### <login> — <created_at>`, a blank line, its body and
-// a newline, joined by a newline; and the one newline `-r` adds at the end. A
-// comment with no login is "unknown", as `// "unknown"` made it.
+// Request is request.md: the issue, then the comment thread oldest first —
+// the heading, two newlines, the body, two newlines, and then, when there
+// are comments, the thread heading and each comment as
+// `### <login> — <created_at>`, a blank line, its body and a newline, joined
+// by a newline; and one newline at the end. A comment with no login is
+// "unknown".
 //
 // Built from the snapshot taken before the acknowledgment was posted, which is
-// why the acknowledgment is not in it: the agents should read the requester's
+// why the acknowledgment is not in it: the agent should read the requester's
 // words, not this pipeline's.
 func Request(number int, title, body string, comments []Comment) string {
 	var b strings.Builder
@@ -352,10 +342,10 @@ const SlugLimit = 40
 // nothing downstream would have caught. Nothing sluggable at all is
 // "request".
 //
-// Byte-wise, as `tr '[:upper:]' '[:lower:]' | sed` under the C locale were:
-// A–Z fold to a–z, and every other byte — a non-ASCII letter included — is a
-// separator. Unicode case folding would have let a Kelvin sign become a k;
-// the C locale never did, and the result is [a-z0-9-] either way.
+// Byte-wise: A–Z fold to a–z, and every other byte — a non-ASCII letter
+// included — is a separator. There is no Unicode case folding (a Kelvin sign
+// is a separator, not a k), so the result is [a-z0-9-] whatever the title
+// held.
 func Slug(title string) string {
 	var b strings.Builder
 	dash := false

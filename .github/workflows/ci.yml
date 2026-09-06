@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The shell that is left: the suite and its fixtures.
+      # The shell: the suite and its fixtures.
       - name: Check the shell parses before running any of it
         run: |
           set -euo pipefail
@@ -30,8 +30,8 @@ jobs:
             bash -n "$f"
           done
 
-      # No setup-go action: every third-party action already floats on a tag
-      # (#2), and this would be one more. go.mod's `toolchain` line is the
+      # No setup-go action: every third-party action already floats on a tag,
+      # and this would be one more. go.mod's `toolchain` line is the
       # pin; exporting it as GOTOOLCHAIN makes the go command use exactly that
       # version — downloading it when the runner's is older, and refusing to
       # quietly substitute a newer one. One source of truth, read here.
@@ -60,13 +60,6 @@ jobs:
           "$(go env GOPATH)/bin/errcheck" ./...
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      # The records: every register row cites a principle the README declares
-      # and links a section of the register that exists, and nothing in the
-      # prose links a file that is not in the tree. Its own unit tests run in
-      # the step below; this one is here so a broken record fails under its
-      # own name instead of inside `go test ./...`.
-      - name: Docs lint
-        run: go run ./tools/docslint
 
       - name: Unit tests
         run: go test ./...

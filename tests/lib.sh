@@ -23,9 +23,9 @@ export REPO_ROOT
 #   FALCONET=/path/to/binary bash tests/run.sh
 #
 # The default is the binary `make build` leaves at dist/falconet, and there
-# is no other answer: since #19 nothing in this tree runs a verb but the
-# binary, so a suite that started without one would fail every case for one
-# reason, slowly. Said once, here, before any file runs anything.
+# is no other answer: nothing in this tree runs a verb but the binary, so a
+# suite that started without one would fail every case for one reason,
+# slowly. Said once, here, before any file runs anything.
 FALCONET="${FALCONET:-$REPO_ROOT/dist/falconet}"
 if [[ ! -f "$FALCONET" || ! -x "$FALCONET" ]]; then
   echo "tests: no falconet binary at $FALCONET — build it first: make build" >&2
@@ -112,8 +112,8 @@ fake_github() {
   export GITHUB_API_URL FAKE_GITHUB
 }
 
-# An execution log shaped like the one claude-code-action writes: a JSON array
-# whose last `result` entry carries the agent's final message. Built with jq
+# An execution log in the Claude Code CLI's JSON-array shape: an array whose
+# last `result` entry carries the agent's final message. Built with jq
 # from a file so a fixture can hold the message verbatim, backticks, em dashes
 # and all.
 execution_log_from() { # message-file destination-file

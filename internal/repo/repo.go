@@ -1,13 +1,11 @@
 // Package repo answers one question: which repository is this verb operating
 // on?
 //
-// The origin's scripts lived INSIDE the repository they worked on, so "one
-// directory above scripts/" answered two questions at once: where the code
-// is, and where the work is. falconet is a separate tool — in CI a binary
-// installed on the runner, on a workstation a binary on $PATH — and the two
-// answers come apart. A verb that used its own location to find the working
-// tree would operate on falconet instead of on the consumer's repository,
-// silently, reporting an outcome about the wrong tree.
+// falconet is a separate tool — in CI a binary installed on the runner, on a
+// workstation a binary on $PATH — so where the code is and where the work is
+// are two different answers. A verb that used its own location to find the
+// working tree would operate on falconet instead of on the consumer's
+// repository, silently, reporting an outcome about the wrong tree.
 //
 // So the repository being worked on comes from the working directory, which
 // is the only thing that can know, and never from where the binary lives.

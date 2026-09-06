@@ -1,7 +1,7 @@
 name: falconet
 description: >-
-  Turn a plain-language infrastructure request into a pull request a person
-  can review, and stop there. This action is setup plus pass-through: it
+  Turn a request filed as an issue into a pull request a person can review,
+  and stop there. This action is setup plus pass-through: it
   installs the binaries the verbs need — gitleaks, pinned by version and
   digest, and falconet itself, compiled from this module at the ref this
   action was called at — and then runs one verb, or runs nothing and leaves

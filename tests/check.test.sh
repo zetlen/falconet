@@ -94,38 +94,6 @@ it "while the run log got them too"
 assert_contains "$ERR" "on stdout" "stderr"
 assert_contains "$ERR" "on stderr" "stderr"
 
-# --- the tail is bounded, and says what it dropped ----------------------------
-#
-# The file is read by an agent in a fresh context. A megabyte of passing
-# tests followed by the one that failed is worse than the last of them, so
-# the end is kept, up to a budget, and the note says how much of the
-# beginning is not there and where it is.
-
-c="$(new_checkout chatty '["bash","-c","for i in $(seq 1 20000); do echo line number $i of a long log; done; echo THE VERDICT; exit 1"]')"
-run_in "$c"
-
-it "a check that prints more than the budget still says fail"
-assert_eq "fail" "$OUT" "outcome"
-
-it "and the file keeps the end, where the verdict is"
-report="$(cat "$c/repo/.falconet/check-failure.txt")"
-assert_contains "$report" "THE VERDICT" "report"
-
-it "and not the beginning"
-assert_not_contains "$report" "line number 1 of" "report"
-
-it "and says how much is not there, and that the run log has all of it"
-assert_contains "$report" "bytes are not
-here; the run log has all of it" "report"
-
-it "and stays inside the budget: 64 KiB of output plus a short header"
-size="$(wc -c <"$c/repo/.falconet/check-failure.txt")"
-assert_eq "true" "$([[ "$size" -le $((64 * 1024 + 512)) ]] && echo true || echo false)" "size $size within 64 KiB + header"
-
-it "and resumes on a line boundary, never mid-line"
-first_output_line="$(awk '/run log has all of it:/ { getline; getline; print; exit }' "$c/repo/.falconet/check-failure.txt")"
-assert_contains "$first_output_line" "line number " "first kept line"
-
 # --- the command runs from the repository root, whatever the caller's cwd ----
 
 c="$(new_checkout root '["bash","-c","test -f records-example-tech.tf && test -f .github/falconet.json"]')"

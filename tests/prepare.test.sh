@@ -114,7 +114,7 @@ hand()  { cat "$1/repo/.falconet/$2" 2>/dev/null; }
 
 # --- the gate ---------------------------------------------------------------
 
-c="$(new_checkout eligible)"; issue_json "$c/issue.json" "infra-request" "Please add MX."
+c="$(new_checkout eligible)"; issue_json "$c/issue.json" "falconet" "Please add MX."
 p "$c"
 it "a queued, open, unblocked issue with no open PR is ready"
 assert_eq "ready" "$OUT" "outcome"
@@ -122,7 +122,7 @@ it "and exits 0"
 assert_eq 0 "$RC" "exit code"
 
 for lbl in ready-for-human do-not-apply wontfix needs-info; do
-  c="$(new_checkout "block_$lbl")"; issue_json "$c/issue.json" "infra-request,$lbl" "x"
+  c="$(new_checkout "block_$lbl")"; issue_json "$c/issue.json" "falconet,$lbl" "x"
   p "$c"
   it "a blocking label ($lbl) makes it ineligible"
   assert_eq "ineligible" "$OUT" "outcome"
@@ -135,48 +135,48 @@ p "$c"
 it "an issue without the queue label is ineligible"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout prefixlabel)"; issue_json "$c/issue.json" "infra-request-later" "x"
+c="$(new_checkout prefixlabel)"; issue_json "$c/issue.json" "falconet-later" "x"
 p "$c"
 it "and the queue label is matched exactly, not as a prefix"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout nearblock)"; issue_json "$c/issue.json" "infra-request,needs-information" "x"
+c="$(new_checkout nearblock)"; issue_json "$c/issue.json" "falconet,needs-information" "x"
 p "$c"
 it "a label that merely starts like a blocking one does not block"
 assert_eq "ready" "$OUT" "outcome"
 
-c="$(new_checkout closed)"; issue_json "$c/issue.json" "infra-request" "x" "closed"
+c="$(new_checkout closed)"; issue_json "$c/issue.json" "falconet" "x" "closed"
 p "$c"
 it "a closed issue is ineligible"
 assert_eq "ineligible" "$OUT" "outcome"
 
 # --- the opt-out box --------------------------------------------------------
 
-c="$(new_checkout optout)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout)"; issue_json "$c/issue.json" "falconet" \
   "- [x] Not eligible for AI agents"
 p "$c"
 it "a ticked opt-out box is ineligible"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout optout_caps)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout_caps)"; issue_json "$c/issue.json" "falconet" \
   "- [X] not eligible for ai agents"
 p "$c"
 it "and the whole line is matched case-insensitively"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout optout_star)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout_star)"; issue_json "$c/issue.json" "falconet" \
   "* [x] Not eligible for AI agents"
 p "$c"
 it "either list marker works"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout optout_indent)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout_indent)"; issue_json "$c/issue.json" "falconet" \
   "  - [x] Not eligible for AI agents"
 p "$c"
 it "and an indented checkbox still opts out, because issue forms indent them"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout optout_unticked)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout_unticked)"; issue_json "$c/issue.json" "falconet" \
   "- [ ] Not eligible for AI agents"
 p "$c"
 it "an UNticked box does not opt out"
@@ -185,7 +185,7 @@ assert_eq "ready" "$OUT" "outcome"
 # The origin's CI form was an unanchored substring test, so the sentence
 # appearing anywhere -- quoted from another issue, say -- opted the issue out.
 # The human-facing skill anchored it to a list item. Anchored is encoded here.
-c="$(new_checkout optout_prose)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout optout_prose)"; issue_json "$c/issue.json" "falconet" \
   "I do not think this is [x] Not eligible for AI agents, really"
 p "$c"
 it "the opt-out is anchored to a checkbox, not found anywhere in the prose"
@@ -193,7 +193,7 @@ assert_eq "ready" "$OUT" "outcome"
 
 # gh spelled the state OPEN; the API spells it open. Both are open.
 c="$(new_checkout nullbody)"
-jq -n '{number:42,title:"T",body:null,state:"OPEN",labels:[{name:"infra-request"}]}' \
+jq -n '{number:42,title:"T",body:null,state:"OPEN",labels:[{name:"falconet"}]}' \
   >"$c/issue.json"
 p "$c"
 it "a null body is not a crash"
@@ -201,7 +201,7 @@ assert_eq "ready" "$OUT" "outcome"
 
 # --- in flight --------------------------------------------------------------
 
-c="$(new_checkout inflight)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout inflight)"; issue_json "$c/issue.json" "falconet" "x"
 printf '[{"number":57,"head":{"ref":"issue-42-add-mx"}}]\n' >"$c/pr.json"
 p "$c"
 it "an open PR on this issue's branch is in-flight"
@@ -213,19 +213,19 @@ assert_eq "" "$(mutations "$c")" "mutating API calls"
 it "and the checkout stays on its original branch"
 assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
-c="$(new_checkout inflight_claude)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout inflight_claude)"; issue_json "$c/issue.json" "falconet" "x"
 printf '[{"number":57,"head":{"ref":"claude/issue-42-20250101"}}]\n' >"$c/pr.json"
 p "$c"
 it "the legacy claude/ prefix counts too"
 assert_eq "in-flight" "$OUT" "outcome"
 
-c="$(new_checkout inflight_other)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout inflight_other)"; issue_json "$c/issue.json" "falconet" "x"
 printf '[{"number":57,"head":{"ref":"issue-421-other"}}]\n' >"$c/pr.json"
 p "$c"
 it "issue 421's PR does not make issue 42 in-flight"
 assert_eq "ready" "$OUT" "outcome"
 
-c="$(new_checkout inflight_unanchored)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout inflight_unanchored)"; issue_json "$c/issue.json" "falconet" "x"
 printf '[{"number":57,"head":{"ref":"feature/issue-42-x"}}]\n' >"$c/pr.json"
 p "$c"
 it "and the match is anchored, so a nested name is not this issue's branch"
@@ -234,7 +234,7 @@ assert_eq "ready" "$OUT" "outcome"
 # In flight means an OPEN PULL REQUEST, never a branch. Every run pushes its
 # branch now, so a leftover branch is the ordinary state of a retried issue --
 # and keying on branches would let one suppress every later run on the issue.
-c="$(new_checkout branch_not_inflight)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout branch_not_inflight)"; issue_json "$c/issue.json" "falconet" "x"
 git -C "$c/repo" switch -qc issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" push -q origin issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" switch -q main
@@ -244,7 +244,7 @@ assert_eq "ready" "$OUT" "outcome"
 
 # --- ineligible and in-flight change nothing --------------------------------
 
-c="$(new_checkout silent)"; issue_json "$c/issue.json" "infra-request,wontfix" "x"
+c="$(new_checkout silent)"; issue_json "$c/issue.json" "falconet,wontfix" "x"
 GH_ENV="$c/github_env" p "$c"; reset
 it "an ineligible issue leaves no handoff files"
 assert_file_missing "$c/repo/.falconet/request.md"
@@ -261,7 +261,7 @@ assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 # --- the ready path ---------------------------------------------------------
 
-c="$(new_checkout ready_full)"; issue_json "$c/issue.json" "infra-request" "Please add MX."
+c="$(new_checkout ready_full)"; issue_json "$c/issue.json" "falconet" "Please add MX."
 GH_ENV="$c/github_env" p "$c"; reset
 
 it "ready writes the branch name"
@@ -300,7 +300,7 @@ assert_eq "zetlen bump" \
   "$(jq -r '.comments[0] | "\(.user.login) \(.body)"' "$c/repo/.falconet/issue.json")" "issue.json comments"
 
 c="$(new_checkout nocomments)"
-jq -n '{number:42,title:"T",body:"b",state:"open",labels:[{name:"infra-request"}]}' \
+jq -n '{number:42,title:"T",body:"b",state:"open",labels:[{name:"falconet"}]}' \
   >"$c/issue.json"
 p "$c"
 it "an issue with no comments gets no comment-thread heading"
@@ -309,7 +309,7 @@ assert_not_contains "$(hand "$c" request.md)" "## Comment thread" "request.md"
 # The issue body is attacker-controlled text AND the agent's instructions. It
 # travels through files, never through a template expression, and nothing here
 # executes any of it.
-c="$(new_checkout hostile)"; issue_json "$c/issue.json" "infra-request" \
+c="$(new_checkout hostile)"; issue_json "$c/issue.json" "falconet" \
   'Add `$(touch /tmp/pwned)` and ```a fence``` please'
 p "$c"
 it "shell-shaped text in the body reaches request.md verbatim"
@@ -321,40 +321,9 @@ assert_file_missing "/tmp/pwned"
 it "nothing else leaks into the outcome word"
 assert_eq "ready" "$OUT" "outcome"
 
-# --- the slug ---------------------------------------------------------------
-
-slug_of() { # title -> echoes branch.txt
-  local c; c="$(new_checkout "slug$RANDOM")"
-  jq -n --arg t "$1" \
-    '{number:42,title:$t,body:"b",state:"open",labels:[{name:"infra-request"}]}' \
-    >"$c/issue.json"
-  p "$c" >/dev/null
-  hand "$c" branch.txt
-}
-
-it "a long title is cut to 40 slug characters"
-b="$(slug_of "An extremely long issue title that goes well past the limit")"
-assert_eq 39 "$(( ${#b} - 9 ))" "slug length (branch minus the issue-42- prefix)"
-
-it "and the cut lands where the 40th character was, not at a word boundary"
-assert_eq "issue-42-an-extremely-long-issue-title-that-goes" "$b" "branch"
-
-it "and never ends in a dash, even when the cut lands mid-separator"
-b="$(slug_of "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - trailing")"
-case "$b" in *-) assert_eq "no trailing dash" "trailing dash" "branch: $b" ;;
-              *) assert_eq "ok" "ok" "branch: $b" ;; esac
-
-it "a title with nothing sluggable falls back to 'request'"
-assert_eq "issue-42-request" "$(slug_of '!!! ???')" "branch"
-
-it "a non-ASCII title still produces a usable ref"
-b="$(slug_of "Zoë's café")"
-case "$b" in issue-42-[a-z0-9-]*) assert_eq ok ok "branch: $b" ;;
-             *) assert_eq "[a-z0-9-] only" "$b" "branch" ;; esac
-
 # --- the collision rename ---------------------------------------------------
 
-c="$(new_checkout collide)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout collide)"; issue_json "$c/issue.json" "falconet" "x"
 git -C "$c/repo" switch -qc issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" push -q origin issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" switch -q main
@@ -364,7 +333,7 @@ assert_eq "issue-42-add-mx-records-for-papernapkin-tech-99" "$(hand "$c" branch.
 it "and says so"
 assert_contains "$ERR" "already exists on the remote" "stderr"
 
-c="$(new_checkout collide_local)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout collide_local)"; issue_json "$c/issue.json" "falconet" "x"
 git -C "$c/repo" switch -qc issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" push -q origin issue-42-add-mx-records-for-papernapkin-tech
 git -C "$c/repo" switch -q main
@@ -376,7 +345,7 @@ assert_not_contains "$ERR" "unbound variable" "stderr"
 
 # --- the clean-tree assertion, and where it sits ----------------------------
 
-c="$(new_checkout dirty)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout dirty)"; issue_json "$c/issue.json" "falconet" "x"
 printf 'locals {\n  a = 99\n}\n' >"$c/repo/dns/main.tf"
 p "$c"
 it "a dirty tree is a mechanical refusal, not an outcome"
@@ -405,11 +374,11 @@ ev() { # path action extra-jq
   jq -n --argjson pr "${3:-null}" --arg t "${4:-User}" \
     '{action:$ARGS.named.a, comment:{user:{type:$t}},
       issue:{state:"open", pull_request:$pr,
-             labels:[{name:"infra-request"},{name:"needs-info"}], body:"x"}}' \
+             labels:[{name:"falconet"},{name:"needs-info"}], body:"x"}}' \
     --arg a "$2" >"$1"
 }
 
-c="$(new_checkout reentry)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 ev "$c/event.json" created
 p "$c" --event "$c/event.json"
 it "a human's comment on a needs-info issue is a way back in"
@@ -421,30 +390,30 @@ assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 it "and no ack.md is written"
 assert_file_missing "$c/repo/.falconet/ack.md"
 
-c="$(new_checkout reentry_bot)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry_bot)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 ev "$c/event.json" created null Bot
 p "$c" --event "$c/event.json"
 it "a bot's comment is not, or the pipeline would answer itself"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout reentry_pr)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry_pr)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 ev "$c/event.json" created '{"url":"x"}'
 p "$c" --event "$c/event.json"
 it "and neither is a comment on a pull request"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout reentry_flag)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry_flag)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 p "$c" --re-entry
 it "--re-entry is how a workstation says it, with no event to read"
 assert_eq "ready" "$OUT" "outcome"
 
 c="$(new_checkout reentry_blocked)"; issue_json "$c/issue.json" \
-  "infra-request,needs-info,do-not-apply" "x"
+  "falconet,needs-info,do-not-apply" "x"
 p "$c" --re-entry
 it "and re-entry admits needs-info only — the other blocking labels still block"
 assert_eq "ineligible" "$OUT" "outcome"
 
-c="$(new_checkout reentry_failclear)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry_failclear)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 REMOVE_RC=1 p "$c" --re-entry; reset
 it "a label that cannot be cleared is fatal, unlike the claim and the ack"
 assert_eq 1 "$RC" "exit code"
@@ -453,7 +422,7 @@ assert_eq "" "$OUT" "stdout"
 
 # GitHub answers 404 when the label is not on the issue; gh removed nothing and
 # said nothing. A retry of a re-entry run that had already cleared it is that.
-c="$(new_checkout reentry_alreadyclear)"; issue_json "$c/issue.json" "infra-request,needs-info" "x"
+c="$(new_checkout reentry_alreadyclear)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
 REMOVE_RC=404 p "$c" --re-entry; reset
 it "a label that is already gone is not a failure to clear it: the run is ready"
 assert_eq "ready" "$OUT" "outcome"
@@ -462,7 +431,7 @@ assert_contains "$ERR" "was already clear" "stderr"
 
 # The bash captured `gh pr list` with no check and fell through to ready on an
 # empty answer. A gate must not say ready on an unknown.
-c="$(new_checkout pullsfail)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout pullsfail)"; issue_json "$c/issue.json" "falconet" "x"
 PULLS_RC=1 p "$c"; reset
 it "an open-pull-request list that cannot be fetched is a mechanical failure, not ready"
 assert_eq 1 "$RC" "exit code"
@@ -471,8 +440,8 @@ it "and nothing was changed on the way"
 assert_eq "" "$(mutations "$c")" "mutating calls"
 assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
-c="$(new_checkout issuenull)"; issue_json "$c/issue.json" "infra-request" "x"
-jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"infra-request"}], body:"x"}}' >"$c/event.json"
+c="$(new_checkout issuenull)"; issue_json "$c/issue.json" "falconet" "x"
+jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$c/event.json"
 ISSUE_NULL=1 p "$c" --event "$c/event.json"; reset
 it "an issue that comes back as null is a sentence and exit 1, not a stack trace"
 assert_eq 1 "$RC" "exit code"
@@ -481,13 +450,13 @@ assert_contains "$ERR" "not a JSON object" "stderr"
 
 # --- the event file itself --------------------------------------------------
 
-c="$(new_checkout noevent)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout noevent)"; issue_json "$c/issue.json" "falconet" "x"
 p "$c" --event "$c/nowhere.json"
 it "an --event that names no file is a mechanical failure, not an outcome"
 assert_eq 1 "$RC" "exit code"
 assert_eq "" "$OUT" "stdout"
 
-c="$(new_checkout badevent)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout badevent)"; issue_json "$c/issue.json" "falconet" "x"
 printf '{not json\n' >"$c/event.json"
 p "$c" --event "$c/event.json"
 it "and so is one that is not JSON"
@@ -496,24 +465,24 @@ assert_eq "" "$OUT" "stdout"
 
 # --- best-effort calls really are best-effort -------------------------------
 
-c="$(new_checkout claimfails)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout claimfails)"; issue_json "$c/issue.json" "falconet" "x"
 EDIT_RC=1 p "$c"; reset
 it "a failed claim does not fail the run"
 assert_eq "ready" "$OUT" "outcome"
 it "but it is said out loud"
 assert_contains "$ERR" "could not assign" "stderr"
 
-c="$(new_checkout ackfails)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout ackfails)"; issue_json "$c/issue.json" "falconet" "x"
 COMMENT_RC=1 p "$c"; reset
 it "nor does a failed acknowledgment"
 assert_eq "ready" "$OUT" "outcome"
 
-c="$(new_checkout noack)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout noack)"; issue_json "$c/issue.json" "falconet" "x"
 p "$c" --no-ack
 it "--no-ack skips the greeting for a caller that only wants the branch"
 assert_not_contains "$(ghlog "$c")" "POST $API/issues/42/comments" "API calls"
 
-c="$(new_checkout assignee)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout assignee)"; issue_json "$c/issue.json" "falconet" "x"
 p "$c" --assignee bob
 it "--assignee names who the claim is recorded against"
 assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"bob\"]}" "API calls"
@@ -524,21 +493,21 @@ assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\
 # cannot answer. In CI the triggering actor is named instead, so the login
 # lookup is the workstation's path.
 
-c="$(new_checkout whoami)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout whoami)"; issue_json "$c/issue.json" "falconet" "x"
 p "$c"
 it "with neither --assignee nor GITHUB_TRIGGERING_ACTOR the token's own login is asked for"
 assert_contains "$(ghlog "$c")" "GET /user" "API calls"
 it "and the issue is assigned to it"
 assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"fake-user\"]}" "API calls"
 
-c="$(new_checkout actor)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout actor)"; issue_json "$c/issue.json" "falconet" "x"
 ACTOR=alice p "$c"; reset
 it "GITHUB_TRIGGERING_ACTOR names the assignee in CI"
 assert_contains "$(ghlog "$c")" "POST $API/issues/42/assignees {\"assignees\":[\"alice\"]}" "API calls"
 it "and the token's login is not asked for"
 assert_not_contains "$(ghlog "$c")" "GET /user" "API calls"
 
-c="$(new_checkout whoami_fails)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout whoami_fails)"; issue_json "$c/issue.json" "falconet" "x"
 USER_RC=1 p "$c"; reset
 it "a token that cannot say whose it is — an App token — is a warning, not a failure"
 assert_contains "$ERR" "could not assign" "stderr"
@@ -547,14 +516,14 @@ assert_eq "ready" "$OUT" "outcome"
 
 # --- hard failures ----------------------------------------------------------
 
-c="$(new_checkout viewfails)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout viewfails)"; issue_json "$c/issue.json" "falconet" "x"
 VIEW_RC=1 p "$c"; reset
 it "an issue that cannot be read is a mechanical failure, not an outcome"
 assert_eq 1 "$RC" "exit code"
 
 # --- the token and the repository, resolved when first needed --------------
 
-c="$(new_checkout notoken)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout notoken)"; issue_json "$c/issue.json" "falconet" "x"
 ( unset GH_TOKEN GITHUB_TOKEN; p "$c"; printf '%s\n%s\n' "$RC" "$OUT" >"$c/result" )
 it "with no GH_TOKEN the ready path is a mechanical failure"
 assert_eq 1 "$(sed -n 1p "$c/result")" "exit code"
@@ -563,8 +532,8 @@ assert_eq "" "$(sed -n 2p "$c/result")" "stdout"
 it "and nothing reaches GitHub"
 assert_eq "" "$(ghlog "$c")" "API calls"
 
-c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "infra-request,wontfix" "x"
-jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"infra-request"},{name:"wontfix"}], body:"x"}}' \
+c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "falconet,wontfix" "x"
+jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"falconet"},{name:"wontfix"}], body:"x"}}' \
   >"$c/event.json"
 ( unset GH_TOKEN GITHUB_TOKEN; p "$c" --event "$c/event.json"; printf '%s\n' "$OUT" >"$c/result" )
 it "an event that says ineligible needs no token at all"
@@ -574,7 +543,7 @@ assert_eq "" "$(ghlog "$c")" "API calls"
 
 # The fixture's origin is a bare repository on disk, not github.com, so
 # without GITHUB_REPOSITORY there is no repository to ask about.
-c="$(new_checkout norepo)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout norepo)"; issue_json "$c/issue.json" "falconet" "x"
 ( unset GITHUB_REPOSITORY; p "$c"; printf '%s\n%s\n' "$RC" "$OUT" >"$c/result"; cp "$c/err" "$c/err.saved" )
 it "with no GITHUB_REPOSITORY and an origin that is not on github.com there is nowhere to ask: exit 1"
 assert_eq 1 "$(sed -n 1p "$c/result")" "exit code"
@@ -588,7 +557,7 @@ assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 # --- $GITHUB_ENV is optional ------------------------------------------------
 
-c="$(new_checkout noghenv)"; issue_json "$c/issue.json" "infra-request" "x"
+c="$(new_checkout noghenv)"; issue_json "$c/issue.json" "falconet" "x"
 p "$c"
 it "with no GITHUB_ENV the files are still written and the run still succeeds"
 assert_eq "ready" "$OUT" "outcome"

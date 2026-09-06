@@ -38,19 +38,17 @@ import (
 	"strings"
 )
 
-// Defaults is the schema with every default, as the JSON document the bash
-// config library carried. Every key in docs/decisions.md is here but one, so
-// a verb never has to ask whether a key is set. The two that have no default
-// are paths.allow (an allowlist the operator did not write is a choice made
-// for them — the commit verb refuses to run without one) and prompts (its
-// default was issue #3 — a path relative to the consumer's repository, which
-// made the default an override and the shipped prompt unreachable — and the
-// shipped prompts are embedded in the binary now, so an absent key means
-// exactly that). See Schema.Prompts and Schema.Paths.
+// Defaults is the schema with every default, as one JSON document. Every key
+// in docs/decisions.md is here but prompts, so a verb never has to ask
+// whether a key is set. Two have no usable default: paths.allow is an empty
+// list (an allowlist the operator did not write is a choice made for them —
+// the commit verb refuses to run without one), and prompts is absent (the
+// shipped prompts are embedded in the binary, so an absent key means exactly
+// that). See Schema.Prompts and Schema.Paths.
 const Defaults = `{
   "handoff_dir": ".falconet",
   "issue": {
-    "queue_label": "infra-request",
+    "queue_label": "falconet",
     "opt_out_text": "Not eligible for AI agents",
     "branch_prefix": "issue-",
     "in_flight_prefixes": ["issue-", "claude/issue-"],
@@ -59,7 +57,7 @@ const Defaults = `{
   "labels": {
     "needs_info": "needs-info",
     "human": "ready-for-human",
-    "pr": "needs-plan-review"
+    "pr": "falconet-pr"
   },
   "paths": {
     "allow": [],
@@ -67,6 +65,14 @@ const Defaults = `{
   },
   "check": {
     "command": []
+  },
+  "harness": {
+    "command": [
+      "claude", "--bare", "-p",
+      "--permission-mode", "dontAsk",
+      "--allowedTools", "Read,Edit,Write,Grep,Glob",
+      "--max-turns", "40"
+    ]
   }
 }`
 
@@ -104,9 +110,19 @@ type Schema struct {
 	Check struct {
 		Command []string `json:"command"`
 	} `json:"check"`
+	// Harness is the agent, as the implement verb runs it: an argv, run
+	// with no shell, from the repository root, with the rendered prompt on
+	// its stdin. The default is the Claude Code CLI with the grant the
+	// README describes — file tools only, no shell, a turn cap — and any
+	// command that meets the implement contract (README, "The implement
+	// contract") may replace it. Empty is refused: a pipeline with no agent
+	// in it is a misconfiguration, not a pass.
+	Harness struct {
+		Command []string `json:"command"`
+	} `json:"harness"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
 	// because `falconet prompt <name>` looks names up dynamically. It has no
-	// default (#3): an absent key means the prompt embedded in the binary,
+	// default: an absent key means the prompt embedded in the binary,
 	// and a set one is a path relative to the repository root — an override,
 	// and nothing else. A value of any other type is refused with the rest
 	// of the schema.
@@ -189,9 +205,9 @@ func isFile(path string) bool {
 }
 
 // parseObject reads exactly one JSON object. Numbers stay json.Number.
-// Anything after the object is refused: jq would have slurped a second value
-// and silently used only the first, and a file with two documents in it is a
-// mistake worth hearing about.
+// Anything after the object is refused: a decoder that stops at the first
+// value would silently use only it, and a file with two documents in it is
+// a mistake worth hearing about.
 func parseObject(raw []byte) (map[string]any, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
