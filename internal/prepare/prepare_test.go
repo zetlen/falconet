@@ -334,10 +334,13 @@ func TestInFlightPatternIsAnchoredAndEscapesEveryPrefix(t *testing.T) {
 			}
 		}
 		// A prefix carrying a metacharacter is not read as that
-		// metacharacter: "a." must not admit "ab".
+		// metacharacter: "a." must not admit "ab". The loose form is a
+		// wildcard match only if it is not itself a configured prefix — when
+		// p1 is "." and p2 is "b", "b…" matches legitimately through p2, and
+		// that is not the dot being read as any character.
 		if strings.Contains(string(p1), ".") && !strings.Contains(string(p1), "b") {
 			loose := strings.ReplaceAll(string(p1), ".", "b")
-			if re.MatchString(loose + num + "-" + string(tail)) {
+			if loose != string(p2) && re.MatchString(loose+num+"-"+string(tail)) {
 				return false
 			}
 		}
