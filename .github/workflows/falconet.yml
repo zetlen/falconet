@@ -200,7 +200,7 @@ jobs:
       # in the runner's action cache, not in this workspace, so nothing here
       # is a path the verbs could trip over.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       # Eligibility that needs the config is decided here and not in a
       # job-level `if:`, because an `if:` evaluates before checkout and can
@@ -210,7 +210,7 @@ jobs:
       # ineligible event.
       - name: Prepare
         id: prepare
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           FALCONET_EVENT_PATH: ${{ github.event_path }}
@@ -330,7 +330,7 @@ jobs:
       # from the runner's action cache, and what it fetches is this public
       # module through the module proxy, with no token.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       - uses: actions/download-artifact@v4
         with:
@@ -447,7 +447,7 @@ jobs:
       # on a missing scanner.
       - name: Commit
         id: commit
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         with:
           verb: commit
           setup: 'false'
@@ -537,14 +537,14 @@ jobs:
       # binary, and the binary is a compile. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       # Unconditional, and the first verb. Every run leaves its branch on the
       # remote, so a stale branch is ordinary and the collision rename does
       # the bookkeeping. Nothing below runs before the work is somewhere
       # durable.
       - name: Push
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
@@ -689,7 +689,7 @@ jobs:
         with: { fetch-depth: 1 }
 
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a
