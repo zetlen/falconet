@@ -11,6 +11,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions: {}
 
@@ -69,3 +70,27 @@ jobs:
 
       - name: Run the suite through the binary
         run: FALCONET="$PWD/dist/falconet" bash tests/run.sh
+
+  # On a tag, prove the workflow's pinned refs name THIS tag. A version is a
+  # git tag whose falconet.yml pins that same tag on every `uses:` line
+  # (operating.md); contract.test.sh checks the lines agree and are a tag, but
+  # not that they name the tag being cut — so a tag made without the pin-bump
+  # commit (the failure that shipped v1.1.0 still pinning v1.0.0) shows up
+  # here, red, on the tag, and the operator re-tags after fixing it.
+  tag-pins:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every falconet ref pins this tag
+        run: |
+          set -euo pipefail
+          refs="$(grep -oE '^[[:space:]]*uses: zetlen/falconet@[^[:space:]]+' .github/workflows/falconet.yml | sed 's/^[[:space:]]*//' | sort -u)"
+          want="uses: zetlen/falconet@${GITHUB_REF_NAME}"
+          if [ "$refs" != "$want" ]; then
+            printf 'tag %s, but the workflow pins:\n%s\nexpected every line to be:\n%s\n' \
+              "$GITHUB_REF_NAME" "$refs" "$want" >&2
+            exit 1
+          fi
+          printf 'every uses: zetlen/falconet@ ref names %s\n' "$GITHUB_REF_NAME"

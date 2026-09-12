@@ -93,6 +93,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   : >"$FAKE_GITHUB/requests.jsonl"
   OUT="$( cd "$c/repo" \
     && GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
+       GITHUB_RUN_ATTEMPT="${RUN_ATTEMPT:-}" \
        GITHUB_TRIGGERING_ACTOR="${ACTOR:-}" \
        "$FALCONET" prepare --issue 42 "$@" 2>"$c/err" )"
   RC=$?
@@ -105,7 +106,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   return 0
 }
 reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; PULLS_RC=""; ISSUE_NULL=""
-          GH_ENV=""; RUN_ID=""; ACTOR=""; }
+          GH_ENV=""; RUN_ID=""; RUN_ATTEMPT=""; ACTOR=""; }
 reset
 
 ghlog() { cat "$1/requests.log" 2>/dev/null; }
@@ -577,6 +578,61 @@ it "the queue label comes from config"
 assert_eq "ready" "$OUT" "outcome"
 it "and so does the branch prefix"
 assert_contains "$(hand "$c" branch.txt)" "req-42-" "branch.txt"
+
+# --- the gate again, on the live issue (issue #30) --------------------------
+#
+# The gate reads the triggering event, which can be queued behind another run
+# or replayed on a re-run; the issue may have changed since. So the ready path
+# gates once more on the live issue before it assigns or branches anything.
+# The event here is eligible; the live issue the fake API returns is not.
+
+evt() { # path -> an eligible `opened` event for issue 42
+  jq -n '{action:"opened",
+          issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$1"
+}
+
+c="$(new_checkout stale_closed)"; issue_json "$c/issue.json" "falconet" "x" "closed"
+evt "$c/event.json"
+p "$c" --event "$c/event.json"
+it "an event that was eligible but whose issue is now closed is ineligible"
+assert_eq "ineligible" "$OUT" "outcome"
+it "and the reason names the live change, not the event"
+assert_contains "$ERR" "after the event" "stderr"
+it "and nothing was mutated"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+it "nor was a branch cut"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
+
+c="$(new_checkout stale_optout)"; issue_json "$c/issue.json" "falconet" \
+  "- [x] Not eligible for AI agents"
+evt "$c/event.json"
+p "$c" --event "$c/event.json"
+it "an event whose issue has since ticked the opt-out box is ineligible"
+assert_eq "ineligible" "$OUT" "outcome"
+
+c="$(new_checkout stale_ok)"; issue_json "$c/issue.json" "falconet" "Please add MX."
+evt "$c/event.json"
+p "$c" --event "$c/event.json"
+it "an event whose issue is still eligible on the live re-check is ready"
+assert_eq "ready" "$OUT" "outcome"
+
+# --- the collision suffix is unique across re-runs (issue #33) --------------
+#
+# $GITHUB_RUN_ID is stable across re-runs, so a re-run of a run that already
+# pushed its suffixed branch must not choose that same name — the push would
+# be refused on a lease it does not hold. $GITHUB_RUN_ATTEMPT breaks the tie.
+
+c="$(new_checkout collide_rerun)"; issue_json "$c/issue.json" "falconet" "x"
+git -C "$c/repo" switch -qc issue-42-add-mx-records-for-papernapkin-tech
+git -C "$c/repo" push -q origin issue-42-add-mx-records-for-papernapkin-tech
+git -C "$c/repo" switch -qc issue-42-add-mx-records-for-papernapkin-tech-77
+git -C "$c/repo" push -q origin issue-42-add-mx-records-for-papernapkin-tech-77
+git -C "$c/repo" switch -q main
+RUN_ID=77 RUN_ATTEMPT=2 p "$c"; reset
+it "a re-run whose run-id branch already exists disambiguates by attempt"
+assert_eq "issue-42-add-mx-records-for-papernapkin-tech-77.2" "$(hand "$c" branch.txt)" "branch.txt"
+it "and really is on that branch"
+assert_eq "$(hand "$c" branch.txt)" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 # --- usage ------------------------------------------------------------------
 

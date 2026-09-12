@@ -448,6 +448,40 @@ func runPrepare(args []string) int {
 		return 0
 	}
 
+	// --- the gate again, on the issue as it is now ------------------------------
+	//
+	// The gate above read the triggering event. An event can be queued behind
+	// another run or replayed on a re-run, and the issue can have been closed,
+	// opted out, or given a blocking label between the event and this moment.
+	// So before anything mutating happens, gate once more on the live issue —
+	// the same fetch the ready path uses for the snapshot, memoised, so this
+	// costs no extra call. On the no-event path `gate` already came from this
+	// live fetch, and there is nothing new to check.
+	if eventPath != "" {
+		if err := fetchIssue(); err != nil {
+			return die("prepare: could not read issue #%d: %v", number, err)
+		}
+		// A malformed live answer — a null issue, say — is a mechanical
+		// failure, not an eligibility decision, and this is now the first read
+		// of the issue, so the same check the snapshot below makes is made
+		// here too rather than reading a zero-valued issue as "ineligible".
+		var probe map[string]any
+		if json.Unmarshal(snap.rawIssue, &probe) != nil || probe == nil {
+			return die("prepare: issue #%d is not a JSON object", number)
+		}
+		live := prepare.Snapshot{State: snap.issue.State, Body: snap.issue.Body}
+		for _, l := range snap.issue.Labels {
+			if l.Name != "" {
+				live.Labels = append(live.Labels, l.Name)
+			}
+		}
+		if reason := prepare.Gate(number, live, mode, rules); reason != "" {
+			say("%s (the issue changed after the event that queued this run)", reason)
+			fmt.Println("ineligible")
+			return 0
+		}
+	}
+
 	// ===========================================================================
 	// ready
 	// ===========================================================================
@@ -601,8 +635,30 @@ func runPrepare(args []string) int {
 	//
 	// $GITHUB_RUN_ID is CI-only, and the suffix's only job is to
 	// disambiguate: the run id when there is one, the clock otherwise.
-	if exec.Command("git", "ls-remote", "--exit-code", "--heads", "origin", branch).Run() == nil {
-		branch += "-" + envOr("GITHUB_RUN_ID", strconv.FormatInt(time.Now().Unix(), 10))
+	//
+	// The suffix must be unique across RE-RUNS as well as runs. $GITHUB_RUN_ID
+	// is stable when a run is re-run, so a re-run of a run that already pushed
+	// its suffixed branch would pick that same name and then be refused the
+	// push, holding no --force-with-lease lease on it. $GITHUB_RUN_ATTEMPT
+	// tells the attempts apart, and a clock stands in where neither is set (a
+	// workstation) or both are somehow still taken.
+	taken := func(name string) bool {
+		return exec.Command("git", "ls-remote", "--exit-code", "--heads", "origin", name).Run() == nil
+	}
+	if taken(branch) {
+		base := branch
+		run := envOr("GITHUB_RUN_ID", strconv.FormatInt(time.Now().Unix(), 10))
+		attempt := envOr("GITHUB_RUN_ATTEMPT", "1")
+		for _, suffix := range []string{
+			run,
+			run + "." + attempt,
+			run + "." + attempt + "-" + strconv.FormatInt(time.Now().Unix(), 10),
+		} {
+			branch = base + "-" + suffix
+			if !taken(branch) {
+				break
+			}
+		}
 		say("a branch by the obvious name already exists on the remote; using %s", branch)
 	}
 

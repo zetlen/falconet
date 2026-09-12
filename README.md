@@ -95,7 +95,7 @@ that a reviewer could mistake for that evidence.
 | --- | --- |
 | Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
 | Implement | `falconet implement`: the prompt rendered from the config, then `harness.command` run once from the repository root with the prompt on its stdin, in the `implement` job of `.github/workflows/falconet.yml`, which has `permissions: {}` and a tree with its remote stripped |
-| Check | `falconet check` after every agent pass, with the workflow owning the loop: a failing check is another pass, at most `max-attempts` times. Then the guards in `falconet commit`: path allowlist, content denylist, rename refusal, secret scan, and the config file itself, once, terminally |
+| Check | `falconet check` after every agent pass, with the workflow owning the loop: a failing check is another pass, at most `max-attempts` times. Then the guards in `falconet commit`: path allowlist, content denylist, rename refusal, secret scan, the config file itself, and the checkout's own git machinery, once, terminally |
 | Deliver | `falconet push` the moment a commit exists, then the pull request, or `falconet pause` for a question or a hand-off, including a change whose check still fails at the cap |
 
 [The decision register](docs/decisions.md) holds every live decision, the
