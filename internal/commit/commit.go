@@ -487,6 +487,19 @@ func ReasonConfigChanged(path string) string {
 		"If the configuration should change, a person changes it.")
 }
 
+// ReasonUntrustedGit is the refusal of a checkout whose own git
+// configuration, hooks or attributes would make git run a program when a
+// guard runs git over the tree. detail names what was found. A repository's
+// own git machinery — none of it visible to the path allowlist — is never a
+// change a request may make (see internal/gitsafe).
+func ReasonUntrustedGit(detail string) string {
+	return reason(
+		"The agent's checkout carries git settings that would run a program",
+		"when falconet inspects the change, so nothing was committed:",
+		indented([]string{detail}),
+		"A repository's own git machinery is never a change a request can make.")
+}
+
 // ReasonDeniedContent is the refusal of a denied construct. Each hit is
 // "path: construct", as DenylistHit named it.
 func ReasonDeniedContent(hits []string) string {

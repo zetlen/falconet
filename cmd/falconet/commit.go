@@ -26,6 +26,7 @@ import (
 
 	"github.com/zetlen/falconet/internal/commit"
 	"github.com/zetlen/falconet/internal/config"
+	"github.com/zetlen/falconet/internal/gitsafe"
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/repo"
 	"github.com/zetlen/falconet/internal/scan"
@@ -200,12 +201,25 @@ func runCommit(args []string) int {
 		return 0, false
 	}
 
+	// --- the checkout's own git machinery ---------------------------------
+	//
+	// Every step below runs git inside the agent's tree, and several git
+	// settings name a program git runs during a status, a diff or a commit —
+	// exactly the operations these guards perform. A file-only agent can
+	// write .git/config, .git/hooks and .git/info/attributes, none of them
+	// visible to the git status the allowlist reads, so a tree that carries
+	// any of them is refused here, before the first git command, and the
+	// commands themselves are hardened besides (internal/gitsafe).
+	if reason := gitsafe.Untrusted(root); reason != "" {
+		return giveUp(commit.ReasonUntrustedGit(reason))
+	}
+
 	// --- what did the agent leave behind? ---------------------------------
 	//
 	// See commit.ParseStatus for the -z and the rename arm. The command's own
 	// exit status is checked: running outside a git repository must be a
 	// mechanical failure, not a false "the tree is untouched".
-	status := exec.Command("git", "status", "--porcelain", "--untracked-files=all", "-z")
+	status := gitsafe.Command(root, "status", "--porcelain", "--untracked-files=all", "-z")
 	status.Stderr = os.Stderr
 	listing, err := status.Output()
 	if err != nil {
@@ -306,7 +320,7 @@ func runCommit(args []string) int {
 	// about what `-A` happens to pick up given everything checked so far. To
 	// stderr, though `git add` is ordinarily silent: this verb's only
 	// contract with its caller is that stdout is exactly one of three words.
-	add := exec.Command("git", append([]string{"add", "--"}, changed...)...)
+	add := gitsafe.Command(root, append([]string{"add", "--"}, changed...)...)
 	add.Stdout = os.Stderr
 	add.Stderr = os.Stderr
 	if err := add.Run(); err != nil {
@@ -321,7 +335,7 @@ func runCommit(args []string) int {
 	// instead: an empty change is `failure`, not a mechanical error, so it
 	// gets failure's exit code (0) rather than a git failure's (1). `--quiet` exits 0 for no difference and 1 for one; anything else
 	// is git refusing, and is a mechanical failure.
-	quiet := exec.Command("git", "diff", "--cached", "--quiet")
+	quiet := gitsafe.Command(root, "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv")
 	quiet.Stderr = os.Stderr
 	var exit *exec.ExitError
 	switch err := quiet.Run(); {
@@ -342,7 +356,7 @@ func runCommit(args []string) int {
 		return rc
 	}
 
-	gitCommit := exec.Command("git", "commit", "-q", "-F", message)
+	gitCommit := gitsafe.Command(root, "commit", "-q", "--no-verify", "-F", message)
 	gitCommit.Stdout = os.Stderr
 	gitCommit.Stderr = os.Stderr
 	if err := gitCommit.Run(); err != nil {

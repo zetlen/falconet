@@ -422,9 +422,13 @@ jobs:
           done
           echo "check=$word" >> "$GITHUB_OUTPUT"
 
-      # Every guard rides here: the path allowlist, the content denylist, the
-      # secret scan over the agent's drafts and then over the staged change,
-      # and a vetted-path-only `git add`. A refusal beats a question: a
+      # Every guard rides here: the checkout's own git machinery (a
+      # .git/config, hook or attributes file that would run a program is
+      # refused before any git runs), the path allowlist, the content
+      # denylist, the secret scan over the agent's drafts and then over the
+      # staged change, and a vetted-path-only `git add`. Every git command
+      # this job runs is hardened besides (internal/gitsafe). A refusal beats
+      # a question: a
       # denied run commits nothing, so there is no committed work for
       # needs-info's ordering to protect. Unconditional on the check's
       # word: at the cap the guard-clean work is committed and pushed

@@ -642,18 +642,17 @@ it "-h/--help exits 2, not 0 -- help is not one of the three outcomes"
 ( cd "$REPO_ROOT" && "$FALCONET" commit --help >/dev/null 2>&1 )
 assert_eq 2 "$?" "exit code"
 
-# A pre-commit hook is a clean way to force a genuine git failure that is
-# NOT the "nothing staged" case above, which now has its own outcome.
+# A genuine git failure that is NOT the "nothing staged" case above (which has
+# its own outcome) and NOT a guard refusal: the commit itself fails. Clearing
+# the author identity makes `git commit` refuse with "tell me who you are".
+# (A pre-commit hook, the old way to force this, is now both skipped by the
+# commit verb's --no-verify and refused outright as tampering — see below.)
 c="$(new_checkout git_failure)"
+git -C "$c/repo" config --unset user.email
+git -C "$c/repo" config --unset user.name
 printf 'locals {\n  a = 11\n}\n' >"$c/repo/records-example-tech.tf"
-printf 'A commit a hook will refuse\n\nSo this is a genuine git failure.\n' \
+printf 'A commit git will refuse\n\nSo this is a genuine git failure.\n' \
   >"$c/repo/.falconet/commit-msg.txt"
-cat >"$c/repo/.git/hooks/pre-commit" <<'HOOK'
-#!/usr/bin/env bash
-echo "pre-commit refuses" >&2
-exit 1
-HOOK
-chmod +x "$c/repo/.git/hooks/pre-commit"
 out="$(run_in "$c")"; rc=$?
 
 it "a genuine git failure (not 'nothing staged') exits 1"
@@ -661,5 +660,53 @@ assert_eq 1 "$rc" "exit code"
 
 it "and no outcome word is printed for a mechanical failure"
 assert_eq "" "$out" "stdout"
+
+# --- the checkout's own git machinery is not a way to a shell ---------------
+#
+# The guards run git inside the agent's tree, and several git settings name a
+# program git runs during a status, a diff or a commit. A file-only agent can
+# write .git/config and .git/hooks, neither visible to the git status the path
+# allowlist reads. A tree that carries any of them is refused before the
+# guards run git, and the payload never runs. internal/gitsafe has the unit
+# tests; these prove the commit verb wires the refusal.
+
+c="$(new_checkout git_diff_external)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '#!/bin/sh\ntouch "%s/repo/PWNED"\n' "$c" >"$c/repo/driver.sh"
+chmod +x "$c/repo/driver.sh"
+git -C "$c/repo" config diff.external "sh $c/repo/driver.sh"
+out="$(run_in "$c")"
+it "a diff.external in the checkout's git config is refused"
+assert_eq "failure" "$out" "outcome"
+it "and the requester is told the git machinery was the problem"
+assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "git" "failure-reason.txt"
+it "and the payload never ran"
+assert_file_missing "$c/repo/PWNED"
+it "and nothing was committed"
+assert_eq 1 "$(commit_count "$c")" "commits"
+
+c="$(new_checkout git_fsmonitor)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '#!/bin/sh\ntouch "%s/repo/PWNED"\n' "$c" >"$c/repo/mon.sh"
+chmod +x "$c/repo/mon.sh"
+git -C "$c/repo" config core.fsmonitor "sh $c/repo/mon.sh"
+out="$(run_in "$c")"
+it "a core.fsmonitor command is refused before any status runs"
+assert_eq "failure" "$out" "outcome"
+it "and it never ran"
+assert_file_missing "$c/repo/PWNED"
+
+c="$(new_checkout git_hook)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '#!/bin/sh\ntouch "%s/repo/PWNED"\n' "$c" >"$c/repo/.git/hooks/pre-commit"
+chmod +x "$c/repo/.git/hooks/pre-commit"
+out="$(run_in "$c")"
+it "a planted pre-commit hook is refused, not silently skipped"
+assert_eq "failure" "$out" "outcome"
+it "and never ran"
+assert_file_missing "$c/repo/PWNED"
 
 summary

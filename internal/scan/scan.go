@@ -83,6 +83,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/zetlen/falconet/internal/gitsafe"
 )
 
 // Hit is the exit code gitleaks is told to use for a finding, and the exit
@@ -157,7 +159,12 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 		}
 	}
 	if staged {
-		diff := exec.Command("git", "-C", s.Root, "diff", "--cached")
+		// gitsafe: the diff runs in the agent's own checkout, and an
+		// external-diff or textconv driver set in its .git/config would run a
+		// program here — and could feed this scan whatever output it liked.
+		// --no-ext-diff and --no-textconv close both; the commit verb refuses
+		// a tree that carries them at all (internal/gitsafe.Untrusted).
+		diff := gitsafe.Command(s.Root, "diff", "--cached", "--no-ext-diff", "--no-textconv")
 		diff.Stderr = s.Stderr
 		out, err := diff.Output()
 		if err != nil {

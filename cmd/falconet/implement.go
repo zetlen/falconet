@@ -46,6 +46,7 @@ import (
 
 	"github.com/zetlen/falconet/internal/commit"
 	"github.com/zetlen/falconet/internal/config"
+	"github.com/zetlen/falconet/internal/gitsafe"
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/repo"
 )
@@ -150,7 +151,10 @@ func runImplement(args []string) int {
 	//
 	// See the header. git's own exit status is checked: outside a repository
 	// this must be a mechanical failure, not a clean tree.
-	status := exec.Command("git", "status", "--porcelain", "--untracked-files=all", "-z")
+	// gitsafe: the status runs in the agent's tree; a core.fsmonitor set in
+	// its .git/config would run a program here. The command is hardened so
+	// it does not; the commit verb refuses such a tree outright.
+	status := gitsafe.Command(root, "status", "--porcelain", "--untracked-files=all", "-z")
 	status.Stderr = os.Stderr
 	listing, err := status.Output()
 	if err != nil {
