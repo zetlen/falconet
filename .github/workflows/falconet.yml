@@ -151,6 +151,11 @@ jobs:
   # gate — is this issue ours, and if so lay out the work
   # =========================================================================
   gate:
+    # A bot's event, or a comment on a pull request, is never a way in, and
+    # telling needs nothing but the event. falconet's own comments and labels
+    # arrive as bot events, so without this each one spends a gate job.
+    # Everything that needs the config is decided by `prepare`.
+    if: github.event.sender.type != 'Bot' && !github.event.issue.pull_request
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 10
     permissions:
@@ -195,16 +200,17 @@ jobs:
       # in the runner's action cache, not in this workspace, so nothing here
       # is a path the verbs could trip over.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
-      # Eligibility is decided here and not in a job-level `if:`, because an
-      # `if:` evaluates before checkout and can therefore never read the
-      # config file. Gating there would fork eligibility into YAML-in-CI and
-      # nothing-locally, for a project whose whole rule is one code path. The
-      # cost is runner-seconds on ineligible events.
+      # Eligibility that needs the config is decided here and not in a
+      # job-level `if:`, because an `if:` evaluates before checkout and can
+      # therefore never read the config file. Gating there would fork
+      # eligibility into YAML-in-CI and nothing-locally, for a project whose
+      # whole rule is one code path. The cost is runner-seconds on a person's
+      # ineligible event.
       - name: Prepare
         id: prepare
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           FALCONET_EVENT_PATH: ${{ github.event_path }}
@@ -324,7 +330,7 @@ jobs:
       # from the runner's action cache, and what it fetches is this public
       # module through the module proxy, with no token.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       - uses: actions/download-artifact@v4
         with:
@@ -441,7 +447,7 @@ jobs:
       # on a missing scanner.
       - name: Commit
         id: commit
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         with:
           verb: commit
           setup: 'false'
@@ -531,14 +537,14 @@ jobs:
       # binary, and the binary is a compile. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       # Unconditional, and the first verb. Every run leaves its branch on the
       # remote, so a stale branch is ordinary and the collision rename does
       # the bookkeeping. Nothing below runs before the work is somewhere
       # durable.
       - name: Push
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
@@ -683,7 +689,7 @@ jobs:
         with: { fetch-depth: 1 }
 
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.1
+        uses: zetlen/falconet@v1.1.2
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a

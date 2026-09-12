@@ -54,6 +54,15 @@ pause_calls="$(awk '
   }
 ' <<<"$wf_code")"
 
+# --- falconet's own events never start a run ------------------------------
+#
+# Every comment and label falconet writes is an issue event that fires the
+# caller again. The gate skips a bot's event and a pull-request comment on
+# the event alone, before any runner or token.
+
+it "the gate job skips an event whose sender is a bot, or a comment on a pull request"
+assert_contains "$gate_job" "if: github.event.sender.type != 'Bot' && !github.event.issue.pull_request" "the gate job"
+
 # --- the agent holds nothing it could publish with -------------------------
 
 it "the agent job holds exactly one secret, the model key, and exports it under the caller's name"
@@ -492,6 +501,21 @@ it "and passes no falconet-ref, which the workflow no longer declares"
 # A reusable workflow rejects an input it does not declare, at load: the
 # same startup_failure, for a caller copied from an older README.
 assert_not_contains "$caller" "falconet-ref" "README caller template"
+
+it "the README's caller starts no run for a bot, a pull-request comment, or another label"
+# falconet's comments and labels are issue events on the same issue. Each
+# one that got past the caller would take a place in the issue's queue.
+assert_contains "$caller" "github.event.sender.type != 'Bot'" "README caller template"
+assert_contains "$caller" "!github.event.issue.pull_request" "README caller template"
+assert_contains "$caller" "(github.event.action != 'labeled' || github.event.label.name == 'falconet')" "README caller template"
+
+it "and listens for labeled, not opened: a request filed with the label fires labeled"
+assert_contains "$caller" "types: [labeled, reopened]" "README caller template"
+
+it "and queues every waiting run for an issue, so a newer event never cancels a person's reply"
+# The default keeps one pending run per group and cancels the older.
+assert_contains "$caller" "queue: max" "README caller template"
+assert_eq 0 "$(grep -c '^concurrency:' <<<"$caller")" "workflow-level concurrency blocks in the template"
 
 # --- the agent job is handed its source, because it cannot fetch it ---------
 #

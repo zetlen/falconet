@@ -176,7 +176,13 @@ opt-out unchecked) is decided by `prepare`, not by a job-level `if:`: a job
 `if:` runs before checkout and cannot read the config, and gating there
 would fork eligibility into YAML-in-CI and nothing-locally. That is
 principle 1 at the front door: what the agent will read is decided by one
-verb from one file. Ineligible events spend a few runner-seconds.
+verb from one file. A person's ineligible event spends a few runner-seconds.
+
+The one rule a job `if:` does carry needs no config: an event whose sender
+is a bot, or a comment on a pull request, is never a way in. `prepare`
+refuses both from the event too, so a run by hand reaches the same answer.
+The `if:` is there because falconet's own comments and labels arrive as
+bot events, and each would otherwise spend a gate job.
 
 The config is one JSON file at `.github/falconet.json` (`--config`,
 `FALCONET_CONFIG`). Every key is optional but `paths.allow`. JSON because
