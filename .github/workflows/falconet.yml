@@ -151,6 +151,11 @@ jobs:
   # gate — is this issue ours, and if so lay out the work
   # =========================================================================
   gate:
+    # A bot's event, or a comment on a pull request, is never a way in, and
+    # telling needs nothing but the event. falconet's own comments and labels
+    # arrive as bot events, so without this each one spends a gate job.
+    # Everything that needs the config is decided by `prepare`.
+    if: github.event.sender.type != 'Bot' && !github.event.issue.pull_request
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 10
     permissions:
@@ -197,11 +202,12 @@ jobs:
       - name: Install falconet and gitleaks
         uses: zetlen/falconet@v1.1.1
 
-      # Eligibility is decided here and not in a job-level `if:`, because an
-      # `if:` evaluates before checkout and can therefore never read the
-      # config file. Gating there would fork eligibility into YAML-in-CI and
-      # nothing-locally, for a project whose whole rule is one code path. The
-      # cost is runner-seconds on ineligible events.
+      # Eligibility that needs the config is decided here and not in a
+      # job-level `if:`, because an `if:` evaluates before checkout and can
+      # therefore never read the config file. Gating there would fork
+      # eligibility into YAML-in-CI and nothing-locally, for a project whose
+      # whole rule is one code path. The cost is runner-seconds on a person's
+      # ineligible event.
       - name: Prepare
         id: prepare
         uses: zetlen/falconet@v1.1.1

@@ -374,16 +374,9 @@ name: falconet
 
 on:
   issues:
-    types: [opened, labeled, reopened]
+    types: [labeled, reopened]
   issue_comment:
     types: [created]
-
-# One run per issue. `opened` and `labeled` arrive seconds apart on a freshly
-# filed request, and without this they are two runs racing to open two pull
-# requests for the same issue.
-concurrency:
-  group: falconet-${{ github.event.issue.number }}
-  cancel-in-progress: false
 
 # A called workflow can only narrow the caller's token, never widen it, so
 # each of these must be at least what the widest job inside declares —
@@ -402,6 +395,20 @@ permissions:
 
 jobs:
   falconet:
+    # A run starts only for a person's event, and a label event only for the
+    # queue label: falconet's own comments and labels fire this workflow too.
+    # `falconet` here is `queue_label` in the config.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      !github.event.issue.pull_request &&
+      (github.event.action != 'labeled' || github.event.label.name == 'falconet')
+    # One run per issue, so two events on one request never race to open two
+    # pull requests. `queue: max` keeps every waiting run. With the default, a
+    # newer event cancels the run already waiting, and that run can be a
+    # person's reply.
+    concurrency:
+      group: falconet-${{ github.event.issue.number }}
+      queue: max
     uses: zetlen/falconet/.github/workflows/falconet.yml@main
     with:
       issue: ${{ github.event.issue.number }}
@@ -423,12 +430,15 @@ jobs:
 
 Three things about this file that are not obvious:
 
-- **It triggers on every issue event and decides eligibility inside.** A
-  job-level `if:` evaluates before checkout and can never read
-  `.github/falconet.json`, so gating there would fork eligibility into
-  YAML-in-CI and nothing-locally. `prepare` decides instead, reading the same
-  config a workstation reads, and an ineligible event costs runner-seconds
-  and stops. Eligible means: the issue is **open**, carries the **queue
+- **Its `if:` drops only what needs no config, and `prepare` decides the
+  rest.** The `if:` drops an event from a bot, which includes falconet's own
+  comments and labels, a comment on a pull request, and a label other than
+  the queue label. If you set `queue_label`, set the same name in the `if:`.
+  Everything else reaches `prepare`, because a job-level `if:` evaluates
+  before checkout and can never read `.github/falconet.json`. Gating there
+  would fork eligibility into YAML-in-CI and nothing-locally. `prepare`
+  reads the same config a workstation reads, and a person's ineligible event
+  costs runner-seconds and stops. Eligible means: the issue is **open**, carries the **queue
   label**, carries none of the blocking labels, has no ticked opt-out box,
   and has no open pull request already on a branch for that number. A
   comment from a bot, or on a pull request, is never a way in. A comment
@@ -515,6 +525,7 @@ to be fixed before the next request.
 | Paused `ready-for-human`: *the repository's own check fails on it and I could not get it passing* | The agent's change failed `check.command` on every pass it was allowed. The branch is pushed and the check's output is in the comment. | Read the output. A check that fails on the base tree too fails every run; fix that first. |
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted if it could be, and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
+| Labelling a request starts no run, or only a skipped one | The label named in the caller's `if:` is not the config's `queue_label`. | Step 7: the same name in both. |
 
 ### Known limits
 
