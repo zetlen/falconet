@@ -27,6 +27,7 @@ a finding, not a formatting error.
 | No default for the path allowlist or the content denylist | I3 | an adopter cannot set the allowlist before the first run, and the cost of one required field outweighs the cost of a default the operator did not choose | [below](#no-default-for-the-path-allowlist-or-the-content-denylist) |
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
+| prepare gates on the live issue, not the triggering event | I1, I4 | GitHub stops collapsing queued events, so no event that matters is dropped | [below](#prepare-gates-on-the-live-issue) |
 | Packaged as a reusable workflow plus a composite action | I2 | the credentials or setup it demands outgrow the README's eight steps | [below](#a-reusable-workflow-and-a-composite-action) |
 | Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
 | The suite holds what only a process shows; Go tests hold the logic | I2, I3 | a property is asserted in both places, or the suite needs a tool the runner lacks | [below](#the-suite-holds-what-only-a-process-shows) |
@@ -159,6 +160,29 @@ read `refused: `. Standing facts an operator wants the agent to take as
 given live in that repository's `AGENTS.md`, where they bind a person too;
 a prompt of the operator's own (`prompts.implement`) is for when the wording
 itself should differ.
+
+## prepare gates on the live issue
+
+The workflow triggers on issue and comment events, but a webhook event is a
+lossy trigger: GitHub's concurrency group keeps one running and one *pending*
+run per issue, so a burst of events collapses to whichever arrived last, and
+the one that matters — a requester's reply to a `needs-info` question — need
+not be the survivor. So `prepare` does not trust the event. It decides from
+the issue as it stands now: state, labels and the comment thread, fetched
+once and reused by the ready path. Eligibility is read from that snapshot (an
+event queued or replayed against an issue since closed, opted out or blocked
+is refused), and so is re-entry — a parked issue whose newest comment is a
+person's rather than the pipeline's own is a reply waiting to be worked,
+whichever event happened to wake the run.
+
+The event is read for one thing only: a bot's own comment, or a comment on a
+pull request, is never a way in and is refused before any read, so the
+pipeline does not answer itself and that case needs no token. Everything else
+costs one issue read. This is principle 1 at the trigger itself — inputs
+assembled, not discovered — and it is what makes a dropped event harmless:
+whichever run executes reconstructs the same work from the same canonical
+state. `--re-entry` remains the workstation's way to force a reply run with no
+event to read.
 
 ## Stage-level verbs, one JSON config file
 

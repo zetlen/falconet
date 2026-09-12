@@ -106,13 +106,18 @@ func HasLabel(labels []string, name string) bool {
 	return false
 }
 
-// InferMode reads the re-entry shape off the event, exactly: a human comment
-// on an issue that is parked needs-info and still queued. `.issue.pull_request`
-// is what distinguishes a PR comment from an issue comment. With no event, or
-// any other shape, the mode is Entry; --re-entry is the caller's to add.
-func InferMode(ev *Event, labels []string, r Rules) Mode {
-	if ev != nil && ev.Action == "created" && !ev.PullRequest && !ev.Bot &&
-		HasLabel(labels, r.QueueLabel) && HasLabel(labels, r.NeedsInfo) {
+// LiveMode decides Entry vs ReEntry from the issue as it stands now, not from
+// the event that woke the run. GitHub's concurrency group keeps only one
+// pending run per issue, so a burst of events (a reply, a bot comment, a
+// label) collapses to whichever arrived last, and the reply need not be the
+// survivor; reading the live issue lets any surviving run reach the same
+// conclusion. A run is a re-entry when the issue is parked for a reply — open,
+// queued, needs-info — and its newest comment is a person's rather than this
+// pipeline's own, i.e. a reply is waiting. Anything else is Entry;
+// --re-entry is still the caller's to force.
+func LiveMode(s Snapshot, newestCommentHuman bool, r Rules) Mode {
+	if Open(s.State) && HasLabel(s.Labels, r.QueueLabel) &&
+		HasLabel(s.Labels, r.NeedsInfo) && newestCommentHuman {
 		return ReEntry
 	}
 	return Entry

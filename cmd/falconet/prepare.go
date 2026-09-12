@@ -89,9 +89,11 @@ Outputs on the ready path, written into the handoff directory:
 and, when $GITHUB_ENV is writable, BRANCH and BASE_SHA.
 
 GitHub is reached with GH_TOKEN or GITHUB_TOKEN, on the repository
-GITHUB_REPOSITORY names, or else the one the origin remote points at; both
-are resolved at the first call that needs them, so an ineligible event
-costs no network and no credential. GITHUB_API_URL overrides the endpoint.
+GITHUB_REPOSITORY names, or else the one the origin remote points at. The
+gate reads the live issue rather than trusting the event that woke the run,
+so the event path needs a token; only a bot's comment or a pull-request
+comment is refused without one, before any read. GITHUB_API_URL overrides
+the endpoint.
 
 Exit codes: 0 = an outcome was determined and printed
             1 = refused mechanically — a dirty tree, an issue that cannot
@@ -179,6 +181,30 @@ type issueSnapshot struct {
 	rawComments json.RawMessage
 	issue       github.Issue
 	comments    []github.IssueComment
+}
+
+// liveSnapshot is the gate's view of the issue as GitHub last returned it:
+// its state, its body, and the names of its labels.
+func liveSnapshot(snap *issueSnapshot) prepare.Snapshot {
+	s := prepare.Snapshot{State: snap.issue.State, Body: snap.issue.Body}
+	for _, l := range snap.issue.Labels {
+		if l.Name != "" {
+			s.Labels = append(s.Labels, l.Name)
+		}
+	}
+	return s
+}
+
+// newestCommentIsHuman is whether the last comment on the issue is a person's
+// rather than this pipeline's own. GitHub returns the thread oldest-first, so
+// the last element is the newest; a comment this pipeline authored (the ack, a
+// pause question) has user type "Bot" and is not a reply waiting to be worked.
+func newestCommentIsHuman(snap *issueSnapshot) bool {
+	if snap == nil || len(snap.comments) == 0 {
+		return false
+	}
+	last := snap.comments[len(snap.comments)-1]
+	return last.User.Login != "" && last.User.Type != "Bot"
 }
 
 // snapshotJSON is issue.json: the issue object as GitHub sent it, with the
@@ -324,15 +350,16 @@ func runPrepare(args []string) int {
 
 	// --- the gate's inputs ----------------------------------------------------
 	//
-	// One fetch at most. With an event payload the gate reads it and an
-	// ineligible issue costs no network at all; without one the issue is
-	// fetched once, gated, and the same snapshot is reused by the ready path.
-	// The issue is not going to change during the next twenty lines.
+	// One fetch. The gate reads the issue as it stands now, not the event that
+	// woke the run, so both the event path and the no-event path fetch the
+	// issue once and reuse that snapshot for the ready path. The one thing
+	// decided without a read is a bot's own comment or a pull-request comment,
+	// which is never a way in and is refused before connecting.
 	//
 	// The token and the repository are resolved at the first call that needs
-	// them, never at startup: "no network at all" has to mean no credential
-	// either, and a workstation run that stops at the gate should not have
-	// to explain which repository it would have asked.
+	// them, never at startup: a workstation run that is refused before it
+	// reads the issue should not have to explain which repository it would
+	// have asked, and a bot comment is refused without either.
 	var client github.Client
 	var owner, name string
 	connect := func() error {
@@ -380,35 +407,46 @@ func runPrepare(args []string) int {
 		return nil
 	}
 
+	// The mode and the gate both read the issue as it is NOW, never the event
+	// that woke the run. GitHub's concurrency group keeps only one pending run
+	// per issue, so a burst of events collapses to whichever arrived last and
+	// the one that matters — a human's reply — need not survive; reading the
+	// live issue lets whichever run does execute reach the same conclusion.
+	// The event is used for one thing only: a bot's own comment, or a comment
+	// on a pull request, is never a way in (or the pipeline answers itself),
+	// and that is refused before any fetch.
 	mode := prepare.Entry
 	var gate prepare.Snapshot
 	if eventPath != "" {
-		ev, s, err := readEvent(eventPath)
+		ev, _, err := readEvent(eventPath)
 		if err != nil {
 			return die("prepare: %v", err)
 		}
-		// The re-entry shape, exactly: a human comment on an issue that is
-		// parked needs-info and still queued. `.issue.pull_request` is what
-		// distinguishes a PR comment from an issue comment.
-		mode = prepare.InferMode(&ev, s.Labels, rules)
-		// A bot comment, or a comment on a pull request, is not a way in.
 		if prepare.NotAWayIn(&ev) {
 			say("issue #%d: comment event is from a bot or on a pull request", number)
 			fmt.Println("ineligible")
 			return 0
 		}
-		gate = s
+		if err := fetchIssue(); err != nil {
+			return die("prepare: could not read issue #%d: %v", number, err)
+		}
+		// A malformed live answer — a null issue — is a mechanical failure,
+		// not an eligibility decision, and this is the first read of the
+		// issue, so it is caught here rather than read as a zero-valued issue.
+		var probe map[string]any
+		if json.Unmarshal(snap.rawIssue, &probe) != nil || probe == nil {
+			return die("prepare: issue #%d is not a JSON object", number)
+		}
+		gate = liveSnapshot(snap)
+		// A re-entry is a parked issue whose newest comment is a person's, not
+		// this pipeline's own — a reply is waiting — decided from the live
+		// thread, so a run woken by some other surviving event still finds it.
+		mode = prepare.LiveMode(gate, newestCommentIsHuman(snap), rules)
 	} else {
 		if err := fetchIssue(); err != nil {
 			return die("prepare: could not read issue #%d: %v", number, err)
 		}
-		for _, l := range snap.issue.Labels {
-			if l.Name != "" {
-				gate.Labels = append(gate.Labels, l.Name)
-			}
-		}
-		gate.State = snap.issue.State
-		gate.Body = snap.issue.Body
+		gate = liveSnapshot(snap)
 	}
 	if reEntry {
 		mode = prepare.ReEntry
@@ -416,8 +454,10 @@ func runPrepare(args []string) int {
 
 	// --- rules 0 to 3 -----------------------------------------------------------
 	//
-	// See internal/prepare: open, no blocking label, the opt-out box
-	// unticked, the queue label present, in that order.
+	// See internal/prepare: open, no blocking label, the opt-out box unticked,
+	// the queue label present, in that order. The gate reads the live issue,
+	// so an event queued or replayed against an issue that has since been
+	// closed, opted out or blocked is refused here.
 	if reason := prepare.Gate(number, gate, mode, rules); reason != "" {
 		say("%s", reason)
 		fmt.Println("ineligible")
@@ -446,40 +486,6 @@ func runPrepare(args []string) int {
 		say("%s", prepare.InFlightReason(number, hits))
 		fmt.Println("in-flight")
 		return 0
-	}
-
-	// --- the gate again, on the issue as it is now ------------------------------
-	//
-	// The gate above read the triggering event. An event can be queued behind
-	// another run or replayed on a re-run, and the issue can have been closed,
-	// opted out, or given a blocking label between the event and this moment.
-	// So before anything mutating happens, gate once more on the live issue —
-	// the same fetch the ready path uses for the snapshot, memoised, so this
-	// costs no extra call. On the no-event path `gate` already came from this
-	// live fetch, and there is nothing new to check.
-	if eventPath != "" {
-		if err := fetchIssue(); err != nil {
-			return die("prepare: could not read issue #%d: %v", number, err)
-		}
-		// A malformed live answer — a null issue, say — is a mechanical
-		// failure, not an eligibility decision, and this is now the first read
-		// of the issue, so the same check the snapshot below makes is made
-		// here too rather than reading a zero-valued issue as "ineligible".
-		var probe map[string]any
-		if json.Unmarshal(snap.rawIssue, &probe) != nil || probe == nil {
-			return die("prepare: issue #%d is not a JSON object", number)
-		}
-		live := prepare.Snapshot{State: snap.issue.State, Body: snap.issue.Body}
-		for _, l := range snap.issue.Labels {
-			if l.Name != "" {
-				live.Labels = append(live.Labels, l.Name)
-			}
-		}
-		if reason := prepare.Gate(number, live, mode, rules); reason != "" {
-			say("%s (the issue changed after the event that queued this run)", reason)
-			fmt.Println("ineligible")
-			return 0
-		}
 	}
 
 	// ===========================================================================

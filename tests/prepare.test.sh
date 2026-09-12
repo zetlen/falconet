@@ -533,11 +533,16 @@ assert_eq "" "$(sed -n 2p "$c/result")" "stdout"
 it "and nothing reaches GitHub"
 assert_eq "" "$(ghlog "$c")" "API calls"
 
-c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "falconet,wontfix" "x"
-jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"falconet"},{name:"wontfix"}], body:"x"}}' \
+# The gate reads the live issue now (a queued/replayed event may be stale, and
+# a dropped reply must still be found), so an event path needs a token — except
+# the one thing decided from the event alone: a bot's own comment is never a
+# way in, and is refused before any read, so the pipeline never answers itself.
+c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
+jq -n '{action:"created", comment:{user:{type:"Bot"}},
+        issue:{state:"open", labels:[{name:"falconet"},{name:"needs-info"}], body:"x"}}' \
   >"$c/event.json"
 ( unset GH_TOKEN GITHUB_TOKEN; p "$c" --event "$c/event.json"; printf '%s\n' "$OUT" >"$c/result" )
-it "an event that says ineligible needs no token at all"
+it "a bot comment is refused with no token at all"
 assert_eq "ineligible" "$(cat "$c/result")" "outcome"
 it "and makes no request, not even to read"
 assert_eq "" "$(ghlog "$c")" "API calls"
@@ -596,8 +601,8 @@ evt "$c/event.json"
 p "$c" --event "$c/event.json"
 it "an event that was eligible but whose issue is now closed is ineligible"
 assert_eq "ineligible" "$OUT" "outcome"
-it "and the reason names the live change, not the event"
-assert_contains "$ERR" "after the event" "stderr"
+it "and the reason says why, from the live issue"
+assert_contains "$ERR" "closed" "stderr"
 it "and nothing was mutated"
 assert_eq "" "$(mutations "$c")" "mutating API calls"
 it "nor was a branch cut"
@@ -615,6 +620,34 @@ evt "$c/event.json"
 p "$c" --event "$c/event.json"
 it "an event whose issue is still eligible on the live re-check is ready"
 assert_eq "ready" "$OUT" "outcome"
+
+# --- re-entry is read from the live issue, not the event (issue #32) ---------
+#
+# GitHub keeps one pending run per issue, so the human-reply event can be
+# discarded and some other event (a label, a reopen) survives to run. The run
+# still finds the waiting reply by reading the live issue and its thread, not
+# the event that woke it. issue_json leaves a human comment ("bump") as the
+# newest, so this parked issue has a reply waiting.
+
+c="$(new_checkout reentry_dropped)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
+jq -n '{action:"labeled", issue:{state:"open",
+        labels:[{name:"falconet"},{name:"needs-info"}], body:"x"}}' >"$c/event.json"
+p "$c" --event "$c/event.json"
+it "a non-comment event on a parked issue with a waiting human reply is worked"
+assert_eq "ready" "$OUT" "outcome"
+it "and the parking label is cleared, as any re-entry clears it"
+assert_contains "$(ghlog "$c")" "DELETE $API/issues/42/labels/needs-info" "API calls"
+
+c="$(new_checkout reentry_noreply)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
+printf '[{"user":{"login":"falconet[bot]","type":"Bot"},"created_at":"2026-08-01T00:00:00Z","body":"What zone did you mean?"}]\n' \
+  >"$c/comments.json"
+jq -n '{action:"labeled", issue:{state:"open",
+        labels:[{name:"falconet"},{name:"needs-info"}], body:"x"}}' >"$c/event.json"
+p "$c" --event "$c/event.json"
+it "but a parked issue whose newest comment is the bot's own question is not — no reply yet"
+assert_eq "ineligible" "$OUT" "outcome"
+it "and nothing is mutated"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
 
 # --- the collision suffix is unique across re-runs (issue #33) --------------
 #

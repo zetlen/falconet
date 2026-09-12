@@ -447,34 +447,45 @@ done`
 
 // --- the event --------------------------------------------------------------------
 
-func TestInferModeAndNotAWayIn(t *testing.T) {
-	parked := []string{"infra-request", "needs-info"}
+func TestLiveMode(t *testing.T) {
+	parked := Snapshot{State: "open", Labels: []string{"infra-request", "needs-info"}}
 	for _, tc := range []struct {
-		name    string
-		ev      *Event
-		labels  []string
-		mode    Mode
-		notAWay bool
+		name  string
+		s     Snapshot
+		human bool
+		mode  Mode
 	}{
-		{"no event", nil, parked, Entry, false},
-		{"a human's comment on a parked, queued issue", &Event{Action: "created"}, parked, ReEntry, false},
-		{"a bot's comment", &Event{Action: "created", Bot: true}, parked, Entry, true},
-		{"a comment on a pull request", &Event{Action: "created", PullRequest: true}, parked, Entry, true},
-		{"a comment on an issue not parked", &Event{Action: "created"}, []string{"infra-request"}, Entry, false},
-		{"a comment on an issue not queued", &Event{Action: "created"}, []string{"needs-info"}, Entry, false},
-		{"labeled", &Event{Action: "labeled"}, parked, Entry, false},
-		{"opened", &Event{Action: "opened"}, parked, Entry, false},
-		{"a bot label event is not a comment, so not the short-circuit", &Event{Action: "labeled", Bot: true}, parked, Entry, false},
+		{"parked, queued, a person replied last", parked, true, ReEntry},
+		{"parked, queued, the bot's own comment is last", parked, false, Entry},
+		{"open and queued but not parked", Snapshot{State: "open", Labels: []string{"infra-request"}}, true, Entry},
+		{"parked but not queued", Snapshot{State: "open", Labels: []string{"needs-info"}}, true, Entry},
+		{"a reply on a closed issue is not a re-entry", Snapshot{State: "closed", Labels: []string{"infra-request", "needs-info"}}, true, Entry},
 	} {
-		if got := InferMode(tc.ev, tc.labels, defaults); got != tc.mode {
-			t.Errorf("%s: InferMode = %v, want %v", tc.name, got, tc.mode)
-		}
-		if got := NotAWayIn(tc.ev); got != tc.notAWay {
-			t.Errorf("%s: NotAWayIn = %v, want %v", tc.name, got, tc.notAWay)
+		if got := LiveMode(tc.s, tc.human, defaults); got != tc.mode {
+			t.Errorf("%s: LiveMode = %v, want %v", tc.name, got, tc.mode)
 		}
 	}
 	if Entry.String() != "entry" || ReEntry.String() != "re-entry" {
 		t.Error("the modes do not name themselves")
+	}
+}
+
+func TestNotAWayIn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ev      *Event
+		notAWay bool
+	}{
+		{"no event", nil, false},
+		{"a human's comment", &Event{Action: "created"}, false},
+		{"a bot's comment", &Event{Action: "created", Bot: true}, true},
+		{"a comment on a pull request", &Event{Action: "created", PullRequest: true}, true},
+		{"a labeled event", &Event{Action: "labeled"}, false},
+		{"a bot label event is not a comment, so not the short-circuit", &Event{Action: "labeled", Bot: true}, false},
+	} {
+		if got := NotAWayIn(tc.ev); got != tc.notAWay {
+			t.Errorf("%s: NotAWayIn = %v, want %v", tc.name, got, tc.notAWay)
+		}
 	}
 }
 
