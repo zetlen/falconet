@@ -204,28 +204,37 @@ func runPause(args []string) int {
 		}
 	}
 
-	comment := pause.Comment(pause.Input{
-		Preamble:   preamble,
-		Branch:     branch,
-		ServerURL:  os.Getenv("GITHUB_SERVER_URL"),
-		Repository: os.Getenv("GITHUB_REPOSITORY"),
-		Body:       body,
-		BodyTitle:  bodyTitle,
-		RunURL:     runURL,
-	})
-
-	// The three things "stopped" always means, each attempted regardless of
-	// the one before: an issue that got its label and not its comment is
-	// still better paused than not, and the word and the exit code say it
-	// was partial.
+	// The blocking label first, then the comment, then the claim release.
+	// The label is the terminal state the contain job reads, so it goes ahead
+	// of the comment and the comment can then report what actually happened:
+	// a label that would not apply is said in the comment — the issue is not
+	// parked and may be worked again — rather than the comment claiming a
+	// pause that did not take (issue #31). Success needs both the label and
+	// the comment; a comment that also fails after the label is the rare case
+	// nothing here can paper over, and the exit code says the pause was
+	// partial.
 	client := github.NewGH(github.APIURLFromEnv(), token)
 	status := 0
-	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
-		fmt.Fprintf(os.Stderr, "could not comment on #%d: %v\n", number, err)
-		status = 1
-	}
+	labelUnapplied := ""
 	if err := client.AddIssueLabels(owner, name, number, []string{label}); err != nil {
 		fmt.Fprintf(os.Stderr, "could not add label %s to #%d: %v\n", label, number, err)
+		labelUnapplied = label
+		status = 1
+	}
+
+	comment := pause.Comment(pause.Input{
+		Preamble:       preamble,
+		Branch:         branch,
+		ServerURL:      os.Getenv("GITHUB_SERVER_URL"),
+		Repository:     os.Getenv("GITHUB_REPOSITORY"),
+		Body:           body,
+		BodyTitle:      bodyTitle,
+		RunURL:         runURL,
+		LabelUnapplied: labelUnapplied,
+	})
+
+	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
+		fmt.Fprintf(os.Stderr, "could not comment on #%d: %v\n", number, err)
 		status = 1
 	}
 	if unassign != "" {

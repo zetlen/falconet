@@ -13,7 +13,7 @@
 // the agent needs more information, the repository's own check still fails
 // at the attempt cap, no change could be prepared, or a step simply died.
 // Every one of them comes through pause, so "stopped" always means the same
-// three things happened — a comment, a label, and the claim released — and
+// three things happened — a label, a comment, and the claim released — and
 // never means "silently nothing". A request that vanishes into an empty
 // green run is the failure mode this repository cares about most.
 //
@@ -85,6 +85,11 @@ type Input struct {
 	BodyTitle string
 	// RunURL is cited at the end, and by the cut note.
 	RunURL string
+	// LabelUnapplied, when set, names a pause label that could not be
+	// applied. The comment then leads with a warning: the issue is not
+	// actually parked and may be picked up again, so a repository admin
+	// should look. See cmd/falconet/pause.go and issue #31.
+	LabelUnapplied string
 	// Limit overrides CommentLimit; zero means the default.
 	Limit int
 }
@@ -99,6 +104,15 @@ func Comment(in Input) []byte {
 	var b bytes.Buffer
 	b.WriteString(in.Preamble)
 	b.WriteByte('\n')
+
+	// The label is applied before this comment is built, so a label that
+	// would not apply is reported here rather than silently claimed. Without
+	// the label the issue is not in a terminal state and may be worked again,
+	// which the reader needs to know, and a person needs to fix.
+	if in.LabelUnapplied != "" {
+		b.WriteByte('\n')
+		fmt.Fprintf(&b, "> **Note:** I could not apply the `%s` label, so this issue is **not** parked and may be picked up again automatically. Please contact a repository admin.\n", in.LabelUnapplied)
+	}
 
 	if in.Branch != "" {
 		b.WriteByte('\n')

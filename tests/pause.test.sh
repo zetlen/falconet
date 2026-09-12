@@ -99,9 +99,9 @@ it "and the claim is released"
 assert_contains "$log" \
   'DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees {"assignees":["zetlen"]}' "API calls"
 
-it "the comment is posted first, then the label, then the claim is released"
-assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/comments
-POST /repos/zetlen/wayfinders-infra/issues/36/labels
+it "the label is applied first, then the comment, then the claim is released"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments
 DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees" "$(calls review)" "call order"
 
 it "the run URL is still cited"
@@ -206,11 +206,14 @@ it "a comment GitHub refuses is failure, exit 1"
 assert_eq 1 "$rc" "exit code"
 assert_eq "failure" "$(cat "$WORK/nocomment.out")" "stdout"
 
-it "and the label and the un-assign are still tried"
-assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/comments
-POST /repos/zetlen/wayfinders-infra/issues/36/labels
+it "the label went first, then the comment was still attempted, then the un-assign"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments
 DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees" "$(calls nocomment)" "call order"
 
+# The label first, so a label that will not apply is reported IN the comment
+# rather than the comment claiming a pause that did not take. The issue is not
+# parked, and the comment says so and points the requester at an admin (#31).
 printf '[{"method":"POST","path":"/repos/zetlen/wayfinders-infra/issues/36/labels","status":404,"body":{"message":"Not Found"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
 pause nolabel -- --issue 36 --label ready-for-human --preamble "Parked."
@@ -219,6 +222,15 @@ rc=$?
 it "a label GitHub refuses is failure too"
 assert_eq 1 "$rc" "exit code"
 assert_eq "failure" "$(cat "$WORK/nolabel.out")" "stdout"
+
+it "and the label is attempted before the comment, which is still posted"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments" "$(calls nolabel)" "call order"
+
+it "and that comment warns the requester the label did not apply"
+warned="$(cat "$WORK/nolabel.comment" 2>/dev/null)"
+assert_contains "$warned" "could not apply the \`ready-for-human\` label" "posted comment"
+assert_contains "$warned" "contact a repository admin" "posted comment"
 
 # Releasing the claim is best-effort: an issue that keeps a stale assignee is
 # still paused.
