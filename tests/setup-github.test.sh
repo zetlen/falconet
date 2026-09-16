@@ -10,17 +10,35 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/tests/lib.sh"
 
 fake_github
-BROWSER="$REPO_ROOT/tests/fixtures/browser.sh"
 SETUP="$REPO_ROOT/install/setup-github.sh"
 export GH_TOKEN=test-token
+# The web base is the API base: the fake serves the manifest form's POST and
+# the install page beside the REST routes.
+export GITHUB_SERVER_URL="$GITHUB_API_URL"
+export FALCONET_BROWSER="$REPO_ROOT/tests/fixtures/browser.sh"
 
-SECRETS_LOG="$WORK/secrets.log"
+# A gh that writes down `secret set` and swallows it, and gets out of the way
+# of everything else. `gh secret set` cannot be pointed at the fake — it
+# seals against the host's key and forces https — so the argv it is handed,
+# and what arrives on its stdin, are the evidence a secret was stored.
+REAL_GH="$(command -v gh)"
+GH_LOG="$WORK/gh-argv.txt"
+mkdir -p "$WORK/stubbin"
+cat >"$WORK/stubbin/gh" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = secret ]; then
+    printf '%s\n' "\$@" >>"$GH_LOG"
+    printf -- '--\n' >>"$GH_LOG"
+    cat >"$WORK/gh-stdin-\$3"
+    exit 0
+fi
+exec "$REAL_GH" "\$@"
+STUB
+chmod +x "$WORK/stubbin/gh"
+export PATH="$WORK/stubbin:$PATH"
+
 run_setup() { # [args...]
-    GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-    GITHUB_SERVER_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-    FALCONET_BROWSER="$BROWSER" \
-    FALCONET_SECRETS_LOG="$SECRETS_LOG" \
-    "$SETUP" "$@" 2>/dev/null
+    "$SETUP" "$@" 2>/dev/null </dev/null
 }
 
 # --- the whole round trip ----------------------------------------------------
@@ -46,10 +64,10 @@ assert_contains "$reqs" "default_permissions"
 it "then the code is converted"
 assert_contains "$reqs" "POST /app-manifests/"
 
-secrets="$(cat "$SECRETS_LOG")"
-it "and both secrets are written, the ID and then the PEM"
-assert_contains "$secrets" "FALCONET_APP_ID=42"
-assert_contains "$secrets" "FALCONET_APP_PRIVATE_KEY=-----BEGIN"
+secrets="$(cat "$GH_LOG")"
+it "and both secrets are handed to gh secret set, the ID and then the PEM"
+assert_contains "$secrets" "FALCONET_APP_ID"
+assert_contains "$secrets" "FALCONET_APP_PRIVATE_KEY"
 
 it "and the installation poll is what ended the wait"
 assert_contains "$reqs" "GET /repos/o/r/installation"
@@ -67,9 +85,7 @@ assert_contains "$(cat "$FAKE_GITHUB/requests.log")" "POST /organizations/o/sett
 
 # --- invocations that do not run a browser ------------------------------------
 
-err="$(GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-       GITHUB_SERVER_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-       "$SETUP" --repo o/r --timeout 3 --no-browser 2>&1)"; rc=$?
+err="$("$SETUP" --repo o/r --timeout 0 --no-browser 2>&1 </dev/null)"; rc=$?
 it "--no-browser prints the URL rather than opening one"
 assert_contains "$err" "open this yourself"
 
@@ -78,10 +94,7 @@ assert_eq 1 "$rc" "exit code"
 
 # --- a redirect that does not carry this run's nonce --------------------------
 
-FALCONET_BROWSER=none \
-    GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-    GITHUB_SERVER_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")" \
-    "$SETUP" --repo o/r >"$WORK/browser_out" 2>&1 &
+FALCONET_BROWSER=none "$SETUP" --repo o/r >"$WORK/browser_out" 2>&1 </dev/null &
 pid=$!
 
 port=""

@@ -296,9 +296,7 @@ because it is GitHub-specific machinery — the manifest round trip, the
 code conversion, the two secrets, the install poll — and it runs once, on
 the maintainer's own workstation, where `curl … | sh` is a read-and-run
 choice rather than an install vector for consumers. The PEM goes from the
-conversion response into `gh secret set` and is never a file. The
-`FALCONET_SECRETS_LOG` seam is how the shell suite drives it without a
-real `gh` against the fake; never set it outside a test.
+conversion response into `gh secret set` and is never a file.
 
 ## The binary is `go install`ed at the caller's ref
 

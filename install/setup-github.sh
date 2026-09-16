@@ -30,9 +30,6 @@
 #   GITHUB_SERVER_URL  the web base (default https://github.com)
 #   FALCONET_BROWSER   the command used to open a URL; "none" prints it
 #                      instead (default: open, xdg-open, or print)
-#   FALCONET_SECRETS_LOG  the one test seam: when set, secret writes append
-#                      "NAME=VALUE" lines to this file instead of calling
-#                      `gh secret set`. Never set it for a real run.
 
 set -euo pipefail
 
@@ -90,8 +87,6 @@ api="${GITHUB_API_URL:-https://api.github.com}"
 # Reads go through gh with an explicit Authorization header — the same
 # discipline falconet itself uses — because gh attaches its token only to
 # hosts it has configured, and a GITHUB_API_URL or GHES host is not one.
-# sec/secret writes are `gh secret set`; testing substitutes the log seam
-# named in the header.
 gh_api() {
     if [ -n "$TOKEN" ]; then
         gh api -H "Authorization: token $TOKEN" "$@"
@@ -99,12 +94,8 @@ gh_api() {
         gh api "$@"
     fi
 }
-put_secret() {
-    if [ -n "${FALCONET_SECRETS_LOG:-}" ]; then
-        printf '%s=%s\n' "$1" "$2" >>"$FALCONET_SECRETS_LOG"
-    else
-        gh secret set "$1" --repo "$repo" --body "$2"
-    fi
+put_secret() { # name value
+    gh secret set "$1" --repo "$repo" --body "$2"
 }
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 if [ -z "$TOKEN" ]; then TOKEN="$(gh auth token 2>/dev/null || true)"; fi

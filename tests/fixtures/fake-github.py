@@ -122,16 +122,6 @@ def _installation(m, b, query):
     return (404, {"message": "Not Found"}, {})
 
 
-def _public_key(m, b, query):
-    # gh secret set seals with this; any 32 bytes are a valid recipient key.
-    return (200, {"key_id": "1",
-                  "key": Handler.episode["secret_pubkey"]}, {})
-
-
-def _put_secret(m, b, query):
-    return (201, {}, {})
-
-
 ROUTES = [
     # (method, path regex, handler) — the handler gets the match and the
     # parsed body and returns (status, body) or (status, body, headers).
@@ -167,14 +157,12 @@ ROUTES = [
          "assignees": [{"login": login} for login in (b or {}).get("assignees", [])]
          if isinstance(b, dict) else [],
      })),
-    # --- setup-github.sh: the manifest round trip and the secrets ----------
+    # --- setup-github.sh: the manifest round trip and the install ----------
     ("POST", r"^/settings/apps/new$", _manifest),
     ("POST", r"^/organizations/[^/]+/settings/apps/new$", _manifest),
     ("POST", r"^/app-manifests/[^/]+/conversions$", _convert),
     ("GET", r"^/apps/[^/]+/installations/new$", _install_page),
     ("GET", r"^/repos/[^/]+/[^/]+/installation$", _installation),
-    ("GET", r"^/repos/[^/]+/[^/]+/actions/secrets/public-key$", _public_key),
-    ("PUT", r"^/repos/[^/]+/[^/]+/actions/secrets/[^/]+$", _put_secret),
 ]
 
 
@@ -243,8 +231,8 @@ class Handler(BaseHTTPRequestHandler):
     state = None  # set before serving
     # setup-github.sh's episode: the PEM the conversion answers carries, the
     # last manifest posted, and whether the install page was opened.
-    episode = {"pem": "", "secret_pubkey": "", "manifest": None,
-               "installed": False, "code_counter": 0}
+    episode = {"pem": "", "manifest": None, "installed": False,
+               "code_counter": 0}
 
     def log_message(self, *args):  # quiet: the log files are the record
         pass
@@ -323,11 +311,10 @@ def main():
         # The PEM the conversion endpoint answers with and setup-github.sh
         # signs its installation poll from. Generated, not committed: there
         # is nothing here an attacker would profit from.
-        import subprocess, base64
+        import subprocess
         out = subprocess.run(["openssl", "genrsa", "2048"],
                              capture_output=True, check=True)
         Handler.episode["pem"] = out.stdout.decode()
-        Handler.episode["secret_pubkey"] = base64.b64encode(bytes(32)).decode()
     except (OSError, subprocess.CalledProcessError):
         print("openssl genrsa failed; the manifest/conversion routes will 500",
               file=sys.stderr)
