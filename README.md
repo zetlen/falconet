@@ -220,18 +220,23 @@ A GitHub App registered purely as a credential: no webhook, nothing hosted.
 
 **By script.** `install/setup-github.sh` does this whole step on your
 machine: it registers the App by manifest (one browser click), puts its ID
-and private key straight into the repository's secrets — the PEM never
-touches disk — and waits until you have installed the App. Run it from a
-clone, or fetch it pinned to a tag:
+and private key straight into the repository's secrets, and waits until you
+have installed the App. The PEM is piped from GitHub's answer into
+`gh secret set` and is never a file. Run it from a clone, or fetch it at
+the tag you are installing, the same `vX.Y.Z` step 7 pins on the `uses:`
+line:
 
 ```sh
 bash install/setup-github.sh
-# or: curl -fsSL https://raw.githubusercontent.com/zetlen/falconet/v1.1.2/install/setup-github.sh | bash
+# or, with no clone:
+curl -fsSL https://raw.githubusercontent.com/zetlen/falconet/vX.Y.Z/install/setup-github.sh | bash
 ```
 
-It needs `gh` (authenticated), `jq`, `curl`, `openssl` and `python3` —
-things the rest of these steps already ask of you. It does nothing but the
-App: labels, config and the workflow file stay steps of yours.
+Besides `gh` and `jq` it needs `curl`, `openssl` and `python3`. It does
+nothing but the App: labels, config and the workflow file stay steps of
+yours. Its first line is `setup-github.sh: registering the GitHub App …`.
+A run that prints nothing fetched nothing: `curl -f` is silent on a 404
+and `bash` exits 0 on empty input, so check that the tag has the file.
 
 **By hand.** On **github.com → Settings → Developer settings → GitHub
 Apps → New GitHub App** (under the organisation's settings if the

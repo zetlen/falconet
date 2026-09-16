@@ -5,10 +5,11 @@
 #   tests/run.sh              all of them
 #   tests/run.sh handover     only the files whose name contains "handover"
 #
-# These cover the falconet verbs and the wiring of action.yml and
-# .github/workflows/falconet.yml. Every test spawns its subject through
-# $FALCONET, which defaults to the binary built out of tree at dist/falconet
-# (`make build`; lib.sh refuses to start without it):
+# These cover the falconet verbs, the wiring of action.yml and
+# .github/workflows/falconet.yml, and install/setup-github.sh. Every verb
+# test spawns its subject through $FALCONET, which defaults to the binary
+# built out of tree at dist/falconet (`make build`; lib.sh refuses to start
+# without it):
 #
 #   FALCONET=/path/to/another/falconet tests/run.sh
 #
@@ -17,7 +18,8 @@
 # on stdout, the files left on disk, the state of the git repository, the
 # calls that reached the fake GitHub, and the argv the gitleaks stub was
 # handed. `go test ./...` holds the logic, and `make test` runs both. The
-# suite needs bash, git, gh, jq, awk and python3 (stdlib only). GitHub is
+# suite needs bash, git, gh, jq, awk, curl, openssl and python3 (stdlib
+# only). GitHub is
 # tests/fixtures/fake-github.py, served on loopback: the verbs reach it
 # through the real gh, whose requests follow GITHUB_API_URL, so a test token
 # goes nowhere but loopback. gitleaks and the harness are bash stubs, the
