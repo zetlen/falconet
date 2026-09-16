@@ -133,11 +133,18 @@ rm -f "$FAKE_GITHUB/responses.json"
 it "an org repository posts the manifest to the organisation namespace"
 assert_contains "$(cat "$FAKE_GITHUB/requests.log")" "POST /organizations/o/settings/apps/new"
 
+# --- the URLs are always on stderr, browser or not ---------------------------
+
+err="$("$SETUP" --repo o/r 2>&1 >/dev/null </dev/null)"
+it "with a browser, the listener and install URLs are still printed"
+assert_contains "$err" "http://127.0.0.1:" "listener URL"
+assert_contains "$err" "/installations/new" "install URL"
+
 # --- invocations that do not run a browser ------------------------------------
 
 err="$("$SETUP" --repo o/r --timeout 0 --no-browser 2>&1 </dev/null)"; rc=$?
 it "--no-browser prints the URL rather than opening one"
-assert_contains "$err" "open this yourself"
+assert_contains "$err" "open: http://127.0.0.1:"
 
 it "and exits 1 when no redirect can come"
 assert_eq 1 "$rc" "exit code"

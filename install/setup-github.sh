@@ -28,8 +28,9 @@
 # Honored overrides, for tests and GitHub Enterprise Server:
 #   GITHUB_API_URL     the API base (default https://api.github.com)
 #   GITHUB_SERVER_URL  the web base (default https://github.com)
-#   FALCONET_BROWSER   the command used to open a URL; "none" prints it
-#                      instead (default: open, xdg-open, or print)
+#   FALCONET_BROWSER   the command used to open a URL, which is printed
+#                      either way; "none" only prints (default: open,
+#                      xdg-open, or nothing)
 
 set -euo pipefail
 
@@ -42,7 +43,7 @@ Usage: setup-github.sh [--repo OWNER/NAME] [--app-name NAME]
   --app-name     name the App is registered as (default: falconet-<owner>-<repo>)
   --timeout      seconds to wait for you and a browser, per round trip
                  (default 600)
-  --no-browser   print URLs instead of opening them
+  --no-browser   do not open the URLs, only print them
   -h, --help     this text
 EOF
 }
@@ -267,19 +268,18 @@ done
 # `wait` returns the child's status; under errexit that would exit before die.
 [ -n "$listener_ready" ] || { wait "$LISTENER_PID" 2>/dev/null || true; die "the listener did not start"; }
 
+# The URL is always printed: a browser that opens somewhere the person is
+# not looking (or, over SSH, nowhere) must not be the only copy of it.
 open_url() {
+    note "open: $1"
     if [ "$browser" = none ]; then
-        note "open this yourself: $1"
         return
-    fi
-    if [ -n "$browser" ]; then
+    elif [ -n "$browser" ]; then
         "$browser" "$1" || die "FALCONET_BROWSER ($browser) failed on $1"
     elif [ "$(uname -s)" = Darwin ] && command -v open >/dev/null; then
         open "$1"
     elif command -v xdg-open >/dev/null; then
         xdg-open "$1" >/dev/null 2>&1 &
-    else
-        note "open this yourself: $1" browser=none
     fi
 }
 
