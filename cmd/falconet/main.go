@@ -136,19 +136,25 @@ func runVersion(args []string) int {
 	return 0
 }
 
-// resolvedVersion is what this binary calls itself: the module version the
-// go command recorded, else "dev". version prints it.
+// version is the release tag, linked in by `make assets` with
+// -ldflags "-X main.version=vX.Y.Z". It is empty in every other build.
+var version string
+
+// resolvedVersion is what this binary calls itself: the linked tag, else the
+// module version the go command recorded, else "dev". version prints it.
 //
-// There is no build-time stamp. Every falconet that is not a checkout build
-// is `go install github.com/zetlen/falconet/cmd/falconet@<ref>` — in CI
-// through action.yml, on a laptop by hand — and that path accepts no
-// ldflags: the module proxy hands the go command a source zip, so nothing
-// could stamp a version on the way through. What the go command does
-// record is the version it resolved the ref to, in the binary's build
-// info: the tag itself for a tag, a pseudo-version for a branch or a
-// commit. So ask for that. "(devel)" is what a local `go build` from a
-// checkout puts there, and that is "dev".
+// A release asset is built from a checkout at its tag, and a checkout build
+// records no module version, so the release links the tag in. `go install
+// github.com/zetlen/falconet/cmd/falconet@<ref>` accepts no ldflags: the
+// module proxy hands the go command a source zip. What the go command does
+// record is the version it resolved the ref to, in the binary's build info:
+// the tag itself for a tag, a pseudo-version for a branch or a commit.
+// "(devel)" is what a local `go build` from a checkout puts there, and that
+// is "dev".
 func resolvedVersion() string {
+	if version != "" {
+		return version
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if m := info.Main.Version; m != "" && m != "(devel)" {
 			return m

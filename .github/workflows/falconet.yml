@@ -40,17 +40,17 @@
 # ---------------------------------------------------------------------------
 # Where falconet comes from
 # ---------------------------------------------------------------------------
-# Every job compiles falconet, through this repository's composite action at
-# a tag: `uses: zetlen/falconet@vX.Y.Z`, the same literal on every line, and
-# the action runs `go install` of this module at the ref it was called at.
+# Every job installs falconet through this repository's composite action at
+# a tag: `uses: zetlen/falconet@vX.Y.Z`, the same literal on every line.
 # GitHub fetches the action's repository into the runner's action cache,
-# outside the workspace and with no token (it is public); the go command
-# fetches the same module at the same ref from the module proxy, checked
-# against the checksum database, and builds it. `uses:` cannot take an
-# expression, so the tag is a literal here — written by hand as the last
-# commit before that tag is made (operating.md) — and contract.test.sh
-# refuses a tree where the four lines disagree or name anything but a tag.
-# Between tags they name the LAST tag, and the action there is that tag's.
+# outside the workspace and with no token (it is public). The action
+# downloads the falconet binary from that tag's release and checks it
+# against the release's checksums.txt. `uses:` cannot take an expression, so
+# the tag is a literal here. release-please rewrites every line that carries
+# the `# x-release-please-version` marker in the release pull request
+# (operating.md), and contract.test.sh refuses a tree where the lines
+# disagree, name anything but a tag, or lack the marker. Between releases
+# they name the LAST tag, and the action there is that tag's.
 #
 # Nothing of falconet's is checked out into the consumer's tree: the tag on
 # the `uses:` line is the one coordinate.
@@ -200,7 +200,7 @@ jobs:
       # in the runner's action cache, not in this workspace, so nothing here
       # is a path the verbs could trip over.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       # Eligibility that needs the config is decided here and not in a
       # job-level `if:`, because an `if:` evaluates before checkout and can
@@ -210,7 +210,7 @@ jobs:
       # ineligible event.
       - name: Prepare
         id: prepare
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           FALCONET_EVENT_PATH: ${{ github.event_path }}
@@ -330,7 +330,7 @@ jobs:
       # from the runner's action cache, and what it fetches is this public
       # module through the module proxy, with no token.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       - uses: actions/download-artifact@v4
         with:
@@ -447,7 +447,7 @@ jobs:
       # on a missing scanner.
       - name: Commit
         id: commit
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
         with:
           verb: commit
           setup: 'false'
@@ -534,17 +534,17 @@ jobs:
           BRANCH: ${{ needs.gate.outputs.branch }}
 
       # The one step between the branch and the remote: the push needs the
-      # binary, and the binary is a compile. It is the only thing that runs
+      # binary, and the binary is a download. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       # Unconditional, and the first verb. Every run leaves its branch on the
       # remote, so a stale branch is ordinary and the collision rename does
       # the bookkeeping. Nothing below runs before the work is somewhere
       # durable.
       - name: Push
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
@@ -689,7 +689,7 @@ jobs:
         with: { fetch-depth: 1 }
 
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v1.1.2
+        uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a

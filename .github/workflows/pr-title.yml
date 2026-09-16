@@ -1,0 +1,29 @@
+# A pull request's title is the subject of its squash commit on main, and
+# release-please reads those subjects to decide the next version and write
+# the changelog. This holds the title to the rule lefthook's commit-msg hook
+# holds a local commit to: scripts/conventional-subject.sh, one script for
+# both.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  conventional:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      # The title is typed by whoever opened the pull request. It reaches the
+      # shell through env: and a file, never through the run: block.
+      - name: The title is a conventional commit subject
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title.txt"
+          bash scripts/conventional-subject.sh "$RUNNER_TEMP/pr-title.txt"

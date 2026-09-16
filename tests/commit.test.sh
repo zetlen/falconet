@@ -647,9 +647,12 @@ assert_eq 2 "$?" "exit code"
 # the author identity makes `git commit` refuse with "tell me who you are".
 # (A pre-commit hook, the old way to force this, is now both skipped by the
 # commit verb's --no-verify and refused outright as tampering — see below.)
+# useConfigOnly stops git inventing an identity from the login name and the
+# hostname, which it does on a machine whose hostname has a domain part.
 c="$(new_checkout git_failure)"
 git -C "$c/repo" config --unset user.email
 git -C "$c/repo" config --unset user.name
+git -C "$c/repo" config user.useConfigOnly true
 printf 'locals {\n  a = 11\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'A commit git will refuse\n\nSo this is a genuine git failure.\n' \
   >"$c/repo/.falconet/commit-msg.txt"

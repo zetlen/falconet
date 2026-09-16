@@ -185,7 +185,7 @@ installs the binary that tag vouches for. Upgrading is changing the tag.
   A repository restricted to local actions stops before any of this runs.
 - **Linux x64 runners.** The action installs a pinned `linux_x64` release
   asset of gitleaks and checks its digest, so macOS or ARM fails the
-  checksum; falconet itself is compiled for whatever the runner is.
+  checksum. falconet itself is a release asset for Linux x64.
 - **A clean tree on a fresh checkout.** Three verbs read `git status`. If a
   hook or generator leaves untracked files behind on checkout, gitignore them.
 
@@ -467,7 +467,8 @@ Three things about this file that are not obvious:
   from a person on an issue paused `needs-info` is the way back in.
 - **The ref in `uses:` must be a literal** — GitHub does not expand
   expressions there — and it is the one coordinate: the workflow at that ref
-  compiles falconet, in every job, from this repository's tree at that ref.
+  installs falconet, in every job, from this repository's release at that
+  ref.
   `main` is where the template starts and it moves; put a tag there —
   `@v1.0.0` — as step 8 says.
 - **It coexists with a stock `claude.yml`.** If you already run
@@ -515,8 +516,8 @@ acknowledgment, or nothing at all — is a failed gate, and it is silent. See
 [Troubleshooting](#troubleshooting).
 
 **Pin a tag.** The ref in `uses:` is the one coordinate: the workflow at
-`@v1.0.0` compiles, in every job, the binary from this repository's tree at
-`v1.0.0`. Put the tag there, never `main`, which moves:
+`@v1.0.0` installs, in every job, the binary from this repository's `v1.0.0`
+release. Put the tag there, never `main`, which moves:
 
 ```yaml
     uses: zetlen/falconet/.github/workflows/falconet.yml@v1.0.0
@@ -538,7 +539,7 @@ to be fixed before the next request.
 | `Could not find installation` at `create-github-app-token` | The App exists but is not installed on this repository, or the App ID is wrong. | Step 3: the App's **Install App** page with this repository selected, and `FALCONET_APP_ID` against the App ID on its page. |
 | `Resource not accessible by integration` | The caller's `permissions:` block is missing, or the App lacks one of its three permissions. | Steps 3 and 7. |
 | `sha256sum: WARNING: 1 computed checksum did NOT match` in the gitleaks install step | The runner is not Linux x64 — gitleaks' pinned asset is the Linux x86-64 one, and the digest is checked before anything is installed — or the asset was replaced, which is what the digest exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
-| `go: github.com/zetlen/falconet/cmd/falconet@vX.Y.Z: … unknown revision` in the falconet install step | The ref on the workflow's `uses:` line — the ref the action compiles falconet at — names a tag that does not exist: typed by hand, or not yet pushed. | Pin a tag from the tags page. |
+| `curl: (22) The requested URL returned error: 404` in the **Install falconet** step | The ref on the workflow's `uses:` line names a tag with no published release: typed by hand, or a release still a draft. | Pin a tag from [the releases page](https://github.com/zetlen/falconet/releases). |
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
 | `paths.allow is empty — set it in .github/falconet.json` in the Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
 | Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
@@ -579,27 +580,39 @@ to be fixed before the next request.
 
 ## The binary on your machine
 
-Nothing in the install needs it: every job of the caller workflow compiles
-its own from this repository at the tag the workflow names, and the eight
-steps are `gh` and a browser. On a laptop the binary runs the verbs by hand
-(the same `prepare`, `implement`, `check`, `commit`, `push` and `pause` the
-workflow runs, from a checkout, with the loop as a shell loop around
-`falconet implement` and `falconet check`) and the test suite runs through
-it.
+Nothing in the install needs it: every job of the caller workflow installs
+its own at the tag the workflow names, and the eight steps are `gh` and a
+browser. On a laptop the binary runs the verbs by hand (the same `prepare`,
+`implement`, `check`, `commit`, `push` and `pause` the workflow runs, from a
+checkout, with the loop as a shell loop around `falconet implement` and
+`falconet check`) and the test suite runs through it.
+
+Every release on [the releases page](https://github.com/zetlen/falconet/releases)
+carries a binary for macOS on Apple silicon, Linux ARM64 and Linux x64. With
+[mise](https://mise.jdx.dev):
+
+```sh
+mise use github:zetlen/falconet
+```
+
+mise picks the asset for your machine by the os and arch in its name,
+`falconet_<version>_<os>_<arch>.tar.gz`, and puts `falconet` on your `PATH`.
+Each archive holds `falconet` and `LICENSE`. `checksums.txt` in the same
+release lists the SHA-256 digest of every archive.
+
+On any other machine, or at a commit rather than a release, compile it:
 
 ```sh
 go install github.com/zetlen/falconet/cmd/falconet@v1.0.0
 ```
 
-That is the whole of it. Name the newest tag from
-[the tags page](https://github.com/zetlen/falconet/tags); the `go` command
-fetches the module at that tag through Go's module proxy, checks it against
-the checksum database, compiles it for the machine you are on, and leaves it
-at `$(go env GOPATH)/bin/falconet` — put that directory on your `PATH` if it
-is not there already. It is the same command the action runs in every CI
-job, at the tag your caller workflow names. It needs a Go at least as new as
-the `go` line in this repository's `go.mod`; `GOTOOLCHAIN=auto`, the
-default, fetches one if yours is older.
+Name the newest tag from the releases page. The `go` command fetches the
+module at that tag through Go's module proxy, checks it against the
+checksum database, compiles it for the machine you are on, and leaves it at
+`$(go env GOPATH)/bin/falconet`. Put that directory on your `PATH` if it is
+not there already. It needs a Go at least as new as the `go` line in this
+repository's `go.mod`; `GOTOOLCHAIN=auto`, the default, fetches one if yours
+is older.
 
 **Check:** `falconet version` prints the tag and the Go it was built with; a
 v1.0.0 build on an Apple-silicon Mac says:
@@ -611,6 +624,10 @@ falconet v1.0.0 (go1.26.7 darwin/arm64)
 A `go install` of a commit rather than a tag reports the pseudo-version the
 `go` command recorded instead of a tag, and a build from a checkout says
 `dev`; either runs.
+
+To work on falconet itself, `make hooks` installs the git hooks in
+`lefthook.yml`: a commit subject must be a Conventional Commits subject,
+and `make test` runs before a push.
 
 ## Running the tests
 

@@ -6,7 +6,8 @@
 #   tests/run.sh handover     only the files whose name contains "handover"
 #
 # These cover the falconet verbs, the wiring of action.yml and
-# .github/workflows/falconet.yml, and install/setup-github.sh. Every verb
+# .github/workflows/falconet.yml, install/setup-github.sh, and
+# scripts/conventional-subject.sh. Every verb
 # test spawns its subject through $FALCONET, which defaults to the binary
 # built out of tree at dist/falconet (`make build`; lib.sh refuses to start
 # without it):
