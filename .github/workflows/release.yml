@@ -1,0 +1,98 @@
+# falconet's releases, on every push to main.
+#
+# release-please reads the conventional commit subjects on main since the
+# last release and keeps one release pull request open. That pull request
+# bumps .release-please-manifest.json, writes CHANGELOG.md, and rewrites the
+# `uses: zetlen/falconet@vX.Y.Z` lines in falconet.yml, each of which carries
+# the `# x-release-please-version` marker. Merging it creates a DRAFT
+# release and its tag (release-please-config.json: draft, force-tag-creation).
+#
+# The assets job then builds that tag's binaries, uploads them, and
+# publishes the draft. The repository has immutable releases on, so
+# publishing locks the tag and every asset. The composite action downloads
+# those assets at that tag, which is why nothing is published until they are
+# all there.
+#
+# The tag is created with GITHUB_TOKEN, and GitHub starts no workflow for an
+# event GITHUB_TOKEN caused. ci.yml therefore never runs on the release pull
+# request or on the tag, and this job runs the pin check and the suite
+# itself before it builds anything. If a step fails, the release stays a
+# draft: fix the cause on main and re-run this job.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+
+  assets:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      FALCONET_TAG: ${{ needs.release-please.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - name: Pin the Go toolchain to go.mod's
+        run: |
+          set -euo pipefail
+          tc="$(sed -n 's/^toolchain //p' go.mod)"
+          test -n "$tc"
+          echo "GOTOOLCHAIN=$tc" >> "$GITHUB_ENV"
+
+      # The workflow at a tag names that tag on every `uses:` line. The
+      # release pull request wrote them; this refuses a tag where it did
+      # not, before a binary is built for it.
+      - name: Every falconet ref pins this tag
+        run: |
+          set -euo pipefail
+          refs="$(grep -oE '^[[:space:]]*uses: zetlen/falconet@[^[:space:]]+' .github/workflows/falconet.yml | sed 's/^[[:space:]]*//' | sort -u)"
+          want="uses: zetlen/falconet@${FALCONET_TAG}"
+          if [ "$refs" != "$want" ]; then
+            printf 'tag %s, but the workflow pins:\n%s\nexpected every line to be:\n%s\n' \
+              "$FALCONET_TAG" "$refs" "$want" >&2
+            exit 1
+          fi
+          printf 'every uses: zetlen/falconet@ ref names %s\n' "$FALCONET_TAG"
+
+      - name: Unit tests and the suite
+        run: make test
+
+      - name: Build the release binaries
+        run: make assets VERSION="$FALCONET_TAG"
+
+      - name: Upload the binaries and checksums to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$FALCONET_TAG" dist/assets/*.tar.gz dist/assets/checksums.txt --clobber
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$FALCONET_TAG" --draft=false --latest

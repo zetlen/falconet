@@ -1,17 +1,17 @@
 # How falconet is built, in one place.
 #
-# `build` is the development binary, out of tree and unstamped, and it is the
-# only build here: there is no release build. A version of falconet is a git
-# tag, and what a job or a workstation runs is
+# `build` is the development binary, out of tree and unstamped. `assets` is
+# a release's binaries: the release workflow runs it at a tag, and the
+# composite action downloads what it writes. At any ref that is not a
+# release, a job or a workstation runs
 #
-#   go install github.com/zetlen/falconet/cmd/falconet@<tag>
+#   go install github.com/zetlen/falconet/cmd/falconet@<ref>
 #
-# — the go command compiles the module the proxy serves for that tag, and the
-# checksum database vouches for the bytes. Nothing is committed ahead of a
-# tag and nothing is uploaded after one. The compiler is pinned by go.mod's
-# `toolchain` line, which the go command honours inside this module on its
-# own; ci.yml exports it as GOTOOLCHAIN as well, so a runner whose Go is
-# NEWER cannot quietly substitute itself.
+# and the go command compiles the module the proxy serves for that ref. The
+# compiler is pinned by go.mod's `toolchain` line, which the go command
+# honours inside this module on its own; ci.yml and release.yml export it as
+# GOTOOLCHAIN as well, so a runner whose Go is NEWER cannot quietly
+# substitute itself.
 
 SHELL := /bin/bash
 
@@ -19,9 +19,15 @@ GO   ?= go
 DIST ?= dist
 CMD  := ./cmd/falconet
 
+# The GOOS/GOARCH pairs a release publishes. The composite action maps the
+# runner to one of these, and contract.test.sh holds the two lists equal.
+PLATFORMS := darwin/arm64 linux/arm64 linux/amd64
+
+LEFTHOOK_VERSION := v2.1.14
+
 .DEFAULT_GOAL := build
 
-.PHONY: build check test clean
+.PHONY: build check test assets hooks clean
 
 # The development binary, out of tree, unstamped: the exact command AGENTS.md
 # and ci.yml name, so the suite runs against what those two describe.
@@ -41,6 +47,41 @@ check:
 test: build
 	$(GO) test ./...
 	FALCONET="$(CURDIR)/$(DIST)/falconet" bash tests/run.sh
+
+# A release's binaries, for `make assets VERSION=vX.Y.Z`: one
+# falconet_X.Y.Z_<os>_<arch>.tar.gz per platform, holding `falconet` and
+# LICENSE at its root, and checksums.txt beside them in sha256sum's format.
+# The version is linked into main.version, because a checkout build records
+# no module version of its own. mise's github backend, ubi and eget pick an
+# asset by the os and arch in that name.
+assets:
+	@[[ "$(VERSION)" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$$ ]] || { echo "VERSION must be vX.Y.Z, got '$(VERSION)'" >&2; exit 2; }
+	rm -rf $(DIST)/assets
+	@set -euo pipefail; \
+	for p in $(PLATFORMS); do \
+	  os="$${p%/*}"; arch="$${p#*/}"; \
+	  name="falconet_$(VERSION:v%=%)_$${os}_$${arch}"; \
+	  mkdir -p "$(DIST)/assets/$$name"; \
+	  echo "building $$name"; \
+	  CGO_ENABLED=0 GOOS="$$os" GOARCH="$$arch" $(GO) build -trimpath \
+	    -ldflags "-X main.version=$(VERSION)" \
+	    -o "$(DIST)/assets/$$name/falconet" $(CMD); \
+	  cp LICENSE "$(DIST)/assets/$$name/"; \
+	  tar -czf "$(DIST)/assets/$$name.tar.gz" -C "$(DIST)/assets/$$name" falconet LICENSE; \
+	  rm -rf "$(DIST)/assets/$$name"; \
+	done
+	cd $(DIST)/assets && shasum -a 256 *.tar.gz > checksums.txt
+	cat $(DIST)/assets/checksums.txt
+
+# The git hooks in lefthook.yml, installed into this clone's .git/hooks.
+# lefthook is installed at the pinned version where `go install` puts
+# binaries: GOBIN, else GOPATH/bin. --reset-hooks-path unsets a
+# core.hooksPath that would send git to another directory.
+hooks:
+	$(GO) install github.com/evilmartians/lefthook/v2@$(LEFTHOOK_VERSION)
+	@set -euo pipefail; \
+	bin="$$($(GO) env GOBIN)"; [ -n "$$bin" ] || bin="$$($(GO) env GOPATH)/bin"; \
+	"$$bin/lefthook" install --reset-hooks-path
 
 clean:
 	rm -rf $(DIST)

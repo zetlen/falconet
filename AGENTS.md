@@ -47,8 +47,9 @@ lives in git: no document in this tree says what used to be true.
   That threat model is real and it is someone else's. One operator, their
   collaborators, and a human merge.
 - **It is not a product.** No code of conduct, no marketplace listing, no tap,
-  no `curl … | sh` for installing falconet itself — its install is `go
-  install` at a tag. First-party workstation setup scripts under `install/`
+  no `curl … | sh` for installing falconet itself — its install is a
+  release binary, through mise or the releases page, or `go install` at a
+  tag. First-party workstation setup scripts under `install/`
   may be advertised fetch-and-pipe at a pinned tag, because they run once,
   on the maintainer's own machine, at first-time setup, and carry the same
   provenance story as the tag everything else hangs off. Public, MIT, a
@@ -177,8 +178,9 @@ convenience.
 `.github/workflows/falconet.yml`, the Makefile and the README's caller
 template (between its `<!-- caller-workflow-template -->` markers) and holds
 their shape: no checkout in the agent job, the install before the first
-verb in every job, every `uses: zetlen/falconet@` ref one tag, the binary
-`go install`ed at the action's own ref, the loop turning on the check's
+verb in every job, every `uses: zetlen/falconet@` ref one tag and the
+manifest's version, the binary downloaded from the release at the action's
+own ref or `go install`ed at any other, the loop turning on the check's
 word, the README's input table matching the workflow's inputs. A new case
 is proved red on the break it exists for before it is made green.
 
@@ -233,3 +235,18 @@ not narrate when the guard was added, what it replaced, or who asked for
 it; git holds that. The README, this file and the register say what is
 true of the tree in front of the reader. A sentence that is only true on
 the day it was written does not belong in any of them.
+
+## Commit subjects
+
+Every commit subject and every pull request title is a Conventional Commits
+subject: `<type>[(scope)][!]: <description>`, with the type one of `feat`,
+`fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `revert`
+or `style`. Pull requests are squash-merged, so the title becomes the
+subject on `main`, and release-please reads those subjects: `feat` makes
+the next release a minor version, `fix` a patch, and `!` a major. A subject
+that does not parse is left out of the changelog and never causes a release.
+
+`scripts/conventional-subject.sh` is the rule. lefthook's `commit-msg` hook
+runs it on every commit, after `make hooks` has installed the hooks, and
+the `pr-title` workflow runs it on every pull request title. The body below
+the subject is prose, and says why.

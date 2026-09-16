@@ -34,7 +34,7 @@ a finding, not a formatting error.
 | The verbs talk to GitHub through a `Client` adapter backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-backed-by-gh) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
 | App registration is a workstation script, not a verb | I2, I3 | the script needs something the binary's provenance story gives better (versioning against the guards, in-tree tests), or the App stops being the identity that pushes | [below](#app-registration-is-a-workstation-script) |
-| The binary is `go install`ed at the caller's ref | I2, I3 | a job's compile time, or the module proxy's availability, starts costing more than a prebuilt asset would | [below](#the-binary-is-go-installed-at-the-callers-ref) |
+| Release binaries at a tag; `go install` at any other ref | I2, I3 | a published release's assets can be changed, or the runners consumers use have no asset and compile in every job | [below](#release-binaries-at-a-tag) |
 | falconet produces no evidence for the reviewer; the repository's checks do | I5 | an adopter has no checks on pull requests and cannot run any | [below](#falconet-produces-no-evidence) |
 
 ## The pipeline is falconet's own code
@@ -75,8 +75,8 @@ key. The consumer's checkout arrives from `gate` as an artifact
 (`source.tgz`) with its remote and credential stripped, and `implement`
 refuses it unless `HEAD` is the base `gate` recorded and no remote
 survives. That keeps the boundary literal for a private repository, which
-answers a tokenless clone with *not found*. falconet itself is compiled
-from the public module, no token needed.
+answers a tokenless clone with *not found*. falconet itself is downloaded
+from a public release, no token needed.
 
 `falconet check` runs the operator's own check, `check.command` in
 `falconet.json`, an argv with no shell, from the repository root, on the
@@ -199,8 +199,8 @@ prose.
 The boundaries between jobs are the security model: the agent's job holds no
 token, the scripted jobs never run the agent, and App installation tokens are
 minted per step in the jobs that need them. `action.yml` is setup plus
-pass-through: it installs gitleaks by version and digest and falconet by
-`go install` at its own ref, then runs one verb, for a caller that wants a
+pass-through: it installs gitleaks by version and digest and falconet at
+its own ref, then runs one verb, for a caller that wants a
 verb inside a workflow of its own. Nothing of falconet's is vendored into
 the adopter's tree; upgrading is moving a tag.
 
@@ -296,34 +296,48 @@ maintainer's own workstation, where `curl … | sh` is a read-and-run choice
 rather than an install vector for consumers. The PEM goes from the
 conversion response into `gh secret set` on a pipe and is never a file.
 
-## The binary is `go install`ed at the caller's ref
+## Release binaries at a tag
 
-Every job that runs a verb installs falconet with
-`go install github.com/zetlen/falconet/cmd/falconet@<ref>`, where `<ref>` is
-the one on the `uses: zetlen/falconet@…` line that reached the composite
-action: `github.action_ref`, read through the step's `env:`, because inside
-a composite action it is empty by the time a `run:` block is evaluated. Go
-is `actions/setup-go`, pinned by SHA, reading the `toolchain` line of the
-action's own `go.mod`; its cache is off, because it keys on a `go.sum` under
-the workspace and the workspace is the consumer's repository. gitleaks is a
-release asset pinned by version and digest. A workstation runs the same
-command at a tag. A version is a git tag and nothing else: the workflow at
-a tag names that tag on its four `uses:` lines, written by hand as the last
-commit before the tag ([operating.md](operating.md)), and
-`contract.test.sh` refuses four lines that disagree or a ref that is not a
-tag. Between tags the lines name the last one.
+Every job that runs a verb installs falconet through the composite action,
+at the ref on the `uses: zetlen/falconet@…` line that reached it:
+`github.action_ref`, read through each step's `env:`, because inside a
+composite action it is empty by the time a `run:` block is evaluated.
 
-The integrity story is Go's. The module proxy serves the source for the ref,
-the checksum database, a transparency log, vouches for the bytes of every
-version it has ever served, and the runner compiles them: the same channel
-and the same trust as `go install` on a laptop. That is the argument for
-principle 3: the guards a job runs are the guards in the tree at the ref the
-caller named, with no second artifact between the two whose provenance has
-to be argued on its own. For principle 2 it is that the install holds
-nothing: no token, no release, the same step in the tokenless agent job as
-in every other, so the boundary between jobs does not rest on a download
-step. The compile is the price, and the row names it as the thing that
-reopens this.
+At a `vX.Y.Z` ref, on a Linux x64, Linux ARM64 or macOS ARM64 runner, the
+action downloads `falconet_X.Y.Z_<os>_<arch>.tar.gz` from that tag's
+release. It checks the archive against the release's `checksums.txt`
+before unpacking it, and requires `falconet version` to report the tag. At
+any other ref, or on any other runner, it runs
+`go install github.com/zetlen/falconet/cmd/falconet@<ref>`, with Go from
+`actions/setup-go`, pinned by SHA, reading the `toolchain` line of the
+action's own `go.mod`. setup-go's cache is off, because it keys on a
+`go.sum` under the workspace and the workspace is the consumer's
+repository. gitleaks is a release asset pinned by version and digest. A
+workstation installs a release with mise's github backend, or compiles one
+with `go install`.
+
+A version is a release, cut by release-please from the conventional commit
+subjects on `main` ([operating.md](operating.md)). The release pull request
+sets every `uses:` line in the workflow to the new tag, through the
+`# x-release-please-version` marker each line carries. `contract.test.sh`
+refuses lines that disagree, a ref that is not a tag, a line without the
+marker, and a manifest version that is not the pinned tag. The release is a
+draft, with its tag, until the release workflow has run the suite at the
+tag, built the assets with `make assets`, and uploaded them. Only then is it
+published.
+
+The integrity story is the release's. The repository has immutable releases
+turned on, so publishing locks the release: no asset can be added, replaced
+or deleted, and the tag cannot be moved or deleted. `checksums.txt` is
+locked with the archives, so the digest check proves the bytes a job
+unpacks are the bytes that were published. That is the argument for
+principle 3: the guards a job runs were built from the tree at the tag the
+caller named, and the release that carries them cannot change once
+published. For principle 2 the install holds nothing: no token, the same
+step in the tokenless agent job as in every other, so the boundary between
+jobs does not rest on a credential. The `go install` path keeps a branch or
+a commit of falconet runnable in a consuming repository, where there is no
+release to download.
 
 ## falconet produces no evidence
 

@@ -45,19 +45,38 @@ run on the pull requests the App opens
 **This repository** is public at `zetlen/falconet`. `main` is integration:
 development lands there, and it moves. A consumer pins a **tag** in `uses:`,
 `zetlen/falconet/.github/workflows/falconet.yml@v1.0.0`, and the workflow at
-that tag compiles falconet, in every job, from this module at that tag:
-`go install github.com/zetlen/falconet/cmd/falconet@v1.0.0`, served by Go's
-module proxy and vouched for by its checksum database
-([the register](decisions.md#the-binary-is-go-installed-at-the-callers-ref)).
+that tag installs falconet, in every job, from this repository's release at
+that tag: the archive for the runner, checked against the release's
+`checksums.txt` ([the register](decisions.md#release-binaries-at-a-tag)).
 Upgrading is moving the tag.
 
-A version is a git tag and nothing else. To name one: set the four
-`uses: zetlen/falconet@vX.Y.Z` lines in `.github/workflows/falconet.yml` to
-the new tag, as the **last** commit before it (the workflow at a tag names
-that tag, and `contract.test.sh` refuses four lines that disagree or a ref
-that is not a tag), then `git tag vX.Y.Z`, and push the branch and the tag.
-There is no release to cut, no asset to build and nothing to upload: the
-proxy fetches the tag the first time anyone installs it.
+A version is a release, and release-please cuts it:
+
+1. Pull requests are squash-merged, so each title becomes a commit subject
+   on `main`. The title is a Conventional Commits subject (AGENTS.md, *Commit
+   subjects*). The `pr-title` workflow refuses any other title.
+2. On every push to `main`, the `release` workflow keeps one release pull
+   request open. It bumps `.release-please-manifest.json`, adds the
+   release's section to `CHANGELOG.md`, and sets every
+   `uses: zetlen/falconet@vX.Y.Z` line in `.github/workflows/falconet.yml`
+   to the new tag.
+3. Merging the release pull request creates the tag and a draft release.
+   The `assets` job in the same workflow checks that the pins name the tag,
+   runs `make test`, runs `make assets`, uploads the three archives and
+   `checksums.txt`, and publishes the release.
+
+release-please acts with `GITHUB_TOKEN`, and GitHub starts no workflow for
+an event that token caused. So `ci.yml` does not run on the release pull
+request or on the tag, and the `assets` job runs the pin check and the suite
+itself.
+
+The repository has immutable releases turned on (**Settings → General →
+Releases**). Once a release is published, its assets cannot be added,
+replaced or deleted, and its tag cannot be moved or deleted. A draft is not
+locked. So a failed `assets` job leaves a draft that nobody can install
+from. Re-run the job from the Actions tab when the failure was transient.
+When the tagged tree itself is at fault, delete the draft and its tag with
+`gh release delete vX.Y.Z --cleanup-tag`, and fix the fault on `main`.
 
 Public means every push is a publication. Anything brought over from a
 private repository must be read before it is committed here, not after.

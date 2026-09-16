@@ -1,0 +1,31 @@
+# Git hooks for this repository, run by lefthook. `make hooks` installs
+# lefthook at the Makefile's pinned version and writes the hooks into this
+# clone's .git/hooks, which every worktree of the clone shares.
+#
+# commit-msg holds the subject to the rule the pr-title workflow holds a pull
+# request title to. pre-commit catches what CI would refuse, on the staged
+# files only. pre-push runs `make test`, which AGENTS.md requires green.
+# `git commit --no-verify` and `git push --no-verify` skip them.
+
+commit-msg:
+  jobs:
+    - name: conventional subject
+      run: bash scripts/conventional-subject.sh {1}
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: gofmt
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})" || { gofmt -l {staged_files}; echo "run gofmt -w on the files above" >&2; exit 1; }
+    - name: shell parses
+      glob: "*.sh"
+      run: for f in {staged_files}; do bash -n "$f" || exit 1; done
+    - name: go vet
+      glob: "*.go"
+      run: go vet ./...
+
+pre-push:
+  jobs:
+    - name: make test
+      run: make test

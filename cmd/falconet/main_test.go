@@ -75,3 +75,21 @@ func TestUsageListsTheVerbsAndNotTheUnlisted(t *testing.T) {
 		}
 	}
 }
+
+// A release asset is built from a checkout, where the go command records no
+// module version, so the release links the tag into version. The action
+// refuses a binary that does not call itself the tag it was downloaded at.
+func TestALinkedVersionIsWhatTheBinaryCallsItself(t *testing.T) {
+	saved := version
+	t.Cleanup(func() { version = saved })
+
+	version = "v9.8.7"
+	if got := resolvedVersion(); got != "v9.8.7" {
+		t.Errorf("resolvedVersion() = %q with version linked as v9.8.7", got)
+	}
+
+	version = ""
+	if got := resolvedVersion(); got != "dev" {
+		t.Errorf("resolvedVersion() = %q with nothing linked in a test binary, want dev", got)
+	}
+}
