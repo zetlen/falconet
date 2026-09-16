@@ -4,10 +4,10 @@
 // flags, the body file, the three GitHub calls, and the exit code.
 //
 // Nothing here touches the filesystem or the network: the verb hands in the
-// preamble, the branch, the body's bytes and the run URL, and gets back the
-// comment. That is what lets the cap be held to a property — never half a
-// line, never over budget — rather than to the handful of fixtures a suite
-// can carry.
+// preamble, the branch, the body's bytes, the run URL and whether the label
+// could be applied, and gets back the comment. That is what lets the cap be
+// held to a property — never half a line, never over budget — rather than to
+// the handful of fixtures a suite can carry.
 //
 // The staged pipeline has several places a request can legitimately stop:
 // the agent needs more information, the repository's own check still fails
@@ -16,6 +16,17 @@
 // three things happened — a comment, a label, and the claim released — and
 // never means "silently nothing". A request that vanishes into an empty
 // green run is the failure mode this repository cares about most.
+//
+// # The label-failure notice
+//
+// The verb puts the blocking label on before it posts the comment, and the
+// comment is gated on that call's result. The label is what the pipeline
+// reads to decide an issue is already paused, so it goes on first — and a
+// label GitHub refused means the issue is not paused at all, and the comment
+// is the one channel left that reaches the requester. It says the label
+// could not be applied and names the person who can apply it, because a
+// requester who can read the refusal can fetch the administrator, and one
+// who cannot is left holding a refusal nobody saw.
 //
 // # The branch pointer
 //
@@ -85,12 +96,16 @@ type Input struct {
 	BodyTitle string
 	// RunURL is cited at the end, and by the cut note.
 	RunURL string
+	// LabelFailed, when set, adds the notice under the preamble: the verb's
+	// call to put the pause label on the issue was refused.
+	LabelFailed bool
 	// Limit overrides CommentLimit; zero means the default.
 	Limit int
 }
 
 // Comment is the hand-over comment, in the order a reader needs it: the
-// preamble, the pointer to the work, the detail, the run log.
+// preamble, the label-failure notice when the label could not be applied,
+// the pointer to the work, the detail, the run log.
 func Comment(in Input) []byte {
 	limit := in.Limit
 	if limit <= 0 {
@@ -99,6 +114,10 @@ func Comment(in Input) []byte {
 	var b bytes.Buffer
 	b.WriteString(in.Preamble)
 	b.WriteByte('\n')
+
+	if in.LabelFailed {
+		b.WriteString("\nI could not put the pause label on this issue, so it is not fully paused.\nPlease contact the repository administrator.\n")
+	}
 
 	if in.Branch != "" {
 		b.WriteByte('\n')

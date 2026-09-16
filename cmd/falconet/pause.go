@@ -53,6 +53,10 @@ The comment is capped at 60000 characters; if --body is longer it is cut on
 a line boundary with an explicit note pointing at --run-url. As everywhere
 else in this pipeline, content is dropped loudly or not at all.
 
+The label goes on first, then the comment, then the un-assign. A label
+GitHub refused still gets a comment: one that says the label could not be
+applied and asks the requester to contact the repository administrator.
+
 Requires GH_TOKEN or GITHUB_TOKEN, and GITHUB_REPOSITORY (owner/name), in
 the environment. GITHUB_API_URL overrides the API endpoint.
 
@@ -204,7 +208,7 @@ func runPause(args []string) int {
 		}
 	}
 
-	comment := pause.Comment(pause.Input{
+	commentInput := pause.Input{
 		Preamble:   preamble,
 		Branch:     branch,
 		ServerURL:  os.Getenv("GITHUB_SERVER_URL"),
@@ -212,20 +216,27 @@ func runPause(args []string) int {
 		Body:       body,
 		BodyTitle:  bodyTitle,
 		RunURL:     runURL,
-	})
+	}
 
-	// The three things "stopped" always means, each attempted regardless of
-	// the one before: an issue that got its label and not its comment is
-	// still better paused than not, and the word and the exit code say it
-	// was partial.
+	// The label is added first, and the comment is posted either way,
+	// gated on that call's result. The label is what the containment job
+	// reads to decide an issue is already paused, so it is the call that
+	// must land; the comment is the one channel that reaches the
+	// requester. A refused label still gets its comment — one that says
+	// the label could not be applied, because a requester who can read
+	// the refusal can fetch the administrator. Either refusal is the word
+	// `failure`: the issue is not fully paused, and the caller must hear
+	// that from the word and the exit code both.
 	client := github.NewGH(github.APIURLFromEnv(), token)
 	status := 0
-	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
-		fmt.Fprintf(os.Stderr, "could not comment on #%d: %v\n", number, err)
-		status = 1
-	}
 	if err := client.AddIssueLabels(owner, name, number, []string{label}); err != nil {
 		fmt.Fprintf(os.Stderr, "could not add label %s to #%d: %v\n", label, number, err)
+		commentInput.LabelFailed = true
+		status = 1
+	}
+	comment := pause.Comment(commentInput)
+	if err := client.CreateIssueComment(owner, name, number, string(comment)); err != nil {
+		fmt.Fprintf(os.Stderr, "could not comment on #%d: %v\n", number, err)
 		status = 1
 	}
 	if unassign != "" {

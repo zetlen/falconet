@@ -87,6 +87,30 @@ func TestCommentShapes(t *testing.T) {
 	}
 }
 
+// The notice is the comment's answer to a label GitHub refused: what it
+// says, where it sits, and that a landed label adds nothing.
+func TestTheLabelFailureNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   Input
+		want string
+	}{
+		{"a landed label adds no notice",
+			Input{Preamble: "P."},
+			"P.\n"},
+		{"a refused label is said under the preamble",
+			Input{Preamble: "P.", LabelFailed: true},
+			"P.\n\nI could not put the pause label on this issue, so it is not fully paused.\nPlease contact the repository administrator.\n"},
+		{"and before the branch pointer",
+			Input{Preamble: "P.", LabelFailed: true, Branch: "b", ServerURL: "s", Repository: "o/r"},
+			"P.\n\nI could not put the pause label on this issue, so it is not fully paused.\nPlease contact the repository administrator.\n\nThe commits are pushed to the branch `b`. No pull request is open for it.\n\ns/o/r/tree/b\n"},
+	} {
+		if got := string(Comment(tc.in)); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // The bash closed the fence with printf '```' straight after `cat`, so a body
 // without a trailing newline put the fence on the body's last line, where
 // markdown does not see it. The port always closes it.

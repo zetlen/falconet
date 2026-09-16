@@ -99,9 +99,9 @@ it "and the claim is released"
 assert_contains "$log" \
   'DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees {"assignees":["zetlen"]}' "API calls"
 
-it "the comment is posted first, then the label, then the claim is released"
-assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/comments
-POST /repos/zetlen/wayfinders-infra/issues/36/labels
+it "the label is added first, then the comment, then the claim is released"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments
 DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees" "$(calls review)" "call order"
 
 it "the run URL is still cited"
@@ -193,9 +193,13 @@ assert_eq "Bearer actions-token" \
 #
 # `failure`, exit 1: the caller must treat the issue as still un-paused. It
 # is exit 1 and not commit's 0 because nothing downstream routes on the word
-# — the step must fail so the containment job runs. Each of the three calls
-# is attempted regardless of the one before it: an issue that got its label
-# and not its comment is still better paused than not.
+# — the step must fail so the containment job runs. The label goes on first
+# and the comment is gated on it: the label is what the containment job
+# reads to decide an issue is already paused, and the comment is the one
+# channel that reaches the requester. Whichever call refused, the other is
+# still made — a label with no comment is a terminal state that says
+# nothing, and a comment is still something a requester can read and act
+# on.
 
 printf '[{"method":"POST","path":"/repos/zetlen/wayfinders-infra/issues/36/comments","status":500,"body":{"message":"boom"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
@@ -206,19 +210,41 @@ it "a comment GitHub refuses is failure, exit 1"
 assert_eq 1 "$rc" "exit code"
 assert_eq "failure" "$(cat "$WORK/nocomment.out")" "stdout"
 
-it "and the label and the un-assign are still tried"
-assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/comments
-POST /repos/zetlen/wayfinders-infra/issues/36/labels
+it "and the label still went on first, and the claim was still released"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments
 DELETE /repos/zetlen/wayfinders-infra/issues/36/assignees" "$(calls nocomment)" "call order"
 
+# The label refuses. The comment is still posted, carrying the notice: the
+# issue is not fully paused, and the requester reading it is the one way
+# that refusal reaches a person.
 printf '[{"method":"POST","path":"/repos/zetlen/wayfinders-infra/issues/36/labels","status":404,"body":{"message":"Not Found"}}]\n' \
   >"$FAKE_GITHUB/responses.json"
 pause nolabel -- --issue 36 --label ready-for-human --preamble "Parked."
 rc=$?
+comment="$(cat "$WORK/nolabel.comment")"
 
 it "a label GitHub refuses is failure too"
 assert_eq 1 "$rc" "exit code"
 assert_eq "failure" "$(cat "$WORK/nolabel.out")" "stdout"
+
+it "and the comment is still posted, still leading with its preamble"
+case "$comment" in
+  "Parked."*) _pass ;;
+  *) _fail "comment should open with the preamble" "got: [${comment:0:120}]" ;;
+esac
+
+it "and it tells the requester the label could not be applied"
+assert_contains "$comment" \
+  "I could not put the pause label on this issue, so it is not fully paused." "comment"
+
+it "and it asks them to contact the repository administrator"
+assert_contains "$comment" \
+  "Please contact the repository administrator." "comment"
+
+it "the label was tried first, then the comment"
+assert_eq "POST /repos/zetlen/wayfinders-infra/issues/36/labels
+POST /repos/zetlen/wayfinders-infra/issues/36/comments" "$(calls nolabel)" "call order"
 
 # Releasing the claim is best-effort: an issue that keeps a stale assignee is
 # still paused.
