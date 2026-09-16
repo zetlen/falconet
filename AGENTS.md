@@ -47,7 +47,12 @@ lives in git: no document in this tree says what used to be true.
   That threat model is real and it is someone else's. One operator, their
   collaborators, and a human merge.
 - **It is not a product.** No code of conduct, no marketplace listing, no tap,
-  no `curl … | sh`. Public, MIT, a personal project.
+  no `curl … | sh` for installing falconet itself — its install is `go
+  install` at a tag. First-party workstation setup scripts under `install/`
+  may be advertised fetch-and-pipe at a pinned tag, because they run once,
+  on the maintainer's own machine, at first-time setup, and carry the same
+  provenance story as the tag everything else hangs off. Public, MIT, a
+  personal project.
 
 ## Everything else is a means
 
@@ -149,9 +154,10 @@ two things, and a property lives in exactly one of them:
   the suite, and `make check` runs the same pinned versions locally. An
   ignored error is a red build.
 - **`bash tests/run.sh`** holds what only a process shows. Every case
-  spawns `$FALCONET <verb>` and reads the exit code, the one word on
-  stdout, files in the handoff directory, git state, and the calls the verb
-  made. `FALCONET` defaults to `dist/falconet` and `tests/lib.sh` refuses
+  spawns its subject, `$FALCONET <verb>` or `install/setup-github.sh`, and
+  reads the exit code, the one word on stdout, files in the handoff
+  directory, git state, and the calls it made. `FALCONET` defaults to
+  `dist/falconet` and `tests/lib.sh` refuses
   to start without it (`make build` first); `FALCONET=/other/binary bash
   tests/run.sh` runs the same suite against another build.
 
@@ -160,8 +166,9 @@ GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
 it was asked. The verbs shell out to `gh api` with full URLs built from
 `GITHUB_API_URL`, so pointing that variable at the fake is what routes every
 request: the real `gh`, exercised end to end, with a token that goes
-nowhere but loopback. `gitleaks` and the harness are bash stubs whose argv,
-cwd and stdin are part of the contract. Pushes land only in bare
+nowhere but loopback. `gitleaks`, the harness, and the `gh` that
+`setup-github.sh` stores secrets through are bash stubs whose argv, cwd and
+stdin are part of the contract. Pushes land only in bare
 repositories under a temp directory; nothing touches the network, GitHub, or
 any credential. Adding a dependency to run the tests is a decision, not a
 convenience.

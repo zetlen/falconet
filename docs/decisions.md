@@ -33,6 +33,7 @@ a finding, not a formatting error.
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
 | The verbs talk to GitHub through a `Client` adapter backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-backed-by-gh) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
+| App registration is a workstation script, not a verb | I2, I3 | the script needs something the binary's provenance story gives better (versioning against the guards, in-tree tests), or the App stops being the identity that pushes | [below](#app-registration-is-a-workstation-script) |
 | The binary is `go install`ed at the caller's ref | I2, I3 | a job's compile time, or the module proxy's availability, starts costing more than a prebuilt asset would | [below](#the-binary-is-go-installed-at-the-callers-ref) |
 | falconet produces no evidence for the reviewer; the repository's checks do | I5 | an adopter has no checks on pull requests and cannot run any | [below](#falconet-produces-no-evidence) |
 
@@ -279,9 +280,21 @@ No webhooks, nothing hosted. The workflow mints installation tokens per step;
 output is authored by `falconet[bot]`; App-token pushes fire `pull_request`
 events normally, which an Actions-token push does not do, and a pull
 request no workflow runs on is one the repository's checks never see
-(principle 5). The operator registers it by hand from the README's step and
-puts its ID and private key into the repository's secrets by hand;
-installing it is a click in a browser.
+(principle 5). The operator registers it by hand from the README's step, or
+by the script below, and puts its ID and private key into the repository's
+secrets; installing it is a click in a browser.
+
+## App registration is a workstation script
+
+`install/setup-github.sh` is README step 3 done by the manifest flow, as
+bash, not a falconet verb. It does only the GitHub-specific machinery that
+cannot sensibly stay manual: the manifest round trip, the code conversion,
+the two secrets, the install poll. Labels, config and the workflow file are
+not its job; a script that grows them is an installer, and the binary the
+agent can reach is not to grow for setup either. It runs once, on the
+maintainer's own workstation, where `curl … | sh` is a read-and-run choice
+rather than an install vector for consumers. The PEM goes from the
+conversion response into `gh secret set` on a pipe and is never a file.
 
 ## The binary is `go install`ed at the caller's ref
 
