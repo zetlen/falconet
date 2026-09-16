@@ -139,7 +139,8 @@ PY
 work="$(mktemp -d)"
 LISTENER_PID=""
 cleanup() {
-    [ -n "$LISTENER_PID" ] && kill "$LISTENER_PID" 2>/dev/null
+    # Under errexit a failed kill would end the trap here, before the rm.
+    if [ -n "$LISTENER_PID" ]; then kill "$LISTENER_PID" 2>/dev/null || true; fi
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -263,7 +264,8 @@ for _ in $(seq 50); do
     if ! kill -0 "$LISTENER_PID" 2>/dev/null; then break; fi
     sleep 0.1
 done
-[ -n "$listener_ready" ] || { wait "$LISTENER_PID" 2>/dev/null; die "the listener did not start"; }
+# `wait` returns the child's status; under errexit that would exit before die.
+[ -n "$listener_ready" ] || { wait "$LISTENER_PID" 2>/dev/null || true; die "the listener did not start"; }
 
 open_url() {
     if [ "$browser" = none ]; then

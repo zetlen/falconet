@@ -89,6 +89,39 @@ it "GITHUB_API_URL with a trailing slash still completes the round trip"
 assert_eq 0 "$rc" "exit code"
 assert_contains "$(cat "$FAKE_GITHUB/requests.log")" "POST /app-manifests/" "paths"
 
+# --- failure after the redirect leaves nothing behind -------------------------
+
+cat >"$FAKE_GITHUB/responses.json" <<'EOF'
+[{"method":"POST","path":"/app-manifests/fake-code-3/conversions","status":500,"body":{"message":"no"},"times":1}]
+EOF
+mkdir -p "$WORK/tmpdir"
+err="$(TMPDIR="$WORK/tmpdir" "$SETUP" --repo o/r 2>&1 </dev/null)"; rc=$?
+rm -f "$FAKE_GITHUB/responses.json"
+it "a refused conversion is reported, once the listener has already gone"
+assert_eq 1 "$rc" "exit code"
+assert_contains "$err" "the conversion was refused"
+it "and the work directory that held the code is removed on the way out"
+assert_eq "" "$(ls -A "$WORK/tmpdir")" "leftovers in TMPDIR"
+
+# --- a listener that cannot start is the script's own message ----------------
+
+# A python3 that dies when asked to be the listener — argv is `- <workdir>`
+# — and is the real one for the port pick, which has no argument.
+REAL_PYTHON3="$(command -v python3)"
+cat >"$WORK/stubbin/python3" <<STUB
+#!/usr/bin/env bash
+if [ "\$1" = - ] && [ \$# -ge 2 ]; then exit 1; fi
+exec "$REAL_PYTHON3" "\$@"
+STUB
+chmod +x "$WORK/stubbin/python3"
+err="$(TMPDIR="$WORK/tmpdir" "$SETUP" --repo o/r 2>&1 </dev/null)"; rc=$?
+rm -f "$WORK/stubbin/python3"
+it "a listener that exits at once is named as the reason"
+assert_eq 1 "$rc" "exit code"
+assert_contains "$err" "the listener did not start"
+it "and the work directory is removed even though there is no listener to kill"
+assert_eq "" "$(ls -A "$WORK/tmpdir")" "leftovers in TMPDIR"
+
 # --- the manifest forks on organisation ownership -----------------------------
 
 cat >"$FAKE_GITHUB/responses.json" <<'EOF'
