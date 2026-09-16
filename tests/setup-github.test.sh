@@ -69,6 +69,10 @@ it "and both secrets are handed to gh secret set, the ID and then the PEM"
 assert_contains "$secrets" "FALCONET_APP_ID"
 assert_contains "$secrets" "FALCONET_APP_PRIVATE_KEY"
 
+it "the PEM arrives on gh's stdin, where ps cannot see it"
+assert_not_contains "$secrets" "BEGIN" "argv"
+assert_contains "$(cat "$WORK/gh-stdin-FALCONET_APP_PRIVATE_KEY")" "-----BEGIN" "stdin"
+
 it "and the installation poll is what ended the wait"
 assert_contains "$reqs" "GET /repos/o/r/installation"
 

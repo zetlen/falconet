@@ -94,8 +94,10 @@ gh_api() {
         gh api "$@"
     fi
 }
+# The value travels on stdin: argv is readable by every process on the
+# workstation, and on bash 3.2 a here-string is a temporary file.
 put_secret() { # name value
-    gh secret set "$1" --repo "$repo" --body "$2"
+    printf '%s' "$2" | gh secret set "$1" --repo "$repo"
 }
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 if [ -z "$TOKEN" ]; then TOKEN="$(gh auth token 2>/dev/null || true)"; fi
@@ -306,11 +308,13 @@ note "exchanging the code for the App's credentials"
 response="$(curl -fsS -X POST "$api/app-manifests/$code/conversions")" \
     || die "the conversion was refused: $api/app-manifests/<redacted>/conversions"
 
-app_id="$(jq -r .id <<<"$response")"
-pem="$(jq -r .pem <<<"$response")"
-slug="$(jq -r '.html_url | split("/") | last' <<<"$response")"
+# No here-strings below this line: on bash 3.2 they are temporary files,
+# and the response holds the PEM.
+app_id="$(printf '%s' "$response" | jq -r .id)"
+pem="$(printf '%s' "$response" | jq -r .pem)"
+slug="$(printf '%s' "$response" | jq -r '.html_url | split("/") | last')"
 [ -n "$slug" ] && [ "$slug" != null ] \
-    || slug="$(jq -r '.name' <<<"$response" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+    || slug="$(printf '%s' "$response" | jq -r '.name' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
 
 put_secret FALCONET_APP_ID "$app_id" \
     || die "the App exists but $api refused the first secret — run gh auth status"
