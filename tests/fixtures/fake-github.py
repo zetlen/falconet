@@ -63,44 +63,118 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
-ROUTES = [
-    ("POST", r"^/app-manifests/([^/]+)/conversions$"),
+# setup-github.sh's round trip: a couple of routes are deliberately reachable
+# without Authorization, as GitHub's own manifest flow is (the form POST and
+# the code conversion), while the installation poll still wants a Bearer.
+OPEN_PATTERNS = [
+    ("POST", r"^/settings/apps/new$"),
+    ("POST", r"^/organizations/[^/]+/settings/apps/new$"),
+    ("POST", r"^/app-manifests/[^/]+/conversions$"),
+    ("GET", r"^/apps/[^/]+/installations/new$"),
 ]
+
+
+def _manifest(m, b, query):
+    # Register an App from a form-encoded manifest: stash it, then 302 to
+    # the manifest's own redirect_url with the run's state and a fresh code.
+    form = {k: v[0] for k, v in parse_qs(b).items()} if isinstance(b, str) else {}
+    manifest = json.loads(form.get("manifest") or "{}")
+    Handler.episode["manifest"] = manifest
+    Handler.episode["code_counter"] += 1
+    target = manifest.get("redirect_url", "")
+    sep = "&" if "?" in target else "?"
+    state = parse_qs(query).get("state", ["_"])[0]
+    code = "fake-code-%d" % Handler.episode["code_counter"]
+    loc = "%s%sstate=%s&code=%s" % (target, sep, state, code)
+    return (302, {}, {"Location": loc})
+
+
+def _convert(m, b, query):
+    # The code for the App: the PEM is the one generated at startup by
+    # openssl genrsa, and never written anywhere but the response.
+    name = (Handler.episode.get("manifest") or {}).get("name") or "fake-app"
+    slug = re.sub(r"[^a-z0-9-]", "-", name.lower())
+    if not Handler.episode.get("pem"):
+        return (500, {"message": "fake has no PEM (openssl genrsa failed at startup)"}, {})
+    return (201, {
+        "id": 42,
+        "client_id": "Iv1.fake",
+        "client_secret": "unused",
+        "webhook_secret": "unused",
+        "pem": Handler.episode["pem"],
+        "name": name,
+        "slug": slug,
+        "html_url": "https://github.invalid/apps/" + slug,
+        "owner": {"login": "fake-user", "type": "User"},
+    }, {})
+
+
+def _install_page(m, b, query):
+    Handler.episode["installed"] = True
+    return (200, {"installed": True}, {})
+
+
+def _installation(m, b, query):
+    if Handler.episode.get("installed"):
+        return (200, {"id": 1}, {})
+    return (404, {"message": "Not Found"}, {})
+
+
+def _public_key(m, b, query):
+    # gh secret set seals with this; any 32 bytes are a valid recipient key.
+    return (200, {"key_id": "1",
+                  "key": Handler.episode["secret_pubkey"]}, {})
+
+
+def _put_secret(m, b, query):
+    return (201, {}, {})
+
 
 ROUTES = [
     # (method, path regex, handler) — the handler gets the match and the
-    # parsed body and returns (status, body).
+    # parsed body and returns (status, body) or (status, body, headers).
     #
     # --- reads -------------------------------------------------------------
     # GET …/issues/N: deliberately no route (404) — see the docstring.
     ("GET", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
-     lambda m, b: (200, [])),
+     lambda m, b, q: (200, [])),
     ("GET", r"^/repos/([^/]+)/([^/]+)/pulls$",
-     lambda m, b: (200, [])),
+     lambda m, b, q: (200, [])),
     ("GET", r"^/user$",
-     lambda m, b: (200, {"login": "fake-user", "type": "User"})),
+     lambda m, b, q: (200, {"login": "fake-user", "type": "User"})),
+    ("GET", r"^/repos/([^/]+)/([^/]+)$",
+     lambda m, b, q: (200, {"owner": {"type": "User",
+                                   "login": m[1]}})),
     # --- writes ------------------------------------------------------------
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments$",
-     lambda m, b: (201, {
+     lambda m, b, q: (201, {
          "id": 1,
          "html_url": f"https://github.invalid/{m[1]}/{m[2]}/issues/{m[3]}#issuecomment-1",
          "body": (b or {}).get("body") if isinstance(b, dict) else None,
      })),
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/labels$",
-     lambda m, b: (200, [{"name": name} for name in (b or {}).get("labels", [])]
+     lambda m, b, q: (200, [{"name": name} for name in (b or {}).get("labels", [])]
                    if isinstance(b, dict) else [])),
     ("DELETE", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/assignees$",
-     lambda m, b: (200, {"number": int(m[3]), "assignees": []})),
+     lambda m, b, q: (200, {"number": int(m[3]), "assignees": []})),
     ("DELETE", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/labels/([^/]+)$",
-     lambda m, b: (200, [])),
+     lambda m, b, q: (200, [])),
     ("POST", r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/assignees$",
-     lambda m, b: (201, {
+     lambda m, b, q: (201, {
          "number": int(m[3]),
          "assignees": [{"login": login} for login in (b or {}).get("assignees", [])]
          if isinstance(b, dict) else [],
      })),
+    # --- setup-github.sh: the manifest round trip and the secrets ----------
+    ("POST", r"^/settings/apps/new$", _manifest),
+    ("POST", r"^/organizations/[^/]+/settings/apps/new$", _manifest),
+    ("POST", r"^/app-manifests/[^/]+/conversions$", _convert),
+    ("GET", r"^/apps/[^/]+/installations/new$", _install_page),
+    ("GET", r"^/repos/[^/]+/[^/]+/installation$", _installation),
+    ("GET", r"^/repos/[^/]+/[^/]+/actions/secrets/public-key$", _public_key),
+    ("PUT", r"^/repos/[^/]+/[^/]+/actions/secrets/[^/]+$", _put_secret),
 ]
 
 
@@ -167,6 +241,10 @@ class State:
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     state = None  # set before serving
+    # setup-github.sh's episode: the PEM the conversion answers carries, the
+    # last manifest posted, and whether the install page was opened.
+    episode = {"pem": "", "secret_pubkey": "", "manifest": None,
+               "installed": False, "code_counter": 0}
 
     def log_message(self, *args):  # quiet: the log files are the record
         pass
@@ -190,7 +268,9 @@ class Handler(BaseHTTPRequestHandler):
         })
 
         extra = {}
-        if not self.headers.get("Authorization"):
+        public = any(m == method and re.match(pattern, path)
+                     for m, pattern in OPEN_PATTERNS)
+        if not public and not self.headers.get("Authorization"):
             status, answer = 401, {"message": "Requires authentication"}
         else:
             found = self.state.scripted(method, path)
@@ -201,12 +281,14 @@ class Handler(BaseHTTPRequestHandler):
                 for m, pattern, handler in ROUTES:
                     match = re.match(pattern, path)
                     if m == method and match:
-                        found = handler(match, body)
+                        found = handler(match, body, query)
                         break
                 if found is None:
                     found = 404, {"message": "Not Found",
                                   "documentation_url": "https://docs.github.com/rest"}
-                status, answer = found
+                status, answer = found[0], found[1]
+                if len(found) > 2:
+                    extra = found[2]
 
         payload = json.dumps(answer).encode("utf-8")
         self.send_response(status)
@@ -237,6 +319,18 @@ def main():
     args = ap.parse_args()
 
     os.makedirs(args.dir, exist_ok=True)
+    try:
+        # The PEM the conversion endpoint answers with and setup-github.sh
+        # signs its installation poll from. Generated, not committed: there
+        # is nothing here an attacker would profit from.
+        import subprocess, base64
+        out = subprocess.run(["openssl", "genrsa", "2048"],
+                             capture_output=True, check=True)
+        Handler.episode["pem"] = out.stdout.decode()
+        Handler.episode["secret_pubkey"] = base64.b64encode(bytes(32)).decode()
+    except (OSError, subprocess.CalledProcessError):
+        print("openssl genrsa failed; the manifest/conversion routes will 500",
+              file=sys.stderr)
     Handler.state = State(args.dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True

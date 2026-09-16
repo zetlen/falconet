@@ -217,8 +217,25 @@ human who runs `git add -A`.
 ### 3. Create the GitHub App and store its two secrets
 
 A GitHub App registered purely as a credential: no webhook, nothing hosted.
-On **github.com → Settings → Developer settings → GitHub Apps → New GitHub
-App** (under the organisation's settings if the repository belongs to one):
+
+**By script.** `install/setup-github.sh` does this whole step on your
+machine: it registers the App by manifest (one browser click), puts its ID
+and private key straight into the repository's secrets — the PEM never
+touches disk — and waits until you have installed the App. Run it from a
+clone, or fetch it pinned to a tag:
+
+```sh
+bash install/setup-github.sh
+# or: curl -fsSL https://raw.githubusercontent.com/zetlen/falconet/v1.1.2/install/setup-github.sh | bash
+```
+
+It needs `gh` (authenticated), `jq`, `curl`, `openssl` and `python3` —
+things the rest of these steps already ask of you. It does nothing but the
+App: labels, config and the workflow file stay steps of yours.
+
+**By hand.** On **github.com → Settings → Developer settings → GitHub
+Apps → New GitHub App** (under the organisation's settings if the
+repository belongs to one):
 
 | Field | Set it to |
 | --- | --- |

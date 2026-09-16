@@ -47,7 +47,12 @@ lives in git: no document in this tree says what used to be true.
   That threat model is real and it is someone else's. One operator, their
   collaborators, and a human merge.
 - **It is not a product.** No code of conduct, no marketplace listing, no tap,
-  no `curl … | sh`. Public, MIT, a personal project.
+  no `curl … | sh` for installing falconet itself — its install is `go
+  install` at a tag. First-party workstation setup scripts under `install/`
+  may be advertised fetch-and-pipe at a pinned tag, because they run once,
+  on the maintainer's own machine, at first-time setup, and carry the same
+  provenance story as the tag everything else hangs off. Public, MIT, a
+  personal project.
 
 ## Everything else is a means
 
