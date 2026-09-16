@@ -149,35 +149,38 @@ assert_contains "$err" "open: http://127.0.0.1:"
 it "and exits 1 when no redirect can come"
 assert_eq 1 "$rc" "exit code"
 
-# --- a redirect that does not carry this run's nonce --------------------------
+# --- redirects that do not carry this run's nonce are refused, and that is all
 
-FALCONET_BROWSER=none "$SETUP" --repo o/r >"$WORK/browser_out" 2>&1 </dev/null &
-pid=$!
+# A browser with two stale tabs: it hits the callback with the wrong state
+# twice, then behaves — and, like a real browser, returns to the script at
+# once and does all of that in the background. The nonce is the protection;
+# a stale tab is not a reason to stop.
+cat >"$WORK/stubbin/stale-browser" <<STUB
+#!/usr/bin/env bash
+(
+    case "\$1" in
+        http://127.0.0.1:*/)
+            curl -s -o /dev/null -w '%{http_code}\n' "\$1callback?state=WRONG&code=x" >>"$WORK/stale-status"
+            curl -s -o /dev/null -w '%{http_code}\n' "\$1callback?state=WRONG&code=x" >>"$WORK/stale-status"
+            printf '%s\n' "\$1" >"$WORK/listener-url"
+            sleep 0.5 ;;
+    esac
+    "$FALCONET_BROWSER" "\$1"
+) >/dev/null 2>&1 &
+STUB
+chmod +x "$WORK/stubbin/stale-browser"
+: >"$GH_LOG"
+FALCONET_BROWSER="$WORK/stubbin/stale-browser" run_setup --repo o/r >/dev/null; rc=$?
 
-port=""
-for _ in $(seq 100); do
-    port="$(grep -o 'http://127\.0\.0\.1:[0-9]*' "$WORK/browser_out" 2>/dev/null | head -1 | cut -d: -f3)"
-    [ -n "$port" ] && break
-    sleep 0.1
-done
-[ -n "$port" ] || { _fail "the script's listener URL never printed"; summary; exit 1; }
+it "each wrong-state callback is answered 400"
+assert_eq "400
+400" "$(cat "$WORK/stale-status")" "statuses"
 
-curl -fs -o /dev/null "http://127.0.0.1:$port/callback?state=WRONG&code=x" 2>/dev/null || true
-curl -fs -o /dev/null "http://127.0.0.1:$port/callback?state=WRONG&code=x" 2>/dev/null || true
-wait "$pid" 2>/dev/null; rc=$?
+it "and the run still completes"
+assert_eq 0 "$rc" "exit code"
+assert_contains "$(cat "$GH_LOG")" "FALCONET_APP_PRIVATE_KEY"
 
-it "a second wrong-state callback is refused"
-assert_eq 1 "$rc" "exit code"
-
-pid_dead_ok=0; kill -0 "$pid" 2>/dev/null || pid_dead_ok=1
-
-it "and the run is told so, in its message"
-out_bad="$(cat "$WORK/browser_out")"
-assert_contains "$out_bad" "wrong state"
-
-# --- and the listener is not left behind on the refused path ------------------
-
-it "(the run having ended, there is nothing to clean up)"
-assert_eq 1 "$pid_dead_ok" "listener gone"
+it "and the listener is gone once the run is"
+assert_eq "refused" "$(curl -s -o /dev/null "$(cat "$WORK/listener-url")" && echo answered || echo refused)" "listener"
 
 summary

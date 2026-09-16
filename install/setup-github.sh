@@ -167,7 +167,7 @@ manifest="$(jq -nc \
 
 listen() {
     LISTENER_PORT="$port" NONCE="$nonce" ACTION="$action" MANIFEST="$manifest" \
-    CODE_FILE="$work/code" FAIL_FILE="$work/fail" \
+    CODE_FILE="$work/code" \
     python3 - "$work" <<'PY' &
 import html, http.server, os, sys, threading, urllib.parse
 
@@ -177,7 +177,6 @@ nonce = os.environ["NONCE"]
 action = os.environ["ACTION"]
 manifest = os.environ["MANIFEST"]
 code_file = os.environ["CODE_FILE"]
-fail_file = os.environ["FAIL_FILE"]
 self_hosts = {"127.0.0.1:%d" % port, "localhost:%d" % port}
 
 page = """<!doctype html>
@@ -207,8 +206,6 @@ done_page = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
     "<p>Back in the terminal, setup-github.sh is storing the secrets and will "
     "open the install page next. You can close this tab.</p></body></html>")
 
-mismatches = [0]
-
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def _reply(self, status, body):
@@ -235,14 +232,9 @@ class H(http.server.BaseHTTPRequestHandler):
         state = q.get("state", [""])[0]
         code = q.get("code", [""])[0]
         if state != nonce or not code:
-            mismatches[0] += 1
-            self._reply(400, "setup-github.sh: state mismatch — refusing the code")
-            if mismatches[0] >= 2:
-                # Twice is not a stale tab. Tell the script, which
-                # reports and stops.
-                with open(fail_file, "w") as f:
-                    f.write("two redirects arrived with the wrong state")
-            return
+            # A stale tab, or something worse: either way not this run's
+            # redirect, and refusing it is the whole of the defence.
+            return self._reply(400, "setup-github.sh: state mismatch — refusing the code")
         with open(code_file, "w") as f:
             f.write(code)
         self._reply(200, done_page)
@@ -286,13 +278,9 @@ open_url() {
 note "registering the GitHub App $app_name — click \"Create GitHub App\""
 open_url "$listener"
 
-# Wait: the code file, or the listener having given up.
+# Wait: the code file, or the listener having died.
 deadline=$(( $(date +%s) + timeout ))
-code=""
 while [ ! -s "$work/code" ]; do
-    if [ -s "$work/fail" ]; then
-        die "$(cat "$work/fail")"
-    fi
     if ! kill -0 "$LISTENER_PID" 2>/dev/null; then
         cat "$work/listener.log" >&2 2>/dev/null || true
         die "the listener exited before GitHub's redirect arrived"
