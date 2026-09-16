@@ -19,8 +19,10 @@
 #   3. The install page opens; GET /repos/{o}/{r}/installation is polled
 #      with an RS256 JWT signed from the PEM until the App is installed.
 #
-# Dependencies: gh (authenticated), jq, curl, openssl, python3. Those are
-# the tools the README already says the operator has.
+# Dependencies: gh (authenticated), jq, curl, openssl, python3.
+#
+# Progress and the URLs go to stderr; the one line on stdout is the "done:"
+# line, so a caller can read the outcome without the narration.
 #
 #   bash install/setup-github.sh [--repo OWNER/NAME] [--app-name NAME]
 #                                [--timeout SECONDS] [--no-browser]
@@ -41,8 +43,8 @@ Usage: setup-github.sh [--repo OWNER/NAME] [--app-name NAME]
 
   --repo         the repository; default: $GITHUB_REPOSITORY or origin remote
   --app-name     name the App is registered as (default: falconet-<owner>-<repo>)
-  --timeout      seconds to wait for you and a browser, per round trip
-                 (default 600)
+  --timeout      seconds to wait for a browser, twice: once for GitHub's
+                 redirect, once for the install (default 600)
   --no-browser   do not open the URLs, only print them
   -h, --help     this text
 EOF
@@ -113,13 +115,11 @@ owner_type="$(gh_api "$api/repos/$repo" --jq .owner.type)" \
 org=""
 if [ "$owner_type" = Organization ]; then org="$owner"; fi
 
-if [ -z "$app_name" ]; then
-    app_name="falconet-$owner-$name"
-    # GitHub's limit is 34; cut, never leaving a trailing dash.
-    if [ "${#app_name}" -gt 34 ]; then
-        app_name="${app_name:0:34}"; app_name="${app_name%%-}"
-        note "the App name is cut to GitHub's 34 characters: $app_name"
-    fi
+[ -n "$app_name" ] || app_name="falconet-$owner-$name"
+# GitHub's limit is 34; cut, never leaving a trailing dash.
+if [ "${#app_name}" -gt 34 ]; then
+    app_name="${app_name:0:34}"; app_name="${app_name%%-}"
+    note "the App name is cut to GitHub's 34 characters: $app_name"
 fi
 
 # --- the listener, the nonce, the browser round trip ------------------------
@@ -282,7 +282,6 @@ open_url "$listener"
 deadline=$(( $(date +%s) + timeout ))
 while [ ! -s "$work/code" ]; do
     if ! kill -0 "$LISTENER_PID" 2>/dev/null; then
-        cat "$work/listener.log" >&2 2>/dev/null || true
         die "the listener exited before GitHub's redirect arrived"
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then

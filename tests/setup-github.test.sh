@@ -102,6 +102,13 @@ assert_eq 1 "$rc" "exit code"
 assert_contains "$err" "was not confirmed"
 assert_contains "$err" "/installations/new"
 
+# --- --app-name is held to GitHub's 34 characters as the default is ---------
+
+err="$("$SETUP" --repo o/r --app-name "$(printf 'x%.0s' $(seq 33))-yy" 2>&1 >/dev/null </dev/null)"
+it "an --app-name over 34 characters is cut, with no trailing dash, and said so"
+assert_eq "$(printf 'x%.0s' $(seq 33))" "$(jq -r .name "$FAKE_GITHUB/manifest.json")" "name"
+assert_contains "$err" "cut to GitHub's 34 characters"
+
 # --- a trailing slash on the API base is not a double slash in a path -------
 
 : >"$FAKE_GITHUB/requests.log"
@@ -131,15 +138,16 @@ assert_eq "" "$(ls -A "$WORK/tmpdir")" "leftovers in TMPDIR"
 REAL_PYTHON3="$(command -v python3)"
 cat >"$WORK/stubbin/python3" <<STUB
 #!/usr/bin/env bash
-if [ "\$1" = - ] && [ \$# -ge 2 ]; then exit 1; fi
+if [ "\$1" = - ] && [ \$# -ge 2 ]; then echo "OSError: address in use" >&2; exit 1; fi
 exec "$REAL_PYTHON3" "\$@"
 STUB
 chmod +x "$WORK/stubbin/python3"
 err="$(TMPDIR="$WORK/tmpdir" "$SETUP" --repo o/r 2>&1 </dev/null)"; rc=$?
 rm -f "$WORK/stubbin/python3"
-it "a listener that exits at once is named as the reason"
+it "a listener that exits at once is named as the reason, with its own words"
 assert_eq 1 "$rc" "exit code"
 assert_contains "$err" "the listener did not start"
+assert_contains "$err" "OSError: address in use"
 it "and the work directory is removed even though there is no listener to kill"
 assert_eq "" "$(ls -A "$WORK/tmpdir")" "leftovers in TMPDIR"
 
