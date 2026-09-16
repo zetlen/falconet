@@ -57,7 +57,7 @@ tree knows the harness's name. The caller workflow installs it through the
 name `model-api-key-env` says.
 
 The default is the Claude Code CLI with the five file tools, no shell,
-`--permission-mode dontAsk` and a 40-turn cap, and the default
+`--permission-mode dontAsk`, a pinned model and a 40-turn cap, and the default
 `harness-setup` installs it. The grant is deliberately the smallest that
 can edit files, because the job boundary is what holds the agent
 (principle 2) and the one thing a shell inside that boundary can reach is
