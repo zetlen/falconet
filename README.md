@@ -139,15 +139,18 @@ file tools and a 40-turn cap:
 "harness": {
   "command": ["claude", "--bare", "-p",
               "--permission-mode", "dontAsk",
+              "--model", "claude-opus-5",
               "--allowedTools", "Read,Edit,Write,Grep,Glob",
               "--max-turns", "40"]
 }
 ```
 
-To run something else, name it here and install it with the caller
-workflow's `harness-setup` input. A harness with a shell is still inside
-the job boundary; what it can reach that the default cannot is the model
-key.
+The default pins the model it runs, and a `harness.command` of your own
+should pin its model too: the same issue produces the same kind of pull
+request across runs. To run something else, name it here and install it with
+the caller workflow's `harness-setup` input. A harness with a shell is
+still inside the job boundary; what it can reach that the default cannot is
+the model key.
 
 ## Install it in your repository
 
@@ -288,9 +291,9 @@ gh secret set ANTHROPIC_API_KEY
 The default harness is the Claude Code CLI, which reads an **API key** from
 the Anthropic console, not a Claude Code subscription token. A dedicated key
 keeps falconet's spend a separate number; set a budget alert on it. Each
-agent pass is capped at 40 turns by the default `harness.command`, a run
-makes at most `max-attempts` passes, and the agent's job is capped at 60
-minutes.
+agent pass runs the model the default `harness.command` pins and is capped
+at 40 turns, a run makes at most `max-attempts` passes, and the agent's job
+is capped at 60 minutes.
 
 A different harness reads a different key. Store it under whatever name the
 harness expects, and name that variable in step 7's `model-api-key-env`.
@@ -353,7 +356,7 @@ Every key, with its default:
 | `paths.allow` | none — **required** | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
 | `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. In an OpenTofu repository this is where `data "external"`, `provisioner`, `templatefile(` and `file(` go: the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
 | `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
-| `harness.command` | the Claude Code CLI, as shown under [the implement contract](#the-implement-contract) | The agent, as an argv run with no shell from the repository root, with the rendered prompt on its stdin. Any program meeting the contract. Empty is refused. |
+| `harness.command` | the Claude Code CLI, as shown under [the implement contract](#the-implement-contract) | The agent, as an argv run with no shell from the repository root, with the rendered prompt on its stdin. Any program meeting the contract. Empty is refused. The default pins the model; a `harness.command` of your own should pin its model too, so the same issue produces the same kind of pull request across runs. |
 | `issue.queue_label` | `falconet` | The label that makes an issue eligible. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |

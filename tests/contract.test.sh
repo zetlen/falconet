@@ -71,6 +71,25 @@ it "and the default harness grants the five file tools and no shell"
 assert_contains "$(grep -A8 '"harness"' "$REPO_ROOT/internal/config/config.go")" '"Read,Edit,Write,Grep,Glob"' "the default harness.command"
 assert_not_contains "$(grep -A8 '"harness"' "$REPO_ROOT/internal/config/config.go")" 'Bash' "the default harness.command"
 
+# The README's implement contract shows the default harness as JSON, and the
+# binary carries the same argv in internal/config. The two are one fact in
+# two places, so the contract holds them equal: a default that drifts from
+# its documentation hands a consumer a command they did not choose, and the
+# reader who copies the block gets something other than what runs.
+harness_block="$(awk '
+  /^```json$/ { f = 1; buf = ""; next }
+  f && /^```$/ { if (buf ~ /"harness"/) { printf "%s", buf; exit } f = 0; next }
+  f { buf = buf $0 "\n" }
+' "$REPO_ROOT/README.md")"
+default_argv="$( (cd "$WORK" && "$FALCONET" config get .harness.command) | jq -Sc .)"
+readme_argv="$(jq -Sc .harness.command <<<"{$harness_block}")"
+
+it "the README's implement contract shows a harness block"
+assert_contains "$harness_block" '"command"' "the README's harness block"
+
+it "and it is the default the binary carries, argv for argv"
+assert_eq "$default_argv" "$readme_argv" "harness.command: the README vs the binary"
+
 it "the agent job holds no permissions at all"
 assert_contains "$wf" "permissions: {}" "workflow"
 
