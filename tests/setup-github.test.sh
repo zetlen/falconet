@@ -69,12 +69,25 @@ it "and both secrets are handed to gh secret set, the ID and then the PEM"
 assert_contains "$secrets" "FALCONET_APP_ID"
 assert_contains "$secrets" "FALCONET_APP_PRIVATE_KEY"
 
+it "the secret write names the server's host, not gh's default one"
+host="${GITHUB_SERVER_URL#*://}"
+assert_contains "$secrets" "--repo
+$host/o/r" "argv"
+
 it "the PEM arrives on gh's stdin, where ps cannot see it"
 assert_not_contains "$secrets" "BEGIN" "argv"
 assert_contains "$(cat "$WORK/gh-stdin-FALCONET_APP_PRIVATE_KEY")" "-----BEGIN" "stdin"
 
 it "and the installation poll is what ended the wait"
 assert_contains "$reqs" "GET /repos/o/r/installation"
+
+# --- a trailing slash on the API base is not a double slash in a path -------
+
+: >"$FAKE_GITHUB/requests.log"
+GITHUB_API_URL="$GITHUB_API_URL/" run_setup --repo o/r >/dev/null; rc=$?
+it "GITHUB_API_URL with a trailing slash still completes the round trip"
+assert_eq 0 "$rc" "exit code"
+assert_contains "$(cat "$FAKE_GITHUB/requests.log")" "POST /app-manifests/" "paths"
 
 # --- the manifest forks on organisation ownership -----------------------------
 

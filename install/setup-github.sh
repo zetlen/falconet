@@ -81,8 +81,9 @@ fi
 case "$repo" in */*) ;; *) die "no repository named: pass --repo owner/name, run inside a clone, or set GITHUB_REPOSITORY" ;; esac
 owner="${repo%%/*}"; name="${repo#*/}"
 
-server="${GITHUB_SERVER_URL:-https://github.com}"
-api="${GITHUB_API_URL:-https://api.github.com}"
+server="${GITHUB_SERVER_URL:-https://github.com}"; server="${server%/}"
+api="${GITHUB_API_URL:-https://api.github.com}"; api="${api%/}"
+host="${server#*://}"
 
 # Reads go through gh with an explicit Authorization header — the same
 # discipline falconet itself uses — because gh attaches its token only to
@@ -94,17 +95,19 @@ gh_api() {
         gh api "$@"
     fi
 }
-# The value travels on stdin: argv is readable by every process on the
+# The write is gh's own, told the host: a bare owner/name would resolve
+# against gh's default host, which on GitHub Enterprise Server is the wrong
+# one. The value travels on stdin: argv is readable by every process on the
 # workstation, and on bash 3.2 a here-string is a temporary file.
 put_secret() { # name value
-    printf '%s' "$2" | gh secret set "$1" --repo "$repo"
+    printf '%s' "$2" | gh secret set "$1" --repo "$host/$repo"
 }
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-if [ -z "$TOKEN" ]; then TOKEN="$(gh auth token 2>/dev/null || true)"; fi
+if [ -z "$TOKEN" ]; then TOKEN="$(gh auth token --hostname "$host" 2>/dev/null || true)"; fi
 
 # Personal or organisation: the manifest must POST to the right namespace or
 # the App ends up owned by the person and uninstallable on an org's repo.
-owner_type="$(gh_api "${api%/}/repos/$repo" --jq .owner.type)" \
+owner_type="$(gh_api "$api/repos/$repo" --jq .owner.type)" \
     || die "cannot read $repo from $api"
 org=""
 if [ "$owner_type" = Organization ]; then org="$owner"; fi
