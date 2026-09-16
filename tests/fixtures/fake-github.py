@@ -22,12 +22,17 @@ What it records, for every request, append-only:
                         (names lowercased), body (parsed when it is JSON, the
                         raw string otherwise), for a test that wants one
                         field back out
+    DIR/manifest.json   the last App manifest posted to the form route,
+                        decoded, for a test that asserts on what the App
+                        asked for
 
 What it answers:
 
     - a request with no Authorization header is 401, as GitHub's answer to an
       unauthenticated write is. A verb that forgot its token fails here
-      rather than in production.
+      rather than in production. The exceptions are the routes marked open
+      in ROUTES, which GitHub itself serves to a browser with no token: the
+      App-manifest form, its code conversion, and the install page.
     - DIR/responses.json, if present, is re-read on EVERY request: a list of
       {"method": "POST", "path": "/repos/o/r/issues/1/comments",
        "status": 500, "body": {...}, "headers": {"X-OAuth-Scopes": "repo"},
@@ -65,39 +70,38 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
-# setup-github.sh's round trip: a couple of routes are deliberately reachable
-# without Authorization, as GitHub's own manifest flow is (the form POST and
-# the code conversion), while the installation poll still wants a Bearer.
-OPEN_PATTERNS = [
-    ("POST", r"^/settings/apps/new$"),
-    ("POST", r"^/organizations/[^/]+/settings/apps/new$"),
-    ("POST", r"^/app-manifests/[^/]+/conversions$"),
-    ("GET", r"^/apps/[^/]+/installations/new$"),
-]
-
-
+# setup-github.sh's round trip. GitHub's own manifest flow answers the form
+# POST, the code conversion and the install page without Authorization, and
+# the fake does the same for the routes marked `open`; the installation poll
+# still wants a Bearer. One registration is an episode: the manifest posted
+# is written to DIR/manifest.json, and the conversion that follows resets
+# "installed", so a run must open the install page before its poll succeeds.
 def _manifest(m, b, query):
-    # Register an App from a form-encoded manifest: stash it, then 302 to
-    # the manifest's own redirect_url with the run's state and a fresh code.
+    # Register an App from a form-encoded manifest: write it down, then 302
+    # to the manifest's own redirect_url with the run's state and a fresh code.
     form = {k: v[0] for k, v in parse_qs(b).items()} if isinstance(b, str) else {}
     manifest = json.loads(form.get("manifest") or "{}")
     Handler.episode["manifest"] = manifest
-    Handler.episode["code_counter"] += 1
+    Handler.state.write("manifest.json", json.dumps(manifest, indent=1))
     target = manifest.get("redirect_url", "")
     sep = "&" if "?" in target else "?"
     state = parse_qs(query).get("state", ["_"])[0]
-    code = "fake-code-%d" % Handler.episode["code_counter"]
-    loc = "%s%sstate=%s&code=%s" % (target, sep, state, code)
+    # One code for every registration: the state is what a test varies, and
+    # a fixed code is one a test can script the conversion of by path.
+    loc = "%s%sstate=%s&code=fake-code" % (target, sep, state)
     return (302, {}, {"Location": loc})
 
 
 def _convert(m, b, query):
     # The code for the App: the PEM is the one generated at startup by
-    # openssl genrsa, and never written anywhere but the response.
+    # openssl genrsa, and never written anywhere but the response. The slug
+    # is GitHub's to choose, and differs from the name as it does when a
+    # name is taken, so a script that slugs the name itself opens a 404.
     name = (Handler.episode.get("manifest") or {}).get("name") or "fake-app"
-    slug = re.sub(r"[^a-z0-9-]", "-", name.lower())
+    slug = re.sub(r"[^a-z0-9-]", "-", name.lower()) + "-1"
     if not Handler.episode.get("pem"):
         return (500, {"message": "fake has no PEM (openssl genrsa failed at startup)"}, {})
+    Handler.episode["installed"] = False
     return (201, {
         "id": 42,
         "client_id": "Iv1.fake",
@@ -120,6 +124,12 @@ def _installation(m, b, query):
     if Handler.episode.get("installed"):
         return (200, {"id": 1}, {})
     return (404, {"message": "Not Found"}, {})
+
+
+def open_route(handler):
+    # A route GitHub serves with no Authorization; the 401 gate skips it.
+    handler.open = True
+    return handler
 
 
 ROUTES = [
@@ -158,10 +168,10 @@ ROUTES = [
          if isinstance(b, dict) else [],
      })),
     # --- setup-github.sh: the manifest round trip and the install ----------
-    ("POST", r"^/settings/apps/new$", _manifest),
-    ("POST", r"^/organizations/[^/]+/settings/apps/new$", _manifest),
-    ("POST", r"^/app-manifests/[^/]+/conversions$", _convert),
-    ("GET", r"^/apps/[^/]+/installations/new$", _install_page),
+    ("POST", r"^/settings/apps/new$", open_route(_manifest)),
+    ("POST", r"^/organizations/[^/]+/settings/apps/new$", open_route(_manifest)),
+    ("POST", r"^/app-manifests/[^/]+/conversions$", open_route(_convert)),
+    ("GET", r"^/apps/[^/]+/installations/new$", open_route(_install_page)),
     ("GET", r"^/repos/[^/]+/[^/]+/installation$", _installation),
 ]
 
@@ -170,6 +180,11 @@ class State:
     def __init__(self, directory):
         self.dir = directory
         self.lock = threading.Lock()
+
+    def write(self, name, text):
+        with self.lock:
+            with open(os.path.join(self.dir, name), "w") as f:
+                f.write(text + "\n")
 
     def record(self, entry):
         line = "{} {} {}".format(
@@ -231,8 +246,7 @@ class Handler(BaseHTTPRequestHandler):
     state = None  # set before serving
     # setup-github.sh's episode: the PEM the conversion answers carries, the
     # last manifest posted, and whether the install page was opened.
-    episode = {"pem": "", "manifest": None, "installed": False,
-               "code_counter": 0}
+    episode = {"pem": "", "manifest": None, "installed": False}
 
     def log_message(self, *args):  # quiet: the log files are the record
         pass
@@ -256,8 +270,8 @@ class Handler(BaseHTTPRequestHandler):
         })
 
         extra = {}
-        public = any(m == method and re.match(pattern, path)
-                     for m, pattern in OPEN_PATTERNS)
+        public = any(m == method and re.match(pattern, path) and getattr(h, "open", False)
+                     for m, pattern, h in ROUTES)
         if not public and not self.headers.get("Authorization"):
             status, answer = 401, {"message": "Requires authentication"}
         else:

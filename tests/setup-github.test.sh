@@ -55,11 +55,13 @@ reqs="$(cat "$FAKE_GITHUB/requests.log")"
 it "the manifest posts to the personal namespace"
 assert_contains "$reqs" "POST /settings/apps/new"
 
-it "with the three permissions on it"
-# The manifest travels urlencoded, so the log shows pull_requests= and write
-# around %22s, not "pull_requests":"write".
-assert_contains "$reqs" "pull_requests"
-assert_contains "$reqs" "default_permissions"
+it "with the three permissions, private, and no webhook"
+# The manifest travels urlencoded; the fake writes the decoded one down.
+m="$FAKE_GITHUB/manifest.json"
+assert_eq '{"contents":"write","issues":"write","pull_requests":"write"}' \
+    "$(jq -c .default_permissions "$m")" "permissions"
+assert_eq "false" "$(jq .public "$m")" "public"
+assert_eq "false" "$(jq .hook_attributes.active "$m")" "webhook active"
 
 it "then the code is converted"
 assert_contains "$reqs" "POST /app-manifests/"
@@ -78,8 +80,27 @@ it "the PEM arrives on gh's stdin, where ps cannot see it"
 assert_not_contains "$secrets" "BEGIN" "argv"
 assert_contains "$(cat "$WORK/gh-stdin-FALCONET_APP_PRIVATE_KEY")" "-----BEGIN" "stdin"
 
+it "the install page opened is the slug GitHub answered with, not the name"
+assert_contains "$reqs" "GET /apps/falconet-o-r-1/installations/new"
+
 it "and the installation poll is what ended the wait"
 assert_contains "$reqs" "GET /repos/o/r/installation"
+
+# --- a run whose browser never installs the App does not end well ------------
+
+# A browser that submits the form but never visits the install page.
+cat >"$WORK/stubbin/no-install-browser" <<STUB
+#!/usr/bin/env bash
+case "\$1" in */installations/new) exit 0 ;; esac
+exec "$FALCONET_BROWSER" "\$1"
+STUB
+chmod +x "$WORK/stubbin/no-install-browser"
+err="$(FALCONET_BROWSER="$WORK/stubbin/no-install-browser" \
+       "$SETUP" --repo o/r --timeout 0 2>&1 >/dev/null </dev/null)"; rc=$?
+it "a registered but uninstalled App is exit 1 with the install URL"
+assert_eq 1 "$rc" "exit code"
+assert_contains "$err" "was not confirmed"
+assert_contains "$err" "/installations/new"
 
 # --- a trailing slash on the API base is not a double slash in a path -------
 
@@ -92,7 +113,7 @@ assert_contains "$(cat "$FAKE_GITHUB/requests.log")" "POST /app-manifests/" "pat
 # --- failure after the redirect leaves nothing behind -------------------------
 
 cat >"$FAKE_GITHUB/responses.json" <<'EOF'
-[{"method":"POST","path":"/app-manifests/fake-code-3/conversions","status":500,"body":{"message":"no"},"times":1}]
+[{"method":"POST","path":"/app-manifests/fake-code/conversions","status":500,"body":{"message":"no"},"times":1}]
 EOF
 mkdir -p "$WORK/tmpdir"
 err="$(TMPDIR="$WORK/tmpdir" "$SETUP" --repo o/r 2>&1 </dev/null)"; rc=$?

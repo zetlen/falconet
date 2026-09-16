@@ -305,9 +305,8 @@ response="$(curl -fsS -X POST "$api/app-manifests/$code/conversions")" \
 # and the response holds the PEM.
 app_id="$(printf '%s' "$response" | jq -r .id)"
 pem="$(printf '%s' "$response" | jq -r .pem)"
-slug="$(printf '%s' "$response" | jq -r '.html_url | split("/") | last')"
-[ -n "$slug" ] && [ "$slug" != null ] \
-    || slug="$(printf '%s' "$response" | jq -r '.name' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+# The slug is GitHub's, not the name lowercased: a taken name gets a suffix.
+slug="$(printf '%s' "$response" | jq -r .slug)"
 
 put_secret FALCONET_APP_ID "$app_id" \
     || die "the App exists but $api refused the first secret — run gh auth status"
