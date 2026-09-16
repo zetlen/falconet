@@ -65,8 +65,10 @@ A version is a release, and release-please cuts it:
    runs `make test`, runs `make assets`, uploads the three archives and
    `checksums.txt`, and publishes the release.
 
-release-please acts with `GITHUB_TOKEN`, and GitHub starts no workflow for
-an event that token caused. So `ci.yml` does not run on the release pull
+release-please acts with `GITHUB_TOKEN`. It can open the release pull
+request because **Settings → Actions → General → Workflow permissions →
+Allow GitHub Actions to create and approve pull requests** is on. GitHub
+starts no workflow for an event that token caused. So `ci.yml` does not run on the release pull
 request or on the tag, and the `assets` job runs the pin check and the suite
 itself.
 
