@@ -70,6 +70,7 @@ const Defaults = `{
     "command": [
       "claude", "--bare", "-p",
       "--permission-mode", "dontAsk",
+      "--model", "claude-opus-5",
       "--allowedTools", "Read,Edit,Write,Grep,Glob",
       "--max-turns", "40"
     ]
