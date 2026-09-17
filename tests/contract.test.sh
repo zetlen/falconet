@@ -337,6 +337,14 @@ action_platforms="$(grep -oE 'platform=[a-z0-9]+_[a-z0-9]+' <<<"$choose_step" | 
 make_platforms="$(sed -n 's/^PLATFORMS *:= *//p' "$MK" | tr ' ' '\n' | tr / _ | sed '/^$/d' | sort)"
 assert_eq "$make_platforms" "$action_platforms" "platforms the action maps"
 
+# The break: a recipe that inherits the repository a git hook was running
+# for. Under lefthook's pre-push, `make test` then runs every fixture's `git
+# init` and `git config` against this clone's own .git/config.
+it "no make recipe inherits the repository a git hook names"
+printf 'hook-env-probe:\n\t@env | grep -E "^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_PARAMETERS)=" || true\n' >"$WORK/hook-env-probe.mk"
+assert_eq "" "$(GIT_DIR=/nowhere GIT_WORK_TREE=/nowhere GIT_COMMON_DIR=/nowhere GIT_INDEX_FILE=/nowhere/index GIT_CONFIG_PARAMETERS="'core.bare=true'" \
+  make -s -C "$REPO_ROOT" -f Makefile -f "$WORK/hook-env-probe.mk" hook-env-probe)" "GIT_* a recipe sees"
+
 it "and it comes from this repository's release at the action's ref"
 assert_contains "$falconet_install" 'https://github.com/zetlen/falconet/releases/download/$FALCONET_REF' "action"
 

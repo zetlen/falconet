@@ -15,6 +15,19 @@
 
 SHELL := /bin/bash
 
+# Git hands a hook the repository it is running for in the environment:
+# GIT_DIR always inside a worktree, GIT_INDEX_FILE in pre-commit,
+# GIT_CONFIG_PARAMETERS after `git -c`. lefthook's pre-push runs `make test`,
+# and every git command a test runs in its own temp directory obeys those
+# over the directory it was pointed at: `git init` and `git config` land in
+# THIS clone's shared .git/config, which a guard test fills with
+# core.fsmonitor, core.hooksPath and filter commands. No recipe here works
+# on any repository but the one found from the working directory, so none
+# of them inherits the hook's.
+unexport GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE \
+  GIT_QUARANTINE_PATH GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+
 GO   ?= go
 DIST ?= dist
 CMD  := ./cmd/falconet
