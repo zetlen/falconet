@@ -33,6 +33,7 @@ a finding, not a formatting error.
 | The suite holds what only a process shows; Go tests hold the logic | I2, I3 | a property is asserted in both places, or the suite needs a tool the runner lacks | [below](#the-suite-holds-what-only-a-process-shows) |
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
 | The GitHub adapter is backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-is-backed-by-gh) |
+| The Gitea adapter speaks REST through `net/http`, with a repository administrator's token | I3, I5 | a verb needs a Gitea route outside the adapter's allowed list, Gitea answers a login's permission on a repository to a token whose user is not an administrator of it, or Gitea's permission route counts a team's per-unit grants | [below](#the-gitea-adapter-speaks-rest-through-nethttp) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
 | App registration is a workstation script, not a verb | I2, I3 | the script needs something the binary's provenance story gives better (versioning against the guards, in-tree tests), or the App stops being the identity that pushes | [below](#app-registration-is-a-workstation-script) |
 | Release binaries at a tag; `go install` at any other ref | I2, I3 | a published release's assets can be changed, or the runners consumers use have no asset and compile in every job | [below](#release-binaries-at-a-tag) |
@@ -336,8 +337,8 @@ the product.
 
 `internal/forge` defines the `Client` interface, the methods `prepare` and
 `pause` need, a login's permission on the repository among them, and the
-shapes it answers in. `GH` in `internal/github`, the one implementation,
-shells out to `gh api -i` with full URLs built from `GITHUB_API_URL`. The
+shapes it answers in. `GH` in `internal/github` shells out to `gh api -i`
+with full URLs built from `GITHUB_API_URL`. The
 token (`GH_TOKEN` then `GITHUB_TOKEN`) is passed explicitly via `-H` so that
 non-github.com hosts, the test server and GitHub Enterprise Server, are
 authenticated the same way github.com is. The verbs depend on the interface; nothing in a verb
@@ -347,6 +348,81 @@ What a run needs in CI is git, gitleaks, `gh` and the binary; on a
 workstation, the same. `gh` is already there on both, for the install's own
 steps and for the two workflow `run:` steps that use it (the pull request,
 and contain's check).
+
+## The Gitea adapter speaks REST through net/http
+
+`Client` in `internal/gitea` implements `forge.Client` against Gitea's REST
+API, `/api/v1`, with `net/http` from the standard library. No verb selects
+it: `cmd/falconet/forge.go` names GitHub alone.
+
+Its token belongs to a bot user who is an Administrator of the repository.
+The sender rule reads another account's permission, and Gitea answers
+`GET /repos/{owner}/{repo}/collaborators/{login}/permission` only to a site
+administrator, a repository administrator, or the login asking about
+itself (`routers/api/v1/repo/collaborators.go` in Gitea). Any other token
+gets 403, and the adapter's error for that 403 names the administrator
+requirement. Gitea's `owner` reads as `admin`; a word outside Gitea's five
+is an error.
+
+That route's `permission` counts the repository's owner, a site
+administrator, a direct collaborator's grant, and membership of an
+organization team with administrator access. It does not count a team
+without administrator access, whose read or write Gitea keeps in per-unit
+grants. On a repository an organization owns, a person whose write comes
+only from such a team reads `read` or `none`, and the sender rule refuses
+them. That person starts a run once they are a direct collaborator with
+write, or a member of an administrator team.
+
+The token is a personal access token with three scopes, because Gitea checks
+a token's scope on every route: `read:user` for `GET /user`,
+`read:repository` for the pull requests and the permission, and
+`write:issue` for the issue, its comments, labels and assignees
+(`routers/api/v1/api.go` in Gitea). A missing scope answers 403, and a
+missing `read:user` fails the self-check before any other request.
+
+A repository administrator's token can merge, change branch protection,
+collaborators and secrets, and delete the repository. falconet stops at
+the pull request (principle 5), so `allowed` in `internal/gitea/client.go`
+lists the nine routes a client sends, and a request that matches none of
+them is refused before it is built. A test holds that every listed route is
+one a method reaches. The token travels only in an `Authorization: token`
+header, never in a URL, and an error's text carries neither the token nor
+more than 512 bytes of the server's message. The base URL must be https,
+or http to a literal loopback address. The client follows no redirect: a
+3xx is an error like any other status outside 2xx. A request times out
+after 30 seconds, and an answer larger than 8 MiB is an error. A 2xx with an
+empty or `null` body, where a document is read, is an error. Nothing
+retries.
+
+Gitea's users carry no type, so the bot's login is what tells falconet's own
+comments and labels from a person's. The client is built with that login,
+and before its first request it reads `GET /user` once. A failed read, or a
+token whose user is another login, compared without case, is an error, and
+that client sends nothing further.
+
+Five of Gitea's answers differ from GitHub's, and the adapter answers as the
+`Client` does on GitHub:
+
+- **Labels.** Gitea's add looks each name up in the repository's labels and
+  its organization's, drops a name it finds in neither, and still answers
+  200. The adapter posts the names and requires every one in the answer,
+  the issue's labels after the change. Gitea removes a label by id, so the
+  adapter reads the issue and deletes the id of every label on it with that
+  name. A name not on the issue is a 404, and nothing is deleted.
+- **Assignees.** Gitea has no route that adds or removes one assignee. The
+  adapter reads the issue and sends the whole set with `PATCH`, so a change
+  made between the read and the write is lost. Both callers treat
+  assignment as best effort.
+- **Issues.** Gitea answers 200 with an empty issue when it fails to load
+  part of one. An issue whose number is not the number asked for is an
+  error, so no assignee `PATCH` is built from an empty set.
+- **Lists.** Gitea caps a page at the instance's `MAX_RESPONSE_ITEMS`,
+  which can be lower than the `limit` asked for. Open pull requests are read
+  page by page until a page comes back empty, and a list longer than 20
+  pages is an error. Gitea pages by offset, so a pull request that closes
+  during the read can hide one open pull request from the list.
+- **Comments.** The comments route takes no paging parameters and answers
+  the whole thread at once.
 
 ## A GitHub App, purely as a credential
 
