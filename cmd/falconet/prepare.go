@@ -14,7 +14,9 @@ package main
 //
 //	ready        the issue is ours, the branch exists, the handoff is written
 //	in-flight    an open pull request is already carrying this issue
-//	ineligible   a blocking label, an opt-out, a closed issue, or not queued
+//	ineligible   a blocking label, an opt-out, a closed issue, not queued, or
+//	             an event that is not a way in or whose sender does not hold
+//	             write
 //
 // in-flight and ineligible write NOTHING and change NOTHING. They make no
 // GitHub call that mutates, create no branch, leave no file, and pause
@@ -59,20 +61,26 @@ Modes:
                    [--assignee LOGIN] [--re-entry] [--no-ack]
 
     --event      a GitHub webhook payload (issues / issue_comment). Also
-                 read from $FALCONET_EVENT_PATH. Optional: without one the
-                 gate reads the issue itself.
+                 read from $FALCONET_EVENT_PATH. Optional on a workstation:
+                 without one the gate reads the issue itself and asks
+                 nobody's permission. Required inside GitHub Actions
+                 ($GITHUB_ACTIONS=true).
     --assignee   who the issue is assigned to; defaults to
                  $GITHUB_TRIGGERING_ACTOR, then to the token's own login
-    --re-entry   treat this as a requester's reply to a needs-info question
+    --re-entry   treat this as a comment on an issue parked needs-info
                  rather than a first entry. Inferred from the event when
-                 there is one; this is how a workstation says it.
+                 there is one; this is how a workstation says it. With an
+                 event it cannot make a comment a way in: a comment on an
+                 issue that is not parked stays ineligible.
     --no-ack     skip the acknowledgment comment
 
 Prints exactly one word on stdout — the outcome — and nothing else:
 
   ready        the issue is ours, the branch exists, the handoff is written
   in-flight    an open pull request is already carrying this issue
-  ineligible   a blocking label, an opt-out, a closed issue, or not queued
+  ineligible   a blocking label, an opt-out, a closed issue, not queued, or
+               an event that is not a way in or whose sender does not hold
+               write
 
 in-flight and ineligible write NOTHING and change NOTHING. They make no
 GitHub call that mutates, create no branch, leave no file, and pause
@@ -90,13 +98,15 @@ and, when $GITHUB_ENV is writable, BRANCH and BASE_SHA.
 
 GitHub is reached with GH_TOKEN or GITHUB_TOKEN, on the repository
 GITHUB_REPOSITORY names, or else the one the origin remote points at; both
-are resolved at the first call that needs them, so an ineligible event
-costs no network and no credential. GITHUB_API_URL overrides the endpoint.
+are resolved at the first call that needs them, so an event the rules
+refuse costs no network and no credential; one they admit asks the forge
+for its sender's permission first. GITHUB_API_URL overrides the endpoint.
 
 Exit codes: 0 = an outcome was determined and printed
             1 = refused mechanically — a dirty tree, an issue that cannot
-                be read, a label that cannot be cleared; nothing is printed,
-                stderr says why
+                be read, a sender's permission that cannot be read, a label
+                that cannot be cleared, no event inside GitHub Actions;
+                nothing is printed, stderr says why
             2 = usage error (including --help)
 `
 
@@ -108,7 +118,8 @@ func prepareUsage() int {
 // eventPayload is the part of a webhook payload the gate reads, every field
 // optional: `.issue.labels[].name`, `.issue.body` (null is ""),
 // `.issue.state` (null is "open"), `.action` (null is ""), whether
-// `.issue.pull_request` is set, and `.comment.user.type`.
+// `.issue.pull_request` is set, `.sender.login`, `.sender.type`, and
+// `.label.name`, the label a labeled event added.
 type eventPayload struct {
 	Action string `json:"action"`
 	Issue  struct {
@@ -119,11 +130,13 @@ type eventPayload struct {
 		State       *string         `json:"state"`
 		PullRequest json.RawMessage `json:"pull_request"`
 	} `json:"issue"`
-	Comment struct {
-		User struct {
-			Type string `json:"type"`
-		} `json:"user"`
-	} `json:"comment"`
+	Sender struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"sender"`
+	Label struct {
+		Name string `json:"name"`
+	} `json:"label"`
 }
 
 // readEvent reads the gate's inputs from the event file. The file must
@@ -168,7 +181,15 @@ func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
 	// Set means anything but null and false.
 	pr := bytes.TrimSpace(p.Issue.PullRequest)
 	ev.PullRequest = len(pr) > 0 && string(pr) != "null" && string(pr) != "false"
-	ev.Bot = p.Comment.User.Type == "Bot"
+	// GitHub's event reader: the sender is the account that labelled,
+	// opened, reopened or commented, and GitHub marks an App's or an Actions
+	// token's account with type Bot. A labeled event carries the one label
+	// it added.
+	ev.Sender = p.Sender.Login
+	ev.Bot = p.Sender.Type == "Bot"
+	if ev.Action == "labeled" && p.Label.Name != "" {
+		ev.Added = []string{p.Label.Name}
+	}
 	return ev, snap, nil
 }
 
@@ -322,11 +343,22 @@ func runPrepare(args []string) int {
 		BlockingLabels:   cfg.Schema.Issue.BlockingLabels,
 	}
 
+	// Inside GitHub Actions a run starts from an event, and the sender rule
+	// below asks the forge about that event's sender. A caller that forgets
+	// the event file would otherwise start runs nobody asked the forge
+	// about, because a run with no event has no sender. act_runner sets the
+	// same variable, so a Gitea caller gets the same refusal.
+	if eventPath == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		return die("prepare: inside GitHub Actions a run starts from an event: pass --event or FALCONET_EVENT_PATH")
+	}
+
 	// --- the gate's inputs ----------------------------------------------------
 	//
-	// One fetch at most. With an event payload the gate reads it and an
-	// ineligible issue costs no network at all; without one the issue is
-	// fetched once, gated, and the same snapshot is reused by the ready path.
+	// One fetch at most. With an event payload the gate reads it, and an
+	// event the rules below refuse costs no network at all; one they admit
+	// asks the sender's permission first, and a refused sender costs that one
+	// request. Without an event the issue is fetched once, gated, and the
+	// same snapshot is reused by the ready path.
 	// The issue is not going to change during the next twenty lines.
 	//
 	// The token and the repository are resolved at the first call that needs
@@ -382,18 +414,23 @@ func runPrepare(args []string) int {
 
 	mode := prepare.Entry
 	var gate prepare.Snapshot
+	var ev prepare.Event
 	if eventPath != "" {
-		ev, s, err := readEvent(eventPath)
+		e, s, err := readEvent(eventPath)
 		if err != nil {
 			return die("prepare: %v", err)
 		}
+		ev = e
 		// The re-entry shape, exactly: a human comment on an issue that is
 		// parked needs-info and still queued. `.issue.pull_request` is what
 		// distinguishes a PR comment from an issue comment.
 		mode = prepare.InferMode(&ev, s.Labels, rules)
-		// A bot comment, or a comment on a pull request, is not a way in.
-		if prepare.NotAWayIn(&ev) {
-			say("issue #%d: comment event is from a bot or on a pull request", number)
+		// See internal/prepare.NotAWayIn: what the event alone refuses,
+		// before any network. It reads the mode the event itself has, so
+		// --re-entry below cannot make a way in of a comment the event
+		// does not make one.
+		if reason := prepare.NotAWayIn(&ev, mode, rules); reason != "" {
+			say("issue #%d: %s", number, reason)
 			fmt.Println("ineligible")
 			return 0
 		}
@@ -424,10 +461,33 @@ func runPrepare(args []string) int {
 		return 0
 	}
 
+	// --- the sender rule: whoever caused this event can push ---------------------
+	//
+	// See internal/prepare.SenderRule. One question to the forge, asked only of an
+	// event the free rules admitted: the sender's permission on this repository.
+	// A permission that could not be read is a mechanical failure, never an
+	// answer; a 404 is one of those, because the forge answers it both for a
+	// login that is no user and for a token that cannot see the repository.
+	if eventPath != "" {
+		if err := connect(); err != nil {
+			return die("prepare: could not read the permission of %s: %v", ev.Sender, err)
+		}
+		perm, err := client.RepoPermission(owner, name, ev.Sender)
+		if err != nil {
+			return die("prepare: could not read %s's permission on %s/%s: %v", ev.Sender, owner, name, err)
+		}
+		if reason := prepare.SenderRule(number, ev.Sender, string(perm)); reason != "" {
+			say("%s", reason)
+			fmt.Println("ineligible")
+			return 0
+		}
+	}
+
 	// --- rule 4: no open pull request is already carrying it --------------------
 	//
 	// See internal/prepare for the reasoning. The list is fetched whole, then
-	// inspected: the first call that needs GitHub on the event path. A list
+	// inspected: on the event path, the first call after the sender's
+	// permission. A list
 	// that cannot be fetched is a mechanical failure, never an empty answer:
 	// a gate that says ready on an unknown is wrong, and in-flight is the one
 	// rule whose wrong answer opens a second pull request on the same issue.
@@ -525,11 +585,11 @@ func runPrepare(args []string) int {
 		return die("falconet: cannot write %s: %v", filepath.Join(out, "issue.json"), err)
 	}
 
-	// The requester replied, so clear the parking label rather than spending an
-	// agent turn on it. Hard-fails, deliberately, while the assignment and
-	// the acknowledgment below are best-effort: an issue left parked while a
-	// run proceeds against it is a contradiction a human has to untangle
-	// later.
+	// A comment moved the parked issue on, so clear the parking label rather
+	// than spending an agent turn on it. Hard-fails, deliberately, while the
+	// assignment and the acknowledgment below are best-effort: an issue left
+	// parked while a run proceeds against it is a contradiction a human has
+	// to untangle later.
 	//
 	// A 404 is not a failure to clear it: GitHub answers "Label does not
 	// exist" when the label is not on the issue, which is what a retry of a
@@ -542,9 +602,9 @@ func runPrepare(args []string) int {
 		var apiErr *github.Error
 		switch {
 		case err == nil:
-			say("cleared '%s': this run is a requester reply", rules.NeedsInfo)
+			say("cleared '%s': this run is a re-entry", rules.NeedsInfo)
 		case errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound:
-			say("'%s' was already clear on #%d: this run is a requester reply", rules.NeedsInfo, number)
+			say("'%s' was already clear on #%d: this run is a re-entry", rules.NeedsInfo, number)
 		default:
 			return die("prepare: could not clear '%s' from #%d: %v", rules.NeedsInfo, number, err)
 		}

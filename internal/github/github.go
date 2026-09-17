@@ -137,6 +137,19 @@ func repoWord(s string) bool {
 	return true
 }
 
+// Permission is one account's standing on one repository, as the forge
+// computes it when asked, over every grant it knows: the owner, direct
+// collaborators, teams, the organization. Four words, lowest first. Each
+// adapter maps its forge's own answer onto them and answers no other word.
+type Permission string
+
+const (
+	PermissionNone  Permission = "none"
+	PermissionRead  Permission = "read"
+	PermissionWrite Permission = "write"
+	PermissionAdmin Permission = "admin"
+)
+
 // Client is the adapter: the verbs talk to GitHub through it.
 type Client interface {
 	GetIssue(owner, name string, number int) (*Issue, error)
@@ -145,6 +158,10 @@ type Client interface {
 	ListIssueCommentsRaw(owner, name string, number int) (json.RawMessage, error)
 	ListOpenPulls(owner, name string) ([]PullRequest, error)
 	GetAuthenticatedUser() (*User, error)
+	// RepoPermission is login's permission on owner/name now. An answer
+	// that is not one of the four words is an error, never PermissionNone:
+	// a question the forge did not answer is not a trust decision.
+	RepoPermission(owner, name, login string) (Permission, error)
 	CreateIssueComment(owner, name string, number int, body string) error
 	AddIssueLabels(owner, name string, number int, labels []string) error
 	RemoveIssueLabel(owner, name string, number int, label string) error

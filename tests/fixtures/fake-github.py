@@ -48,7 +48,9 @@ What it answers:
     - otherwise the routes below, with bodies shaped like GitHub's. The
       defaults are an empty pull-request and comment list. GET …/issues/N
       has NO default and is 404 on purpose: a test that forgot to script its
-      issue fails loudly rather than passing on an invented one.
+      issue fails loudly rather than passing on an invented one. GET
+      …/collaborators/{login}/permission has no default either: a case that
+      reaches the sender rule scripts the sender's permission.
     - anything else is 404 {"message": "Not Found"}.
 
 The query string is recorded (requests.jsonl's "query") and ignored for

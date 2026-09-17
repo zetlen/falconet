@@ -447,35 +447,125 @@ done`
 
 // --- the event --------------------------------------------------------------------
 
-func TestInferModeAndNotAWayIn(t *testing.T) {
+func TestInferMode(t *testing.T) {
 	parked := []string{"infra-request", "needs-info"}
 	for _, tc := range []struct {
-		name    string
-		ev      *Event
-		labels  []string
-		mode    Mode
-		notAWay bool
+		name   string
+		ev     *Event
+		labels []string
+		mode   Mode
 	}{
-		{"no event", nil, parked, Entry, false},
-		{"a human's comment on a parked, queued issue", &Event{Action: "created"}, parked, ReEntry, false},
-		{"a bot's comment", &Event{Action: "created", Bot: true}, parked, Entry, true},
-		{"a comment on a pull request", &Event{Action: "created", PullRequest: true}, parked, Entry, true},
-		{"a comment on an issue not parked", &Event{Action: "created"}, []string{"infra-request"}, Entry, false},
-		{"a comment on an issue not queued", &Event{Action: "created"}, []string{"needs-info"}, Entry, false},
-		{"labeled", &Event{Action: "labeled"}, parked, Entry, false},
-		{"opened", &Event{Action: "opened"}, parked, Entry, false},
-		{"a bot label event is not a comment, so not the short-circuit", &Event{Action: "labeled", Bot: true}, parked, Entry, false},
+		{"no event", nil, parked, Entry},
+		{"a human's comment on a parked, queued issue", &Event{Action: "created"}, parked, ReEntry},
+		{"a bot's comment", &Event{Action: "created", Bot: true}, parked, Entry},
+		{"a comment on a pull request", &Event{Action: "created", PullRequest: true}, parked, Entry},
+		{"a comment on an issue not parked", &Event{Action: "created"}, []string{"infra-request"}, Entry},
+		{"a comment on an issue not queued", &Event{Action: "created"}, []string{"needs-info"}, Entry},
+		{"labeled", &Event{Action: "labeled"}, parked, Entry},
+		{"opened", &Event{Action: "opened"}, parked, Entry},
 	} {
 		if got := InferMode(tc.ev, tc.labels, defaults); got != tc.mode {
 			t.Errorf("%s: InferMode = %v, want %v", tc.name, got, tc.mode)
-		}
-		if got := NotAWayIn(tc.ev); got != tc.notAWay {
-			t.Errorf("%s: NotAWayIn = %v, want %v", tc.name, got, tc.notAWay)
 		}
 	}
 	if Entry.String() != "entry" || ReEntry.String() != "re-entry" {
 		t.Error("the modes do not name themselves")
 	}
+}
+
+// NotAWayIn refuses, from the event alone, everything that can start no run
+// whatever the issue says. want is "" for a way in, or a word the reason
+// must carry.
+func TestNotAWayIn(t *testing.T) {
+	queue := []string{"infra-request"}
+	for _, tc := range []struct {
+		name  string
+		ev    *Event
+		mode  Mode
+		rules func(Rules) Rules
+		want  string
+	}{
+		{"no event is a run by hand, and asks nothing here", nil, Entry, nil, ""},
+		{"an event that names no sender", &Event{Action: "labeled", Added: queue}, Entry, nil, "sender"},
+		{"a bot's label event", &Event{Action: "labeled", Bot: true, Sender: "x", Added: queue}, Entry, nil, "bot"},
+		{"a bot's reopen", &Event{Action: "reopened", Bot: true, Sender: "x"}, Entry, nil, "bot"},
+		{"a bot's comment, even on a parked issue", &Event{Action: "created", Bot: true, Sender: "x"}, ReEntry, nil, "bot"},
+		{"a comment on a pull request", &Event{Action: "created", PullRequest: true, Sender: "x"}, ReEntry, nil, "pull request"},
+		{"a comment on an issue parked needs-info", &Event{Action: "created", Sender: "x"}, ReEntry, nil, ""},
+		{"a comment on an issue not parked", &Event{Action: "created", Sender: "x"}, Entry, nil, "needs-info"},
+		{"opened", &Event{Action: "opened", Sender: "x"}, Entry, nil, ""},
+		{"reopened", &Event{Action: "reopened", Sender: "x"}, Entry, nil, ""},
+		{"a label event for another label", &Event{Action: "labeled", Sender: "x", Added: []string{"bug"}}, Entry, nil, "infra-request"},
+		{"a label event that added nothing", &Event{Action: "labeled", Sender: "x"}, Entry, nil, "infra-request"},
+		{"a label event that added the queue label among others",
+			&Event{Action: "labeled", Sender: "x", Added: []string{"bug", "infra-request"}}, Entry, nil, ""},
+		{"the queue label as the config names it",
+			&Event{Action: "labeled", Sender: "x", Added: []string{"ops"}}, Entry,
+			func(r Rules) Rules { r.QueueLabel = "ops"; return r }, ""},
+		{"edited", &Event{Action: "edited", Sender: "x"}, Entry, nil, `"edited"`},
+		{"unlabeled", &Event{Action: "unlabeled", Sender: "x", Added: queue}, Entry, nil, `"unlabeled"`},
+		{"assigned", &Event{Action: "assigned", Sender: "x"}, Entry, nil, `"assigned"`},
+		{"no action at all", &Event{Sender: "x"}, Entry, nil, `""`},
+	} {
+		r := defaults
+		if tc.rules != nil {
+			r = tc.rules(r)
+		}
+		got := NotAWayIn(tc.ev, tc.mode, r)
+		switch {
+		case tc.want == "" && got != "":
+			t.Errorf("%s: NotAWayIn = %q, want a way in", tc.name, got)
+		case tc.want != "" && !strings.Contains(got, tc.want):
+			t.Errorf("%s: NotAWayIn = %q, want a refusal naming %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// --- the sender -------------------------------------------------------------------
+
+func TestSenderRule(t *testing.T) {
+	for _, p := range []string{"write", "admin"} {
+		if got := SenderRule(42, "maint", p); got != "" {
+			t.Errorf("%q: SenderRule = %q, want a way in", p, got)
+		}
+	}
+	for _, p := range []string{"read", "none", "", "maintain", "triage", "owner", "Write", "push"} {
+		got := SenderRule(42, "stranger", p)
+		if !strings.Contains(got, "stranger") || !strings.Contains(got, "write") {
+			t.Errorf("%q: SenderRule = %q, want a refusal naming the login and write", p, got)
+		}
+		// A public repository's run log is public: the reason names the
+		// threshold, never the answered word.
+		switch p {
+		case "read", "none", "maintain", "triage", "owner":
+			if strings.Contains(got, p) {
+				t.Errorf("%q: SenderRule = %q names the answered word", p, got)
+			}
+		}
+	}
+}
+
+// permissionWord is what a forge might answer: half the time a word some
+// forge uses or a near miss of one, otherwise any string.
+type permissionWord string
+
+func (permissionWord) Generate(r *rand.Rand, size int) reflect.Value {
+	near := []string{"write", "admin", "read", "none", "maintain", "triage", "owner", "push", "pull",
+		"Write", "ADMIN", " write", "write ", "writes", "adm", ""}
+	if r.Intn(2) == 0 {
+		return reflect.ValueOf(permissionWord(near[r.Intn(len(near))]))
+	}
+	s, _ := quick.Value(reflect.TypeOf(""), r)
+	return reflect.ValueOf(permissionWord(s.String()))
+}
+
+// Exactly write and admin admit a sender, whatever else a forge answers.
+func TestSenderRuleAdmitsExactlyWriteAndAdmin(t *testing.T) {
+	check(t, func(n uint16, login string, permission permissionWord) bool {
+		p := string(permission)
+		admitted := SenderRule(int(n), login, p) == ""
+		return admitted == (p == "write" || p == "admin")
+	})
 }
 
 // --- the request ------------------------------------------------------------------

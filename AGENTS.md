@@ -43,9 +43,17 @@ lives in git: no document in this tree says what used to be true.
 - **It is not a platform.** Nothing hosted, no account, no SaaS contract. The
   forge and a model API are the whole of what it depends on, and both are
   the operator's to choose.
-- **It is not built for a repository where strangers trigger workflows.**
-  That threat model is real and it is someone else's. One operator, their
-  collaborators, and a human merge.
+- **It does not screen what a request says.** A run starts only from an
+  event whose sender holds write on the repository
+  ([register](docs/decisions.md#a-run-starts-only-from-a-sender-with-write)).
+  Anyone else's label, reopen or comment starts nothing and is answered with
+  nothing, and a person with write queues a stranger's request by applying
+  the queue label. From then on the issue's title, body and every comment
+  on it, whoever wrote them, are the agent's instructions, and principles 1
+  to 3 and a person's merge answer for them: nothing reads that text for
+  intent before the agent does. Every event the caller's `if:` lets through
+  still spends a gate job's runner-seconds, a public repository's Actions
+  logs are public, and spam, abuse and interaction limits are the forge's.
 - **It is not a product.** No code of conduct, no marketplace listing, no tap,
   no `curl … | sh` for installing falconet itself — its install is a
   release binary, through mise or the releases page, or `go install` at a
@@ -69,9 +77,12 @@ Three rows worth knowing before proposing architecture:
 
 - **The pipeline is falconet's own code**
   ([register](docs/decisions.md#the-pipeline-is-falconets-own-code)):
-  `github/gh-aw` and its kind are sized for a threat model this repository
-  does not have, and the row reopens on one observation: strangers can
-  trigger this pipeline.
+  `github/gh-aw` and its kind carry a role check on who triggers a run,
+  integrity filtering of untrusted text, and a threat-detection stage.
+  falconet has the role check, as
+  [its own rule in `prepare`](docs/decisions.md#a-run-starts-only-from-a-sender-with-write),
+  and neither of the other two, and the row reopens when a change steered by
+  an admitted request's text gets past the guards and a person's review.
 - **The harness is a configured command**
   ([register](docs/decisions.md#the-harness-is-a-configured-command)): the
   implement verb is the seam, the README's contract is what a harness must
