@@ -47,7 +47,7 @@ import (
 	"time"
 
 	"github.com/zetlen/falconet/internal/config"
-	"github.com/zetlen/falconet/internal/github"
+	"github.com/zetlen/falconet/internal/forge"
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/prepare"
 	"github.com/zetlen/falconet/internal/repo"
@@ -115,35 +115,11 @@ func prepareUsage() int {
 	return 2
 }
 
-// eventPayload is the part of a webhook payload the gate reads, every field
-// optional: `.issue.labels[].name`, `.issue.body` (null is ""),
-// `.issue.state` (null is "open"), `.action` (null is ""), whether
-// `.issue.pull_request` is set, `.sender.login`, `.sender.type`, and
-// `.label.name`, the label a labeled event added.
-type eventPayload struct {
-	Action string `json:"action"`
-	Issue  struct {
-		Labels []struct {
-			Name string `json:"name"`
-		} `json:"labels"`
-		Body        *string         `json:"body"`
-		State       *string         `json:"state"`
-		PullRequest json.RawMessage `json:"pull_request"`
-	} `json:"issue"`
-	Sender struct {
-		Login string `json:"login"`
-		Type  string `json:"type"`
-	} `json:"sender"`
-	Label struct {
-		Name string `json:"name"`
-	} `json:"label"`
-}
-
-// readEvent reads the gate's inputs from the event file. The file must
-// exist and parse; a payload whose top-level value is null or false is "not
-// valid JSON", and one that is not an object at all is refused by name
-// rather than read as an issue with nothing on it.
-func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
+// readEvent reads the gate's inputs from the event file, through the forge's
+// reader. The file must exist and parse; a payload whose top-level value is
+// null or false is "not valid JSON", and one that is not an object at all is
+// refused by name rather than read as an issue with nothing on it.
+func readEvent(path string, decode func([]byte) (prepare.Event, prepare.Snapshot, error)) (prepare.Event, prepare.Snapshot, error) {
 	var ev prepare.Event
 	var snap prepare.Snapshot
 	info, err := os.Stat(path)
@@ -161,34 +137,9 @@ func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
 	if _, ok := top.(map[string]any); !ok {
 		return ev, snap, fmt.Errorf("%s is not a GitHub event: the top-level value is not an object", path)
 	}
-	var p eventPayload
-	if err := json.Unmarshal(raw, &p); err != nil {
+	ev, snap, err = decode(raw)
+	if err != nil {
 		return ev, snap, fmt.Errorf("%s is not a GitHub event: %v", path, err)
-	}
-	for _, l := range p.Issue.Labels {
-		if l.Name != "" {
-			snap.Labels = append(snap.Labels, l.Name)
-		}
-	}
-	if p.Issue.Body != nil {
-		snap.Body = *p.Issue.Body
-	}
-	snap.State = "open"
-	if p.Issue.State != nil {
-		snap.State = *p.Issue.State
-	}
-	ev.Action = p.Action
-	// Set means anything but null and false.
-	pr := bytes.TrimSpace(p.Issue.PullRequest)
-	ev.PullRequest = len(pr) > 0 && string(pr) != "null" && string(pr) != "false"
-	// GitHub's event reader: the sender is the account that labelled,
-	// opened, reopened or commented, and GitHub marks an App's or an Actions
-	// token's account with type Bot. A labeled event carries the one label
-	// it added.
-	ev.Sender = p.Sender.Login
-	ev.Bot = p.Sender.Type == "Bot"
-	if ev.Action == "labeled" && p.Label.Name != "" {
-		ev.Added = []string{p.Label.Name}
 	}
 	return ev, snap, nil
 }
@@ -198,8 +149,8 @@ func readEvent(path string) (prepare.Event, prepare.Snapshot, error) {
 type issueSnapshot struct {
 	rawIssue    json.RawMessage
 	rawComments json.RawMessage
-	issue       github.Issue
-	comments    []github.IssueComment
+	issue       forge.Issue
+	comments    []forge.IssueComment
 }
 
 // snapshotJSON is issue.json: the issue object as GitHub sent it, with the
@@ -334,6 +285,7 @@ func runPrepare(args []string) int {
 	if err != nil {
 		return die("falconet: %v", err)
 	}
+	k := forgeFor()
 	rules := prepare.Rules{
 		QueueLabel:       cfg.Schema.Issue.QueueLabel,
 		OptOutText:       cfg.Schema.Issue.OptOutText,
@@ -365,13 +317,13 @@ func runPrepare(args []string) int {
 	// them, never at startup: "no network at all" has to mean no credential
 	// either, and a workstation run that stops at the gate should not have
 	// to explain which repository it would have asked.
-	var client github.Client
+	var client forge.Client
 	var owner, name string
 	connect := func() error {
 		if client != nil {
 			return nil
 		}
-		token := github.TokenFromEnv()
+		token := forge.TokenFromEnv()
 		if token == "" {
 			return errors.New("no token in GH_TOKEN or GITHUB_TOKEN")
 		}
@@ -379,8 +331,7 @@ func runPrepare(args []string) int {
 		if err != nil {
 			return err
 		}
-		owner, name = o, n
-		client = github.NewGH(github.APIURLFromEnv(), token)
+		owner, name, client = o, n, k.connect(forge.APIURLFromEnv(), token)
 		return nil
 	}
 	var snap *issueSnapshot
@@ -416,7 +367,7 @@ func runPrepare(args []string) int {
 	var gate prepare.Snapshot
 	var ev prepare.Event
 	if eventPath != "" {
-		e, s, err := readEvent(eventPath)
+		e, s, err := readEvent(eventPath, k.decode)
 		if err != nil {
 			return die("prepare: %v", err)
 		}
@@ -599,7 +550,7 @@ func runPrepare(args []string) int {
 	// gone.
 	if mode == prepare.ReEntry {
 		err := client.RemoveIssueLabel(owner, name, number, rules.NeedsInfo)
-		var apiErr *github.Error
+		var apiErr *forge.Error
 		switch {
 		case err == nil:
 			say("cleared '%s': this run is a re-entry", rules.NeedsInfo)

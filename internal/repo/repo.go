@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zetlen/falconet/internal/github"
+	"github.com/zetlen/falconet/internal/forge"
 )
 
 // Root returns the repository root: $FALCONET_REPO if set (it must name a
@@ -69,13 +69,13 @@ func Root(cwd string) (string, error) {
 // either fix looks like.
 func Repository(cwd string) (owner, name string, err error) {
 	if r := os.Getenv("GITHUB_REPOSITORY"); r != "" {
-		owner, name, err = github.SplitRepository(r)
+		owner, name, err = forge.SplitRepository(r)
 		if err != nil {
 			return "", "", fmt.Errorf("$GITHUB_REPOSITORY %v", err)
 		}
 		return owner, name, nil
 	}
-	host := github.ServerHostFromEnv()
+	host := forge.ServerHostFromEnv()
 	fix := fmt.Sprintf("set GITHUB_REPOSITORY=owner/name, or run from a clone whose origin is on %s", host)
 	cmd := exec.Command("git", "-C", cwd, "remote", "get-url", "origin")
 	out, err := cmd.Output()
@@ -83,7 +83,7 @@ func Repository(cwd string) (owner, name string, err error) {
 	if err != nil || remote == "" {
 		return "", "", fmt.Errorf("cannot tell which GitHub repository this is: no origin remote; %s", fix)
 	}
-	owner, name, err = github.ParseRemoteURL(remote, host)
+	owner, name, err = forge.ParseRemoteURL(remote, host)
 	if err != nil {
 		return "", "", fmt.Errorf("cannot tell which GitHub repository this is: origin %v; %s", err, fix)
 	}

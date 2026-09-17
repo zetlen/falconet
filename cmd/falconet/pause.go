@@ -6,11 +6,11 @@ package main
 // this file is the flags, the body file, the three GitHub calls, and the
 // exit code.
 //
-// GitHub calls go through the `Client` adapter in internal/github, backed by
-// `gh api`, against the repository GITHUB_REPOSITORY names. That variable is
-// the only source — it is set in every Actions run, and a repository guessed
-// from a git remote is how a comment lands on the wrong one. A local run
-// exports it.
+// GitHub calls go through the forge's `Client` (internal/forge), whose
+// adapter cmd/falconet/forge.go chooses, against the repository
+// GITHUB_REPOSITORY names. That variable is the only source — it is set in
+// every Actions run, and a repository guessed from a git remote is how a
+// comment lands on the wrong one. A local run exports it.
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ import (
 	"strconv"
 
 	"github.com/zetlen/falconet/internal/config"
-	"github.com/zetlen/falconet/internal/github"
+	"github.com/zetlen/falconet/internal/forge"
 	"github.com/zetlen/falconet/internal/pause"
 )
 
@@ -170,6 +170,7 @@ func runPause(args []string) int {
 	if err != nil {
 		return failure("falconet: %v", err)
 	}
+	k := forgeFor()
 	if err := pause.Label(label, cfg.Schema.Labels.NeedsInfo, cfg.Schema.Labels.Human); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
@@ -178,11 +179,11 @@ func runPause(args []string) int {
 	// Both of these are checked before anything is built or sent: a pause
 	// with nowhere to post is a failure before any call, and the caller must
 	// know the issue is still un-paused.
-	token := github.TokenFromEnv()
+	token := forge.TokenFromEnv()
 	if token == "" {
 		return failure("pause needs a token in GH_TOKEN or GITHUB_TOKEN to comment on #%d", number)
 	}
-	owner, name, err := github.SplitRepository(os.Getenv("GITHUB_REPOSITORY"))
+	owner, name, err := forge.SplitRepository(os.Getenv("GITHUB_REPOSITORY"))
 	if err != nil {
 		return failure("pause needs GITHUB_REPOSITORY (owner/name) to know which repository #%d is in: %v", number, err)
 	}
@@ -227,7 +228,7 @@ func runPause(args []string) int {
 	// the refusal can fetch the administrator. Either refusal is the word
 	// `failure`: the issue is not fully paused, and the caller must hear
 	// that from the word and the exit code both.
-	client := github.NewGH(github.APIURLFromEnv(), token)
+	client := k.connect(forge.APIURLFromEnv(), token)
 	status := 0
 	if err := client.AddIssueLabels(owner, name, number, []string{label}); err != nil {
 		fmt.Fprintf(os.Stderr, "could not add label %s to #%d: %v\n", label, number, err)

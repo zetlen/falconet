@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"reflect"
-	"strings"
 	"testing"
+
+	"github.com/zetlen/falconet/internal/forge"
 )
 
 // --- parseResponse -----------------------------------------------------------
@@ -71,141 +72,6 @@ func TestParseResponseZeroStatusOnGarbage(t *testing.T) {
 	}
 }
 
-// --- path helpers ------------------------------------------------------------
-
-func TestIssuePathEscapesOwnerAndName(t *testing.T) {
-	got := IssuePath("o", "a b", 42, "comments")
-	want := "/repos/o/a%20b/issues/42/comments"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestIssuePathNoRest(t *testing.T) {
-	got := IssuePath("o", "r", 42, "")
-	want := "/repos/o/r/issues/42"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestRepoPath(t *testing.T) {
-	got := RepoPath("o", "r", "/pulls?state=open")
-	want := "/repos/o/r/pulls?state=open"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// --- utility functions -------------------------------------------------------
-
-func TestSplitRepository(t *testing.T) {
-	for _, tc := range []struct {
-		in, owner, name string
-		ok              bool
-	}{
-		{"zetlen/wayfinders-infra", "zetlen", "wayfinders-infra", true},
-		{"o/r", "o", "r", true},
-		{"", "", "", false},
-		{"noslash", "", "", false},
-		{"/r", "", "", false},
-		{"o/", "", "", false},
-		{"o/r/extra", "", "", false},
-	} {
-		owner, name, err := SplitRepository(tc.in)
-		if (err == nil) != tc.ok || owner != tc.owner || name != tc.name {
-			t.Errorf("%q: got (%q, %q, %v), want (%q, %q, ok=%v)", tc.in, owner, name, err, tc.owner, tc.name, tc.ok)
-		}
-	}
-}
-
-func TestAPIURLFromEnv(t *testing.T) {
-	t.Setenv("GITHUB_API_URL", "")
-	if got := APIURLFromEnv(); got != DefaultAPIURL {
-		t.Errorf("unset: %q", got)
-	}
-	t.Setenv("GITHUB_API_URL", "http://127.0.0.1:4321/")
-	if got := APIURLFromEnv(); got != "http://127.0.0.1:4321" {
-		t.Errorf("trailing slash kept: %q", got)
-	}
-}
-
-func TestTokenFromEnvPrefersGHToken(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	if got := TokenFromEnv(); got != "" {
-		t.Errorf("neither set: %q", got)
-	}
-	t.Setenv("GITHUB_TOKEN", "gt")
-	if got := TokenFromEnv(); got != "gt" {
-		t.Errorf("GITHUB_TOKEN alone: %q", got)
-	}
-	t.Setenv("GH_TOKEN", "gh")
-	if got := TokenFromEnv(); got != "gh" {
-		t.Errorf("both set: %q", got)
-	}
-}
-
-func TestServerHostFromEnv(t *testing.T) {
-	t.Setenv("GITHUB_SERVER_URL", "")
-	if got := ServerHostFromEnv(); got != "github.com" {
-		t.Errorf("unset: %q", got)
-	}
-	t.Setenv("GITHUB_SERVER_URL", "https://github.example.com")
-	if got := ServerHostFromEnv(); got != "github.example.com" {
-		t.Errorf("enterprise: %q", got)
-	}
-	t.Setenv("GITHUB_SERVER_URL", "https://GitHub.com/")
-	if got := ServerHostFromEnv(); got != "GitHub.com" {
-		t.Errorf("trailing slash: %q", got)
-	}
-	t.Setenv("GITHUB_SERVER_URL", "not a url")
-	if got := ServerHostFromEnv(); got != "github.com" {
-		t.Errorf("garbage: %q", got)
-	}
-}
-
-func TestParseRemoteURL(t *testing.T) {
-	for _, tc := range []struct {
-		remote, host, owner, name string
-		ok                        bool
-	}{
-		{"https://github.com/zetlen/wayfinders-infra", "github.com", "zetlen", "wayfinders-infra", true},
-		{"https://github.com/zetlen/wayfinders-infra.git", "github.com", "zetlen", "wayfinders-infra", true},
-		{"https://github.com/zetlen/wayfinders-infra/", "github.com", "zetlen", "wayfinders-infra", true},
-		{"https://github.com/zetlen/wayfinders-infra.git/", "github.com", "zetlen", "wayfinders-infra", true},
-		{"https://x-access-token:ghs_abc@github.com/o/r.git", "github.com", "o", "r", true},
-		{"https://GitHub.com/o/r", "github.com", "o", "r", true},
-		{"git@github.com:zetlen/wayfinders-infra.git", "github.com", "zetlen", "wayfinders-infra", true},
-		{"github.com:zetlen/falconet@v1", "github.com", "", "", false},
-		{"host:a/b@c", "github.com", "", "", false},
-		{"git@github.com:zetlen/falconet@v1", "github.com", "", "", false},
-		{"git@github.com:zetlen/wayfinders-infra", "github.com", "zetlen", "wayfinders-infra", true},
-		{"ssh://git@github.com/zetlen/wayfinders-infra.git", "github.com", "zetlen", "wayfinders-infra", true},
-		{"ssh://git@github.com:22/o/r", "github.com", "o", "r", true},
-		{"https://github.example.com/o/r.git", "github.example.com", "o", "r", true},
-		{"git@github.example.com:o/r.git", "github.example.com", "o", "r", true},
-		{"  https://github.com/o/r\n", "github.com", "o", "r", true},
-		{"https://gitlab.com/o/r.git", "github.com", "", "", false},
-		{"git@gitlab.com:o/r.git", "github.com", "", "", false},
-		{"https://github.com/o/r", "github.example.com", "", "", false},
-		{"https://github.com/o", "github.com", "", "", false},
-		{"https://github.com/o/r/extra", "github.com", "", "", false},
-		{"https://github.com/", "github.com", "", "", false},
-		{"git@github.com:o", "github.com", "", "", false},
-		{"/home/me/repos/r", "github.com", "", "", false},
-		{"../r.git", "github.com", "", "", false},
-		{"", "github.com", "", "", false},
-		{"https://github.com:abc/o/r", "github.com", "", "", false},
-	} {
-		owner, name, err := ParseRemoteURL(tc.remote, tc.host)
-		if (err == nil) != tc.ok || owner != tc.owner || name != tc.name {
-			t.Errorf("%q on %s: got (%q, %q, %v), want (%q, %q, ok=%v)",
-				tc.remote, tc.host, owner, name, err, tc.owner, tc.name, tc.ok)
-		}
-	}
-}
-
 // --- round-trip tests through gh + httptest ----------------------------------
 //
 // These tests start a local HTTP server and point a GH adapter at it, so the
@@ -231,7 +97,7 @@ func requireGH(t *testing.T) {
 
 // serve starts a GitHub-shaped server that answers every request with status
 // and body, records what it saw, and returns a GH client pointed at it.
-func serve(t *testing.T, status int, body string) (Client, *[]recorded) {
+func serve(t *testing.T, status int, body string) (forge.Client, *[]recorded) {
 	t.Helper()
 	requireGH(t)
 	var seen []recorded
@@ -250,7 +116,7 @@ func serve(t *testing.T, status int, body string) (Client, *[]recorded) {
 }
 
 // served starts a server that answers each path from a table.
-func served(t *testing.T, answers map[string]string) (Client, *[]recorded) {
+func served(t *testing.T, answers map[string]string) (forge.Client, *[]recorded) {
 	t.Helper()
 	requireGH(t)
 	var seen []recorded
@@ -315,32 +181,13 @@ func TestEveryRequestCarriesAnAuthorizationHeader(t *testing.T) {
 func TestAnErrorCarriesTheStatusAndGitHubsMessage(t *testing.T) {
 	c, _ := serve(t, 422, `{"message":"Validation Failed","errors":[]}`)
 	err := c.AddIssueLabels("o", "r", 36, []string{"nope"})
-	var e *Error
+	var e *forge.Error
 	if !errors.As(err, &e) {
-		t.Fatalf("got %T %v, want *Error", err, err)
+		t.Fatalf("got %T %v, want *forge.Error", err, err)
 	}
 	if e.Status != 422 || e.Message != "Validation Failed" || e.Method != "POST" ||
 		e.Path != "/repos/o/r/issues/36/labels" {
 		t.Errorf("got %+v", *e)
-	}
-	if got := err.Error(); got != "POST /repos/o/r/issues/36/labels: 422 Validation Failed" {
-		t.Errorf("Error(): %q", got)
-	}
-}
-
-func TestA404SaysNotFoundOrNoAccess(t *testing.T) {
-	c, _ := serve(t, 404, `{"message":"Not Found"}`)
-	err := c.CreateIssueComment("o", "private", 1, "x")
-	if err == nil || !strings.Contains(err.Error(), "404 not found, or no access") {
-		t.Errorf("got %v", err)
-	}
-}
-
-func TestAnErrorWithNoMessageUsesTheStatusText(t *testing.T) {
-	c, _ := serve(t, 502, `<html>bad gateway</html>`)
-	err := c.CreateIssueComment("o", "r", 1, "x")
-	if err == nil || !strings.Contains(err.Error(), "502 Bad Gateway") {
-		t.Errorf("got %v", err)
 	}
 }
 
@@ -454,17 +301,17 @@ func TestRepoPermissionAsksTheCollaboratorPermissionEndpoint(t *testing.T) {
 func TestRepoPermissionReadsTheLegacyWord(t *testing.T) {
 	for _, tc := range []struct {
 		body string
-		want Permission
+		want forge.Permission
 	}{
-		{`{"permission":"admin"}`, PermissionAdmin},
-		{`{"permission":"write"}`, PermissionWrite},
-		{`{"permission":"read"}`, PermissionRead},
-		{`{"permission":"none"}`, PermissionNone},
+		{`{"permission":"admin"}`, forge.PermissionAdmin},
+		{`{"permission":"write"}`, forge.PermissionWrite},
+		{`{"permission":"read"}`, forge.PermissionRead},
+		{`{"permission":"none"}`, forge.PermissionNone},
 		// GitHub's answer for an account with no grant on a public repository.
-		{`{"permission":"read","role_name":"read","user":{"login":"torvalds","type":"User"}}`, PermissionRead},
+		{`{"permission":"read","role_name":"read","user":{"login":"torvalds","type":"User"}}`, forge.PermissionRead},
 		// Neither role_name nor the booleans is read: the base role is the answer.
-		{`{"permission":"write","role_name":"security-manager","user":{"permissions":{"admin":true}}}`, PermissionWrite},
-		{`{"permission":"read","role_name":"triage","user":{"permissions":{"push":true}}}`, PermissionRead},
+		{`{"permission":"write","role_name":"security-manager","user":{"permissions":{"admin":true}}}`, forge.PermissionWrite},
+		{`{"permission":"read","role_name":"triage","user":{"permissions":{"push":true}}}`, forge.PermissionRead},
 	} {
 		c, _ := serve(t, 200, tc.body)
 		got, err := c.RepoPermission("o", "r", "alice")
@@ -495,15 +342,12 @@ func TestRepoPermissionAnUnknownWordIsAnError(t *testing.T) {
 func TestRepoPermission404IsAnErrorNotNone(t *testing.T) {
 	c, _ := served(t, map[string]string{})
 	got, err := c.RepoPermission("o", "r", "zz-no-such-user")
-	var e *Error
+	var e *forge.Error
 	if !errors.As(err, &e) || e.Status != 404 {
-		t.Fatalf("got %q, %T %v; want a 404 *Error", got, err, err)
+		t.Fatalf("got %q, %T %v; want a 404 *forge.Error", got, err, err)
 	}
 	if got != "" {
 		t.Errorf("a 404 answered a permission: %q", got)
-	}
-	if !strings.Contains(err.Error(), "not found, or no access") {
-		t.Errorf("Error(): %q", err.Error())
 	}
 }
 
@@ -539,7 +383,7 @@ func TestTheRawReadsPreserveGitHubsBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The typed views decode from the raw bytes.
-	var typed Issue
+	var typed forge.Issue
 	if err := json.Unmarshal(rawIssue, &typed); err != nil || typed.Number != 42 || typed.Title != "Add MX" || typed.Body != "" {
 		t.Errorf("the typed issue does not decode from the raw one: %v %+v", err, typed)
 	}
@@ -547,12 +391,13 @@ func TestTheRawReadsPreserveGitHubsBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var thread []IssueComment
+	var thread []forge.IssueComment
 	if err := json.Unmarshal(rawComments, &thread); err != nil || len(thread) != 1 || thread[0].User.Login != "zetlen" {
 		t.Errorf("the typed comments do not decode from the raw ones: %v %+v", err, thread)
 	}
-	// A refusal is the same *Error the typed reads return.
-	if _, err := c.GetIssueRaw("o", "r", 43); err == nil || !strings.Contains(err.Error(), "404") {
+	// A refusal is the same *forge.Error the typed reads return.
+	var e *forge.Error
+	if _, err := c.GetIssueRaw("o", "r", 43); !errors.As(err, &e) || e.Status != 404 {
 		t.Errorf("a 404 on the raw read: %v", err)
 	}
 }

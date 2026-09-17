@@ -1,25 +1,14 @@
-// Package github is falconet's adapter to the GitHub API: an interface the
-// verbs depend on, the types GitHub answers with, and the handful of
-// environment and URL helpers a verb needs to find its repository and its
-// token. The one implementation shells out to the `gh` CLI (ghcli.go);
-// nothing in the verbs knows that.
+// Package forge is the interface the verbs talk to a forge through, the
+// shapes a forge answers in, and the handful of environment and URL helpers a
+// verb needs to find its repository and its token. The adapter behind the
+// interface is internal/github; cmd/falconet/forge.go is the one place that
+// names it, and nothing in a verb knows which forge is behind a Client.
 //
-// Nothing here retries, paginates or caches. A verb makes a call or three and
-// reports each result, and a call that fails is an error carrying the status
-// and the message GitHub sent, which is what a run log needs and all it
-// needs. The list reads ask for 100 per page and read one page; each says so
-// in its own comment, so a caller that could be handed the 101st item knows
-// it will not be.
-//
-// A 404 from GitHub means "not found" OR "no access": a private repository
-// answers a token without permission exactly as it answers a name that does
-// not exist, by design. The error says both, because both are true of what
-// the caller knows.
-//
-// The test suite points GITHUB_API_URL at tests/fixtures/fake-github.py, a
-// loopback server that answers from fixtures and records what it was asked;
-// the gh adapter sends to that URL the same way it sends to api.github.com.
-package github
+// A 404 means "not found" OR "no access": a private repository answers a
+// token without permission exactly as it answers a name that does not exist,
+// by design. An Error says both, because both are true of what the caller
+// knows.
+package forge
 
 import (
 	"encoding/json"
@@ -66,7 +55,7 @@ func ServerHostFromEnv() string {
 // its two halves. Anything else is an error naming what was expected.
 func SplitRepository(s string) (owner, name string, err error) {
 	owner, name, ok := strings.Cut(s, "/")
-	if !ok || !repoWord(owner) || !repoWord(name) {
+	if !ok || !IsLoginWord(owner) || !IsLoginWord(name) {
 		return "", "", fmt.Errorf("%q is not an owner/name repository", s)
 	}
 	return owner, name, nil
@@ -119,11 +108,12 @@ func ParseRemoteURL(remote, host string) (owner, name string, err error) {
 	return owner, name, nil
 }
 
-// repoWord is GitHub's alphabet for an owner or a repository name: letters,
-// digits, '.', '_' and '-', and at least one of them. Anything else — a
-// slash, a '?', an '@' — is refused here rather than path-escaped into a
-// request that names a different repository than the one the caller spelled.
-func repoWord(s string) bool {
+// IsLoginWord is GitHub's alphabet for an owner, a repository name or a
+// login: letters, digits, '.', '_' and '-', and at least one of them.
+// Anything else — a slash, a '?', an '@' — is refused here rather than
+// path-escaped into a request that names a different repository or account
+// than the one the caller spelled.
+func IsLoginWord(s string) bool {
 	if s == "" {
 		return false
 	}
@@ -150,7 +140,7 @@ const (
 	PermissionAdmin Permission = "admin"
 )
 
-// Client is the adapter: the verbs talk to GitHub through it.
+// Client is what a verb asks a forge, and all it asks.
 type Client interface {
 	GetIssue(owner, name string, number int) (*Issue, error)
 	GetIssueRaw(owner, name string, number int) (json.RawMessage, error)
@@ -169,7 +159,8 @@ type Client interface {
 	RemoveIssueAssignees(owner, name string, number int, logins []string) error
 }
 
-// Error is GitHub saying no: the status it answered and the message it sent.
+// Error is the forge saying no: the status it answered and the message it
+// sent.
 type Error struct {
 	Method  string
 	Path    string
@@ -192,10 +183,10 @@ func (e *Error) reason() string {
 	return what
 }
 
-// --- the shapes GitHub answers with ------------------------------------------
+// --- the shapes a forge answers with ---------------------------------------
 //
 // Each type carries the fields a verb reads and no more; the tags are the
-// keys as GitHub spells them. A field GitHub adds later is ignored, and a
+// keys as GitHub spells them. A field the forge adds later is ignored, and a
 // field missing from an answer is its zero value — neither is an error,
 // because the verbs decide on what is there.
 
