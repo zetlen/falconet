@@ -394,6 +394,7 @@ Every key, with its default:
 | `prompts.implement` | the shipped [`prompts/implement.md`](prompts/implement.md), embedded in the binary | Path, relative to your repository root, of a prompt of your own for the agent. Absent, the shipped one is used. Either is rendered by `falconet prompt implement`: `{handoff}`, `{workspace}`, `{allow}` and `{deny}` are substituted from this file. |
 | `prompts.pause_needs_info` | the shipped [`prompts/pause-needs-info.md`](prompts/pause-needs-info.md), embedded in the binary | Likewise, for the question posted back to a requester. |
 | `handoff_dir` | `.falconet` | Where the verbs leave files for each other. Gitignore it if you move it. |
+| `forge` | `github` | `github` or `gitea`: which forge `prepare` and `pause` talk to, and how they read its events. A verb on a Gitea Actions runner with `github`, or on a GitHub Actions runner with `gitea`, refuses to start. See [the verbs against Gitea](#using-falconets-verbs-against-gitea). |
 
 **The shipped prompt names nothing of any particular repository's.** It
 tells the agent what `paths.allow` and `paths.deny_content` say — the
@@ -691,6 +692,35 @@ A `go install` of a commit rather than a tag reports the pseudo-version the
 To work on falconet itself, `make hooks` installs the git hooks in
 `lefthook.yml`: a commit subject must be a Conventional Commits subject,
 and `make test` runs before a push.
+
+## Using falconet's verbs against Gitea
+
+No workflow for Gitea ships, because Gitea gives every job Actions
+credentials of its own, so no job there holds nothing for the agent
+([register](docs/decisions.md#github-and-gitea-are-the-forges)). The verbs
+run against a Gitea repository from a workstation, or from a workflow of
+your own, with `"forge": "gitea"` in `.github/falconet.json` and these in
+the environment:
+
+| Variable | What it is |
+| --- | --- |
+| `GH_TOKEN` | A personal access token of a dedicated bot user who is an Administrator of the repository, with `read:user`, `read:repository` and `write:issue` ([register](docs/decisions.md#the-gitea-adapter-speaks-rest-through-nethttp)). |
+| `FALCONET_BOT_LOGIN` | That bot user's login. It is how falconet tells its own comments and labels from a person's, and the client checks it against the token before its first request. |
+| `GITHUB_API_URL` | The instance's API, `https://<instance>/api/v1`. Required: unset, it means api.github.com, and a verb refuses to start rather than send the bot's token there. |
+| `GITHUB_REPOSITORY` | `owner/name`. |
+| `GITHUB_SERVER_URL` | `https://<instance>`, for the branch link `pause` posts. |
+
+`prepare --event` reads the payload Gitea Actions writes for an `issues` or
+`issue_comment` event. A label change there is `label_updated` with the
+labels the request named under `changes.added_labels` and
+`changes.removed_labels`. A label named in both, as the replace route names
+every label the issue keeps, was not added. An add request that names the
+queue label adds it as far as `prepare` can tell, even when the issue
+already carries it. A webhook delivery's payload names no change, and
+`prepare` reads it as no way in.
+
+**Check:** `curl -fsS -H "Authorization: token $GH_TOKEN" "$GITHUB_API_URL/user" | jq -r .login`
+prints `$FALCONET_BOT_LOGIN`.
 
 ## Running the tests
 

@@ -61,13 +61,14 @@ Modes:
   falconet prepare --issue N [--config FILE] [--out-dir DIR] [--event FILE]
                    [--assignee LOGIN] [--re-entry] [--no-ack]
 
-    --event      a GitHub webhook payload (issues / issue_comment). Also
+    --event      the forge's event payload (issues / issue_comment). Also
                  read from $FALCONET_EVENT_PATH. Optional on a workstation:
                  without one the gate reads the issue itself and asks
-                 nobody's permission. Required inside GitHub Actions
-                 ($GITHUB_ACTIONS=true).
+                 nobody's permission. Required on an Actions runner
+                 ($GITHUB_ACTIONS=true or $GITEA_ACTIONS=true).
     --assignee   who the issue is assigned to; defaults to
-                 $GITHUB_TRIGGERING_ACTOR, then to the token's own login
+                 $GITHUB_TRIGGERING_ACTOR, then to the event's sender, then
+                 to the token's own login
     --re-entry   treat this as a comment on an issue parked needs-info
                  rather than a first entry. Inferred from the event when
                  there is one; this is how a workstation says it. With an
@@ -99,16 +100,20 @@ Outputs on the ready path, written into the handoff directory:
 
 and, when $GITHUB_ENV is writable, BRANCH and BASE_SHA.
 
-GitHub is reached with GH_TOKEN or GITHUB_TOKEN, on the repository
-GITHUB_REPOSITORY names, or else the one the origin remote points at; both
+The forge is the config's "forge", github or gitea. It is reached with
+GH_TOKEN or GITHUB_TOKEN, on the repository GITHUB_REPOSITORY names, or
+else the one the origin remote points at; both
 are resolved at the first call that needs them, so an event the rules
 refuse costs no network and no credential; one they admit asks the forge
-for its sender's permission first. GITHUB_API_URL overrides the endpoint.
+for its sender's permission first. GITHUB_API_URL overrides the endpoint;
+on Gitea it is required and is the instance's /api/v1, and
+FALCONET_BOT_LOGIN names the user whose token GH_TOKEN is.
 
 Exit codes: 0 = an outcome was determined and printed
             1 = refused mechanically — a dirty tree, an issue that cannot
                 be read, a sender's permission that cannot be read, a label
-                that cannot be cleared, no event inside GitHub Actions;
+                that cannot be cleared, no event on an Actions runner, a
+                forge the runner is not;
                 nothing is printed, stderr says why
             2 = usage error (including --help)
 `
@@ -138,11 +143,11 @@ func readEvent(path string, decode func([]byte) (prepare.Event, prepare.Snapshot
 		return ev, snap, fmt.Errorf("%s is not valid JSON", path)
 	}
 	if _, ok := top.(map[string]any); !ok {
-		return ev, snap, fmt.Errorf("%s is not a GitHub event: the top-level value is not an object", path)
+		return ev, snap, fmt.Errorf("%s is not an event: the top-level value is not an object", path)
 	}
 	ev, snap, err = decode(raw)
 	if err != nil {
-		return ev, snap, fmt.Errorf("%s is not a GitHub event: %v", path, err)
+		return ev, snap, fmt.Errorf("%s is not an event: %v", path, err)
 	}
 	return ev, snap, nil
 }
@@ -306,7 +311,10 @@ func runPrepare(args []string) int {
 	if err != nil {
 		return die("falconet: %v", err)
 	}
-	k := forgeFor()
+	k, err := forgeFor(cfg.Schema)
+	if err != nil {
+		return die("prepare: %v", err)
+	}
 	rules := prepare.Rules{
 		QueueLabel:       cfg.Schema.Issue.QueueLabel,
 		OptOutText:       cfg.Schema.Issue.OptOutText,
@@ -316,13 +324,12 @@ func runPrepare(args []string) int {
 		BlockingLabels:   cfg.Schema.Issue.BlockingLabels,
 	}
 
-	// Inside GitHub Actions a run starts from an event, and the sender rule
-	// below asks the forge about that event's sender. A caller that forgets
-	// the event file would otherwise start runs nobody asked the forge
-	// about, because a run with no event has no sender. act_runner sets the
-	// same variable, so a Gitea caller gets the same refusal.
-	if eventPath == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
-		return die("prepare: inside GitHub Actions a run starts from an event: pass --event or FALCONET_EVENT_PATH")
+	// Inside GitHub or Gitea Actions a run starts from an event, and the
+	// sender rule below asks the forge about that event's sender. A caller
+	// that forgets the event file would otherwise start runs nobody asked the
+	// forge about, because a run with no event has no sender.
+	if eventPath == "" && forge.OnARunner(os.Getenv("GITEA_ACTIONS"), os.Getenv("GITHUB_ACTIONS")) {
+		return die("prepare: on an Actions runner a run starts from an event: pass --event or FALCONET_EVENT_PATH")
 	}
 
 	// --- the gate's inputs ----------------------------------------------------
@@ -352,7 +359,11 @@ func runPrepare(args []string) int {
 		if err != nil {
 			return err
 		}
-		owner, name, client = o, n, k.connect(forge.APIURLFromEnv(), token)
+		c, err := k.connect(token)
+		if err != nil {
+			return err
+		}
+		owner, name, client = o, n, c
 		return nil
 	}
 	var snap *issueSnapshot
@@ -575,15 +586,11 @@ func runPrepare(args []string) int {
 
 	// The assignment. Best effort — it buys one thing, which is dropping this
 	// issue out of the unassigned queue a human's own tooling reads, and that
-	// is not worth failing a run over. A bot cannot be an assignee, so in CI
-	// this records the human who triggered the run. With neither --assignee
-	// nor $GITHUB_TRIGGERING_ACTOR the token's own login is asked for — gh's
+	// is not worth failing a run over. See internal/prepare.Assignee for who
+	// it names. With nobody named the token's own login is asked for — gh's
 	// `@me` — and an App token, which has no login, cannot answer, which is
 	// a warning like any other failure here.
-	who := assignee
-	if who == "" {
-		who = os.Getenv("GITHUB_TRIGGERING_ACTOR")
-	}
+	who := prepare.Assignee(assignee, os.Getenv("GITHUB_TRIGGERING_ACTOR"), ev.Sender)
 	assignErr := error(nil)
 	if who == "" {
 		who = "the token's own login"

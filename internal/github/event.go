@@ -3,6 +3,7 @@ package github
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/zetlen/falconet/internal/prepare"
 )
@@ -63,6 +64,14 @@ func DecodeEvent(raw []byte) (prepare.Event, prepare.Snapshot, error) {
 	// token's account with type Bot. A labeled event carries the one label
 	// it added.
 	ev.Sender = p.Sender.Login
+	// GitHub gives every user object a type, so a sender with a login and
+	// no type is another forge's payload. Gitea's is one, and read here its
+	// bot's own needs-info comment is a person's reply, which the pipeline
+	// would answer. However the forge came to be github, from the default, a
+	// mistyped key or a workstation no runner marks, that payload is refused.
+	if p.Sender.Login != "" && p.Sender.Type == "" {
+		return prepare.Event{}, prepare.Snapshot{}, fmt.Errorf("the sender %q has no type, and every GitHub sender has one: the event is not GitHub's", p.Sender.Login)
+	}
 	ev.Bot = p.Sender.Type == "Bot"
 	if ev.Action == "labeled" && p.Label.Name != "" {
 		ev.Added = []string{p.Label.Name}
