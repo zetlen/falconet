@@ -1000,6 +1000,13 @@ done
 assert_eq "true" "$(awk '{ if (NF != 5) { print "false"; exit } for (i = 2; i <= NF; i++) if ($i + 0 <= $(i-1) + 0) { print "false"; exit } print "true" }' <<<"$order")" \
   "line numbers in order:$order"
 
+# The break: the release pull request opened with GITHUB_TOKEN. It rewrites
+# every `uses: zetlen/falconet@vX.Y.Z` line in falconet.yml, and GitHub
+# refuses a workflow file written with that token, whatever permissions the
+# job declares. The release then stops before a pull request exists.
+it "the release pull request is opened with the token that may write a workflow file"
+assert_contains "$rel_code" 'token: ${{ secrets.RELEASE_PLEASE_TOKEN }}' "release.yml"
+
 it "and the release-please action is pinned to a SHA"
 assert_eq "true" "$(grep -Eq '^ *uses: googleapis/release-please-action@[0-9a-f]{40}( #.*)?$' <<<"$rel_code" && echo true || echo false)" "release-please-action pinned"
 

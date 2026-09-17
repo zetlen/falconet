@@ -13,11 +13,11 @@
 # those assets at that tag, which is why nothing is published until they are
 # all there.
 #
-# The tag is created with GITHUB_TOKEN, and GitHub starts no workflow for an
-# event GITHUB_TOKEN caused. ci.yml therefore never runs on the release pull
-# request or on the tag, and this job runs the pin check and the suite
-# itself before it builds anything. If a step fails, the release stays a
-# draft: fix the cause on main and re-run this job.
+# release-please acts with a personal access token, so ci.yml runs on the
+# release pull request. The tag is created by merging that pull request, and
+# a tag push starts no workflow here, so the assets job runs the pin check
+# and the suite itself before it builds anything. If a step fails, the
+# release stays a draft: fix the cause on main and re-run this job.
 name: release
 
 on:
@@ -42,8 +42,17 @@ jobs:
       created: ${{ steps.release.outputs.release_created }}
       tag: ${{ steps.release.outputs.tag_name }}
     steps:
+      # RELEASE_PLEASE_TOKEN, not GITHUB_TOKEN: the release pull request
+      # rewrites `.github/workflows/falconet.yml`, and GitHub refuses a
+      # workflow file written with GITHUB_TOKEN, whatever `permissions:`
+      # says. The secret is a fine-grained personal access token on this
+      # repository alone, with contents, pull requests and workflows write,
+      # and it expires: a release that stops here needs it minted again
+      # (operating.md).
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
   assets:
     needs: release-please
