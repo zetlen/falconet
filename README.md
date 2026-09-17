@@ -22,8 +22,9 @@ written for a reviewer, and the repository's own checks posted on it. The
 agent held no credential and could touch only the paths you allowed.
 
 ### **"I'm opening issues!"**
-You describe what you want through an issue template. You may get a
-question back. More likely, you get a pull request shortly.
+You describe what you want through an issue template. If you cannot push to
+the repository, a maintainer queues it. You may get a question back. More
+likely, you get a pull request shortly.
 
 ## How falconet controls the process
 
@@ -181,6 +182,12 @@ installs the binary that tag vouches for. Upgrading is changing the tag.
   checks is a pull request nobody can review. Nothing can verify this for
   you, which is why step 8 ends by reading what the checks posted.
 - **Issues enabled.** `gh api repos/{owner}/{repo} --jq .has_issues` → `true`.
+- **Who can start a run.** A run starts only from an event whose sender has
+  write access: the person who applied the queue label, reopened the issue,
+  or commented on an issue paused `needs-info`. On a public repository anyone
+  can file an issue, and their request waits for someone with write to queue
+  it. A public repository's Actions logs are public too, and the implement
+  job's log shows what the agent read and wrote.
 - **Actions may run workflows from outside the repository.**
   `gh api repos/{owner}/{repo}/actions/permissions --jq .allowed_actions`
   must be `all`, or `selected` with `zetlen/falconet` and `actions/*` in
@@ -310,8 +317,8 @@ done
 
 | Label | Applied by | Config key |
 | --- | --- | --- |
-| `falconet` | a person, to queue a request | `issue.queue_label` |
-| `needs-info` | falconet, pausing a question back to the requester | `labels.needs_info` |
+| `falconet` | a person with write access, to queue a request | `issue.queue_label` |
+| `needs-info` | falconet, pausing a question back to the requester. Put on a queued issue by hand, it parks the issue the same way: the next comment from someone with write access runs it. | `labels.needs_info` |
 | `ready-for-human` | falconet, pausing a run a person has to take over | `labels.human` |
 | `falconet-pr` | falconet, on the pull request it opens | `labels.pr` |
 
@@ -319,10 +326,16 @@ All four before the first run: `pause` says `failure` and fails its step
 when the label it was asked for cannot be put on the issue, which is at
 precisely the moment falconet is trying to tell somebody something.
 
-An issue form with `labels: ["falconet"]` in its front matter means
-requesters never have to label anything. A checkbox whose text is `Not
-eligible for AI agents` (`issue.opt_out_text`) lets them keep a request away
-from the agent.
+An issue form with `labels: ["falconet"]` in its front matter puts the queue
+label on every issue filed through it. A run still starts only for a sender
+with write access. Which event GitHub sends for a form's label, and with
+whom as its sender, is unverified; step 8's second canary shows what your
+repository does. On a repository where anyone can open an issue, leave the
+queue label out of the form and apply it to the requests you have read. To
+queue a request a form did label, remove the label and add it again. If that
+starts no run, close the issue and reopen it. A checkbox whose text is `Not
+eligible for AI agents` (`issue.opt_out_text`) lets a requester keep a
+request away from the agent.
 
 **Check:** `gh label list --json name --jq '.[].name' | grep -cxE 'falconet|needs-info|ready-for-human|falconet-pr'` → `4`.
 
@@ -357,7 +370,7 @@ Every key, with its default:
 | `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. In an OpenTofu repository this is where `data "external"`, `provisioner`, `templatefile(` and `file(` go: the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
 | `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
 | `harness.command` | the Claude Code CLI, as shown under [the implement contract](#the-implement-contract) | The agent, as an argv run with no shell from the repository root, with the rendered prompt on its stdin. Any program meeting the contract. Empty is refused. The default pins the model; a `harness.command` of your own should pin its model too, so the same issue produces the same kind of pull request across runs. |
-| `issue.queue_label` | `falconet` | The label that makes an issue eligible. |
+| `issue.queue_label` | `falconet` | The label that queues an issue, applied by a person with write access. A label event for any other label is not a way in. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
 | `issue.branch_prefix` | `issue-` | Branches are `<prefix><number>-<slug>`. |
@@ -420,9 +433,11 @@ permissions:
 
 jobs:
   falconet:
-    # A run starts only for a person's event, and a label event only for the
-    # queue label: falconet's own comments and labels fire this workflow too.
-    # `falconet` here is `queue_label` in the config.
+    # The `if:` saves a gate job on what `prepare` refuses from the event alone:
+    # a bot's event, which includes falconet's own comments and labels, a
+    # comment on a pull request, and a label other than the queue label.
+    # `falconet` here is `queue_label` in the config. Who may start a run is
+    # `prepare`'s to decide, from the event's sender.
     if: >-
       github.event.sender.type != 'Bot' &&
       !github.event.issue.pull_request &&
@@ -455,19 +470,23 @@ jobs:
 
 Three things about this file that are not obvious:
 
-- **Its `if:` drops only what needs no config, and `prepare` decides the
-  rest.** The `if:` drops an event from a bot, which includes falconet's own
-  comments and labels, a comment on a pull request, and a label other than
-  the queue label. If you set `queue_label`, set the same name in the `if:`.
-  Everything else reaches `prepare`, because a job-level `if:` evaluates
-  before checkout and can never read `.github/falconet.json`. Gating there
-  would fork eligibility into YAML-in-CI and nothing-locally. `prepare`
-  reads the same config a workstation reads, and a person's ineligible event
-  costs runner-seconds and stops. Eligible means: the issue is **open**, carries the **queue
+- **Its `if:` saves a gate job, and `prepare` decides.** The `if:` drops an
+  event from a bot, which includes falconet's own comments and labels, a
+  comment on a pull request, and a label other than the queue label; if you
+  set `queue_label`, set the same name in the `if:`. `prepare` refuses all
+  of those from the event too, and decides the rest, because a job-level
+  `if:` evaluates before checkout and can never read
+  `.github/falconet.json`. Eligible means: the event's **sender has write
+  access** to the repository; the issue is **open**, carries the **queue
   label**, carries none of the blocking labels, has no ticked opt-out box,
-  and has no open pull request already on a branch for that number. A
-  comment from a bot, or on a pull request, is never a way in. A comment
-  from a person on an issue paused `needs-info` is the way back in.
+  and has no open pull request already on a branch for that number. Anyone
+  else's event is ineligible, silently: nothing on the issue, the reason in
+  the run log. A comment from someone with write on an issue paused
+  `needs-info` is the way back in, so to decline a paused request, remove
+  the queue label before you comment. A comment on any other issue starts
+  nothing: to run a request again after closing its pull request, remove
+  the queue label and apply it again. A re-run replays the event and who
+  sent it, so re-running a stranger's event queues nothing.
 - **The ref in `uses:` must be a literal** — GitHub does not expand
   expressions there — and it is the one coordinate: the workflow at that ref
   installs falconet, in every job, from this repository's release at that
@@ -511,12 +530,20 @@ The three endings:
 | Ending | What it looks like | What to do |
 | --- | --- | --- |
 | **A pull request**, labelled `falconet-pr` | Title is the agent's commit subject. Body is its explanation, and nothing else; your repository's own checks post on it. | Read the diff and what the checks posted. It should be the canary's change and nothing else. Then **close the PR without merging** unless you mean to keep it; in a repository that deploys on merge, the merge *is* the deploy. Delete the branch, close the issue. |
-| **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. That comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. |
+| **A question**, labelled `needs-info` | A comment asking the requester something. | Answer it in a comment. From someone with write access, that comment re-enters the pipeline: the label is cleared and the same issue is worked again with the answer in hand. From anyone else it waits for a comment on the issue from someone with write access. |
 | **A hand-off**, labelled `ready-for-human` | A comment saying why a person is needed, linking the branch if one was pushed and the run. | Read the reason. It is one of the guards refusing, and the text names which; or the check still failing at the cap, in which case the branch is pushed, the check's output is folded under the comment, and the change is yours to finish or discard; or the harness itself failing, in which case the run log says how. |
 
 The ending that is *not* on that list — a red run and an issue with only the
 acknowledgment, or nothing at all — is a failed gate, and it is silent. See
 [Troubleshooting](#troubleshooting).
+
+**A second canary, where people without write access file requests.** File
+another canary from an account with no write access, through the form if
+you have one. Its **Prepare** step says `<login> does not hold write on the
+repository`, or no run starts, and the issue gets no comment. Then, from
+your own account, remove the queue label and add it again. That run's
+**Prepare** step should say `ready`. If the re-add starts no run, close the
+issue and reopen it, and that run should say `ready`.
 
 **Pin a tag.** The ref in `uses:` is the one coordinate: the workflow at
 `@v1.0.0` installs, in every job, the binary from this repository's `v1.0.0`
@@ -552,6 +579,8 @@ to be fixed before the next request.
 | `could not add label <name> to #N: …` in a pause step, and the word `failure` | The label could not be put on the issue: one of step 5's labels is missing, or the App lacks Issues: write. The comment was still posted — saying the label could not be applied and asking the requester to contact the repository administrator — and `contain` tries again. | Step 5; then step 3's permissions. |
 | Two runs, two PRs, one issue | The caller lacks the `concurrency` block. | Step 7. |
 | Labelling a request starts no run, or only a skipped one | The label named in the caller's `if:` is not the config's `queue_label`. | Step 7: the same name in both. |
+| A request gets no run and no comment, and **Prepare** says `<login> does not hold write on the repository` | The person who labelled, reopened or commented has less than write access: a requester on a public repository, a triage-only labeller, or a form's label when GitHub sends it as its author's event. | Apply the queue label yourself, removing it first if it is there, or comment on an issue paused `needs-info`. |
+| **gate** is red: `could not read <login>'s permission on <owner>/<repo>` | The permission read failed: a 404 when the App's token cannot see the repository, a 404 when the sender's account was deleted or renamed after the event, or the forge's outage. | Step 3: the App is installed on this repository. Then re-run. A re-run asks about the same sender, so for a deleted or renamed account, remove the queue label and add it again yourself. |
 
 ### Known limits
 
@@ -576,6 +605,13 @@ to be fixed before the next request.
 - **Nothing checks that the App is installed.** The repository's Settings →
   GitHub Apps says, and so does the first run's `create-github-app-token`
   step.
+- **A queued request is its writers' text.** A run starts only for a sender
+  with write, and it reads the issue as it is when the gate reads it and
+  every comment on it, whoever wrote them. Read a stranger's request before
+  you queue it; its author can edit it until the run starts. Every event
+  the caller's `if:` lets through still starts a gate job, and on a public
+  repository a self-hosted runner is exposed to that; the forge's interaction limits are what slow a
+  flood.
 - **Never put issue text in `args`.** If you call `action.yml` directly, its
   `args` input is split on whitespace and reaches a shell. Issue titles,
   bodies and comments are attacker-controlled, and the reason every verb

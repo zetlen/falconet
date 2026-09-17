@@ -19,7 +19,8 @@ a finding, not a formatting error.
 
 | Decision | Serves | Reopen when | Record |
 | --- | --- | --- | --- |
-| The pipeline is falconet's own code, not `gh-aw` | I2 | this repository acquires the threat model gh-aw is sized for: strangers triggering workflows | [below](#the-pipeline-is-falconets-own-code) |
+| The pipeline is falconet's own code, not `gh-aw` | I2 | a change steered by the text of an admitted request, whoever wrote it, gets past the guards and a person's review | [below](#the-pipeline-is-falconets-own-code) |
+| A run starts only from a sender with write | I3 | an adopter needs a person without write to start runs, or a forge's adapter cannot answer a login's permission on the repository with the token the gate job holds | [below](#a-run-starts-only-from-a-sender-with-write) |
 | The harness is a configured command, and the default is the Claude Code CLI | I1, I2 | a harness the default cannot be, with the same file-only grant, is what most adopters run | [below](#the-harness-is-a-configured-command) |
 | A `check` verb and a caller-owned loop | I2, I3 | a check the verb can run requires something the agent job cannot provide (a credential, a service, network access) and cannot be moved out of the critical path | [below](#a-check-verb-and-a-caller-owned-loop) |
 | No second, reviewing agent | I5 | a review harness clears the bar: an independent, uncontaminated read of diff and message, worth more than it costs, whose verdict is never in the pull request where a reviewer could mistake it for evidence | [below](#no-second-reviewing-agent) |
@@ -39,12 +40,76 @@ a finding, not a formatting error.
 
 ## The pipeline is falconet's own code
 
-`github/gh-aw` and its kind carry role checks, integrity filtering and a
-threat-detection stage sized for a public repository where strangers
-trigger workflows, and that stage costs a large share of the agent's own
-tokens on a small task. Here there is one operator, their collaborators,
-and a human merge at the end of everything, which is the README's non-goal
-stated as a threat model. So the pipeline is its own code.
+`github/gh-aw` and its kind carry three things: a role check on who
+triggers a workflow, integrity filtering that keeps untrusted text away
+from the agent, and a threat-detection stage that costs a large share of
+the agent's own tokens on a small task. falconet has the first, as
+[its own rule](#a-run-starts-only-from-a-sender-with-write), and not the
+other two. An admitted request's body and thread reach the agent whole,
+because they are the request (principle 1), and what stands after them is
+the job boundary (principle 2), the guards (principle 3) and a person's
+merge (principle 5). So the pipeline is its own code.
+
+## A run starts only from a sender with write
+
+Every event names its sender, the account that labelled, opened, reopened
+or commented. An event starts a run only when that account holds `write`
+or `admin` on the repository, as the forge answers when `prepare` asks. A
+run spends the model key and runner minutes, and a guard anyone can run
+against as often as they can file an issue is an oracle (principle 3).
+Write is the threshold, with no key, because it is the account that could
+have pushed the branch itself, and on a public repository every account
+holds `read`.
+
+The question is the `Client`'s `RepoPermission(owner, name, login)`, in
+four words, `none`, `read`, `write` and `admin`, which each adapter maps
+its forge's answer onto. On GitHub it is `GET
+/repos/{owner}/{repo}/collaborators/{login}/permission` with the gate
+job's App installation token, under Metadata: read, which every App holds.
+Its `permission` is the base role over every grant, repository, team,
+organization and enterprise, with maintain answering write and triage
+answering read. Whether an installation token's answer carries the same
+`permission` field is unverified; README step 8's canary is the check. An
+answer in none of the four words, and any failed read, a 404 included, is
+exit 1 and no word: the forge answers 404 both for a login that is no user
+and for a token that cannot see the repository.
+
+The rule reads the sender and nothing about the issue's author or labels.
+A form puts labels on an issue for whoever files it, `author_association`
+describes the author rather than the labeller and says nothing about
+access, and a forge other than GitHub has no such field. From the event
+alone, before any network, `prepare` refuses an event with no sender, a
+bot's event of any kind, a comment on a pull request, a comment on an
+issue that is not parked `needs-info`, any action but opened, reopened,
+labeled and created, and a label event that did not add the queue label.
+It asks the permission after the rules that need no network and before the
+open pull requests are listed, so an event on an issue that is not queued
+costs no request and a refused sender costs one. A refused sender is
+`ineligible` and nothing more: no comment, no label, the login and the
+threshold on stderr.
+
+A person with write queues a stranger's request by applying the queue
+label, removing it first if a form put it there, or by reopening the issue
+while it carries the queue label. A comment is a way in only on an issue
+parked `needs-info`: a requester without write answers the question, and a
+comment from someone with write moves the parked issue on; the author gets
+no exemption, because a request's own text decides whether the agent asks
+again. A comment on any other issue starts nothing, so a remark on a
+queued request that is not parked cannot start a run on it, and running a
+request again after its pull request is closed is applying the queue label
+again. A re-run replays its event and sender, so re-running a stranger's
+event queues nothing. A run with no event has no sender and asks nothing,
+because the person holding the token is the one acting; inside GitHub
+Actions `prepare` refuses to run without an event.
+
+What this does not cover: the text of an admitted request, its thread, and
+edits made before the gate reads it; comments anyone adds to an admitted
+issue; a `needs-info` label put on by hand, by a triager or a form, which
+parks the issue the same way `pause` does, so that the next comment from
+someone with write runs it; automation of the operator's own that labels
+or comments as a person; the implement job's public log on a public
+repository; and the gate job every event the caller's `if:` lets through
+still starts.
 
 ## The harness is a configured command
 
@@ -133,7 +198,11 @@ the identity is a GitHub App. Forge-agnosticism is a non-goal: an adapter is
 code that pays off only when someone writes the second one. What makes a
 second forge cheap when one arrives is that the verbs depend on the `Client`
 interface and on files in the handoff directory, and nothing in a verb knows
-which forge is behind either.
+which forge is behind either. Who may start a run is a `Client` question
+too, a login's permission on the repository in four words, so the rule in
+`prepare` names no GitHub field. The event file's reader is GitHub's:
+another forge brings its own reader of the same `prepare.Event`, including
+how it tells a bot's event, which on Gitea no user field says.
 
 ## No default for the path allowlist or the content denylist
 
@@ -173,17 +242,19 @@ mechanically, **2** usage. A verb that decides something prints exactly one
 word on stdout. A check that ran and failed is an outcome, the word `fail`
 with exit 0, so a caller can tell it from a check that could not run, which
 is exit 1 and no word. Eligibility (queue label present, no blocking label,
-opt-out unchecked) is decided by `prepare`, not by a job-level `if:`: a job
+opt-out unchecked, a sender with write) is decided by `prepare`, not by a job-level `if:`: a job
 `if:` runs before checkout and cannot read the config, and gating there
 would fork eligibility into YAML-in-CI and nothing-locally. That is
 principle 1 at the front door: what the agent will read is decided by one
 verb from one file. A person's ineligible event spends a few runner-seconds.
 
-The one rule a job `if:` does carry needs no config: an event whose sender
-is a bot, or a comment on a pull request, is never a way in. `prepare`
-refuses both from the event too, so a run by hand reaches the same answer.
-The `if:` is there because falconet's own comments and labels arrive as
-bot events, and each would otherwise spend a gate job.
+The rules a job `if:` does carry need nothing but the event and the queue
+label's name: an event whose sender is a bot, a comment on a pull request,
+and a label event for any other label are never a way in. `prepare`
+refuses all three from the event too, a bot's event for any action, so a
+run by hand reaches the same answer. The `if:` is there because falconet's
+own comments and labels arrive as bot events, and each would otherwise
+spend a gate job.
 
 The config is one JSON file at `.github/falconet.json` (`--config`,
 `FALCONET_CONFIG`). Every key is optional but `paths.allow`. JSON because
@@ -262,7 +333,7 @@ the product.
 ## The GitHub adapter backed by gh
 
 `internal/github` defines a `Client` interface, the methods `prepare` and
-`pause` need, and `GH`, the one implementation, shells out to `gh api -i`
+`pause` need, a login's permission on the repository among them, and `GH`, the one implementation, shells out to `gh api -i`
 with full URLs built from `GITHUB_API_URL`. The token (`GH_TOKEN` then
 `GITHUB_TOKEN`) is passed explicitly via `-H` so that non-github.com hosts,
 the test server and GitHub Enterprise Server, are authenticated the same

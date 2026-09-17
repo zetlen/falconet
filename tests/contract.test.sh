@@ -58,6 +58,9 @@ pause_calls="$(awk '
 it "the gate job skips an event whose sender is a bot, or a comment on a pull request"
 assert_contains "$gate_job" "if: github.event.sender.type != 'Bot' && !github.event.issue.pull_request" "the gate job"
 
+it "the gate's Prepare step hands prepare the event, whose sender is who the trust rule asks about"
+assert_contains "$gate_job" 'FALCONET_EVENT_PATH: ${{ github.event_path }}' "the gate job"
+
 # --- the agent holds nothing it could publish with -------------------------
 
 it "the agent job holds exactly one secret, the model key, and exports it under the caller's name"

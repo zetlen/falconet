@@ -180,6 +180,35 @@ func (g *GH) GetAuthenticatedUser() (*User, error) {
 	return &out, nil
 }
 
+// RepoPermission is GET /repos/{owner}/{name}/collaborators/{login}/permission.
+// GitHub's `permission` is the legacy base role over every grant: maintain
+// answers write, triage answers read, a custom role answers its base.
+// role_name and user.permissions are not read. A 404 is an error like any
+// other non-2xx: GitHub answers it for a login that is no user AND for a
+// token that cannot see the repository, and the second must not read as
+// "nobody may start a run".
+func (g *GH) RepoPermission(owner, name, login string) (Permission, error) {
+	if !repoWord(login) || login == "." || login == ".." {
+		return "", fmt.Errorf("%q is not a login", login)
+	}
+	path := RepoPath(owner, name, "/collaborators/"+url.PathEscape(login)+"/permission")
+	var out struct {
+		Permission *string `json:"permission"`
+	}
+	if err := g.do("GET", path, nil, &out); err != nil {
+		return "", err
+	}
+	word := ""
+	if out.Permission != nil {
+		word = *out.Permission
+		switch Permission(word) {
+		case PermissionAdmin, PermissionWrite, PermissionRead, PermissionNone:
+			return Permission(word), nil
+		}
+	}
+	return "", fmt.Errorf("GET %s: answered permission %q, which is none of admin, write, read, none", path, word)
+}
+
 // --- writes ----------------------------------------------------------------
 
 func (g *GH) CreateIssueComment(owner, name string, number int, body string) error {

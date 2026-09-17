@@ -207,7 +207,10 @@ jobs:
       # therefore never read the config file. Gating there would fork
       # eligibility into YAML-in-CI and nothing-locally, for a project whose
       # whole rule is one code path. The cost is runner-seconds on a person's
-      # ineligible event.
+      # ineligible event. prepare also reads the event's sender from the event
+      # file and asks the forge, with this job's App token, whether that
+      # account holds write on the repository; an event from anyone else is
+      # ineligible and posts nothing.
       - name: Prepare
         id: prepare
         uses: zetlen/falconet@v1.1.2 # x-release-please-version

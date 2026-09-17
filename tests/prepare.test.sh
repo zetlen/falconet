@@ -22,6 +22,11 @@
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
+# ci.yml runs this suite inside GitHub Actions, where prepare refuses to run
+# without an event. The cases with no event are a workstation's, and the one
+# case about Actions sets the variable itself.
+unset GITHUB_ACTIONS
+
 # --- the fake API -------------------------------------------------------------
 
 fake_github
@@ -60,7 +65,9 @@ issue_json() { # path labels-csv body [state]
 API=/repos/zetlen/wayfinders-infra
 
 # responses.json for one case: the failure knobs first, so they win, then the
-# issue, its thread and the pull-request list from the checkout's files.
+# issue, its thread, the pull-request list from the checkout's files, and the
+# event sender's permission: PERM (default write) for SENDER (default
+# requester), the account the event payloads below name.
 script_github() { # checkout
   local c="$1"
   [[ -f "$c/comments.json" ]] || printf '[]\n' >"$c/comments.json"
@@ -69,7 +76,8 @@ script_github() { # checkout
     --slurpfile pulls "$c/pr.json" --arg b "$API" \
     --arg view "${VIEW_RC:-0}" --arg edit "${EDIT_RC:-0}" --arg remove "${REMOVE_RC:-0}" \
     --arg comment "${COMMENT_RC:-0}" --arg user "${USER_RC:-0}" --arg pullsrc "${PULLS_RC:-0}" \
-    --arg issuenull "${ISSUE_NULL:-0}" '
+    --arg issuenull "${ISSUE_NULL:-0}" \
+    --arg permrc "${PERM_RC:-0}" --arg perm "${PERM:-write}" --arg sender "${SENDER:-requester}" '
     # A knob of 1 is a 500; any other non-zero knob is the status itself, so
     # a case can script the one answer it is about (a 404 on the label).
     def st: if . == "1" then 500 else tonumber end;
@@ -80,9 +88,12 @@ script_github() { # checkout
     + (if $comment != "0" then [{method:"POST", path:($b+"/issues/42/comments"), status:($comment|st), body:{message:"boom"}}] else [] end)
     + (if $user != "0" then [{method:"GET", path:"/user", status:($user|st), body:{message:"boom"}}] else [] end)
     + (if $pullsrc != "0" then [{method:"GET", path:($b+"/pulls"), status:($pullsrc|st), body:{message:"boom"}}] else [] end)
+    + (if $permrc != "0" then [{method:"GET", path:($b+"/collaborators/"+$sender+"/permission"), status:($permrc|st), body:{message:"boom"}}] else [] end)
     + [{method:"GET", path:($b+"/issues/42"), body:$issue[0]},
        {method:"GET", path:($b+"/issues/42/comments"), body:$comments[0]},
-       {method:"GET", path:($b+"/pulls"), body:$pulls[0]}]
+       {method:"GET", path:($b+"/pulls"), body:$pulls[0]},
+       {method:"GET", path:($b+"/collaborators/"+$sender+"/permission"),
+        body:{permission:$perm, role_name:$perm, user:{login:$sender, type:"User"}}}]
   ' >"$FAKE_GITHUB/responses.json"
 }
 
@@ -106,7 +117,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   return 0
 }
 reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; PULLS_RC=""; ISSUE_NULL=""
-          GH_ENV=""; RUN_ID=""; RUN_ATTEMPT=""; ACTOR=""; }
+          GH_ENV=""; RUN_ID=""; RUN_ATTEMPT=""; ACTOR=""; PERM=""; PERM_RC=""; SENDER=""; }
 reset
 
 ghlog() { cat "$1/requests.log" 2>/dev/null; }
@@ -371,9 +382,9 @@ assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 # needs-info blocks a first claim and admits a reply, which a flat precedence
 # list cannot say. The event decides, or --re-entry does.
 
-ev() { # path action extra-jq
-  jq -n --argjson pr "${3:-null}" --arg t "${4:-User}" \
-    '{action:$ARGS.named.a, comment:{user:{type:$t}},
+ev() { # path action [pull_request] [sender type]; the sender is $SENDER
+  jq -n --argjson pr "${3:-null}" --arg t "${4:-User}" --arg who "${SENDER:-requester}" \
+    '{action:$ARGS.named.a, sender:{login:$who, type:$t},
       issue:{state:"open", pull_request:$pr,
              labels:[{name:"falconet"},{name:"needs-info"}], body:"x"}}' \
     --arg a "$2" >"$1"
@@ -442,7 +453,8 @@ assert_eq "" "$(mutations "$c")" "mutating calls"
 assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
 c="$(new_checkout issuenull)"; issue_json "$c/issue.json" "falconet" "x"
-jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$c/event.json"
+jq -n '{action:"labeled", sender:{login:"requester", type:"User"}, label:{name:"falconet"},
+       issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$c/event.json"
 ISSUE_NULL=1 p "$c" --event "$c/event.json"; reset
 it "an issue that comes back as null is a sentence and exit 1, not a stack trace"
 assert_eq 1 "$RC" "exit code"
@@ -534,12 +546,13 @@ it "and nothing reaches GitHub"
 assert_eq "" "$(ghlog "$c")" "API calls"
 
 c="$(new_checkout notoken_event)"; issue_json "$c/issue.json" "falconet,wontfix" "x"
-jq -n '{action:"labeled", issue:{state:"open", labels:[{name:"falconet"},{name:"wontfix"}], body:"x"}}' \
+jq -n '{action:"labeled", sender:{login:"requester", type:"User"}, label:{name:"falconet"},
+       issue:{state:"open", labels:[{name:"falconet"},{name:"wontfix"}], body:"x"}}' \
   >"$c/event.json"
 ( unset GH_TOKEN GITHUB_TOKEN; p "$c" --event "$c/event.json"; printf '%s\n' "$OUT" >"$c/result" )
 it "an event that says ineligible needs no token at all"
 assert_eq "ineligible" "$(cat "$c/result")" "outcome"
-it "and makes no request, not even to read"
+it "and makes no request, not even to read, so the sender is asked about only after the rules that need no network"
 assert_eq "" "$(ghlog "$c")" "API calls"
 
 # The fixture's origin is a bare repository on disk, not github.com, so
@@ -586,9 +599,10 @@ assert_contains "$(hand "$c" branch.txt)" "req-42-" "branch.txt"
 # gates once more on the live issue before it assigns or branches anything.
 # The event here is eligible; the live issue the fake API returns is not.
 
-evt() { # path -> an eligible `opened` event for issue 42
-  jq -n '{action:"opened",
-          issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$1"
+evt() { # path -> an eligible `labeled` event for issue 42, sent by $SENDER
+  jq -n --arg who "${SENDER:-requester}" \
+    '{action:"labeled", sender:{login:$who, type:"User"}, label:{name:"falconet"},
+      issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$1"
 }
 
 c="$(new_checkout stale_closed)"; issue_json "$c/issue.json" "falconet" "x" "closed"
@@ -615,6 +629,96 @@ evt "$c/event.json"
 p "$c" --event "$c/event.json"
 it "an event whose issue is still eligible on the live re-check is ready"
 assert_eq "ready" "$OUT" "outcome"
+
+# --- who sent the event -----------------------------------------------------
+#
+# A run starts only from a sender with write on the repository. Which
+# events and which permissions admit one is internal/prepare's; these cases
+# hold what only the process shows: the word, the one request a refusal
+# costs and where it sits, that nothing is changed, and that the sender is
+# read from the payload file.
+
+c="$(new_checkout sender_stranger)"; issue_json "$c/issue.json" "falconet" "x"
+SENDER=stranger; evt "$c/event.json"
+PERM=read SENDER=stranger GH_ENV="$c/github_env" p "$c" --event "$c/event.json"; reset
+it "a queue label applied by someone without write is ineligible"
+assert_eq "ineligible" "$OUT" "outcome"
+assert_eq 0 "$RC" "exit code"
+it "and the reason names the sender and the threshold, not the answered word"
+assert_contains "$ERR" "stranger" "stderr"
+assert_contains "$ERR" "write" "stderr"
+assert_not_contains "$ERR" "read" "stderr"
+it "and the refusal costs one request: the permission, not the pulls, the issue or its thread"
+assert_eq 1 "$(grep -c . "$c/requests.log")" "requests"
+assert_contains "$(ghlog "$c")" "GET $API/collaborators/stranger/permission" "API calls"
+it "and changes nothing: no mutation, no handoff, no export, no branch"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+assert_file_missing "$c/repo/.falconet/request.md"
+assert_eq "" "$(cat "$c/github_env" 2>/dev/null)" "GITHUB_ENV"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
+
+c="$(new_checkout sender_writer)"; issue_json "$c/issue.json" "falconet" "x"
+SENDER=maint; evt "$c/event.json"
+PERM=write SENDER=maint p "$c" --event "$c/event.json"; reset
+it "the same event from someone with write is ready"
+assert_eq "ready" "$OUT" "outcome"
+it "and the permission is asked before the pull-request list"
+perm_at="$(grep -n "^GET $API/collaborators/maint/permission " "$c/requests.log" | head -1 | cut -d: -f1)"
+pulls_at="$(grep -n "^GET $API/pulls " "$c/requests.log" | head -1 | cut -d: -f1)"
+assert_eq "yes" "$([[ -n "$perm_at" && -n "$pulls_at" && "$perm_at" -lt "$pulls_at" ]] && echo yes || echo "no: permission at '${perm_at}', pulls at '${pulls_at}'")" "request order"
+
+c="$(new_checkout sender_rerun)"; issue_json "$c/issue.json" "falconet" "x"
+SENDER=stranger; evt "$c/event.json"
+ACTOR=zetlen PERM=read SENDER=stranger p "$c" --event "$c/event.json"; reset
+it "a re-run is not an approval: the payload's sender is asked about, not the account re-running it"
+assert_eq "ineligible" "$OUT" "outcome"
+assert_contains "$(ghlog "$c")" "collaborators/stranger/permission" "API calls"
+assert_not_contains "$(ghlog "$c")" "collaborators/zetlen" "API calls"
+
+c="$(new_checkout sender_parked)"; issue_json "$c/issue.json" "falconet,needs-info" "x"
+SENDER=stranger; ev "$c/event.json" created
+PERM=read SENDER=stranger p "$c" --event "$c/event.json"; reset
+it "a stranger's answer on a parked issue starts nothing"
+assert_eq "ineligible" "$OUT" "outcome"
+it "and clears nothing"
+assert_not_contains "$(ghlog "$c")" "DELETE $API/issues/42/labels/needs-info" "API calls"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+
+# The mode the verb hands NotAWayIn is the one the event has, and --re-entry
+# is applied after it. `ev` always parks the issue, so this event is built
+# by hand with the queue label alone.
+c="$(new_checkout sender_unparked)"; issue_json "$c/issue.json" "falconet" "x"
+jq -n '{action:"created", sender:{login:"maint", type:"User"},
+        issue:{state:"open", labels:[{name:"falconet"}], body:"x"}}' >"$c/event.json"
+PERM=write SENDER=maint p "$c" --event "$c/event.json"; reset
+it "a writer's comment on a queued issue that is not parked starts nothing"
+assert_eq "ineligible" "$OUT" "outcome"
+it "and asks nothing"
+assert_eq "" "$(ghlog "$c")" "API calls"
+PERM=write SENDER=maint p "$c" --event "$c/event.json" --re-entry; reset
+it "and --re-entry with an event file does not make it a way in"
+assert_eq "ineligible" "$OUT" "outcome"
+assert_eq "" "$(ghlog "$c")" "API calls"
+
+c="$(new_checkout sender_unreadable)"; issue_json "$c/issue.json" "falconet" "x"
+evt "$c/event.json"
+PERM_RC=1 p "$c" --event "$c/event.json"; reset
+it "a permission that cannot be read is a mechanical failure, not an outcome"
+assert_eq 1 "$RC" "exit code"
+assert_eq "" "$OUT" "stdout"
+it "and nothing was changed on the way"
+assert_eq "" "$(mutations "$c")" "mutating API calls"
+assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
+
+c="$(new_checkout actions_noevent)"; issue_json "$c/issue.json" "falconet" "x"
+( export GITHUB_ACTIONS=true; p "$c"; printf '%s\n%s\n' "$RC" "$OUT" >"$c/result"; cp "$c/err" "$c/err.saved" )
+it "inside GitHub Actions a run with no event is refused: exit 1"
+assert_eq 1 "$(sed -n 1p "$c/result")" "exit code"
+assert_eq "" "$(sed -n 2p "$c/result")" "stdout"
+it "and it asks nothing"
+assert_eq "" "$(ghlog "$c")" "API calls"
+it "and says how to hand it the event"
+assert_contains "$(cat "$c/err.saved")" "--event" "stderr"
 
 # --- the collision suffix is unique across re-runs (issue #33) --------------
 #

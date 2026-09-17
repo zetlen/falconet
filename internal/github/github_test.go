@@ -432,6 +432,93 @@ func TestTheNextWritesReachTheRightEndpoints(t *testing.T) {
 	}
 }
 
+// --- the sender's permission ---------------------------------------------------
+
+func TestRepoPermissionAsksTheCollaboratorPermissionEndpoint(t *testing.T) {
+	c, seen := serve(t, 200, `{"permission":"write"}`)
+	if _, err := c.RepoPermission("o", "r", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("saw %d requests, want 1", len(*seen))
+	}
+	got := (*seen)[0]
+	if got.Method != "GET" || got.Path != "/repos/o/r/collaborators/alice/permission" {
+		t.Errorf("request: %s %s", got.Method, got.Path)
+	}
+	if got.Header.Get("Authorization") == "" {
+		t.Error("no Authorization header")
+	}
+}
+
+func TestRepoPermissionReadsTheLegacyWord(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want Permission
+	}{
+		{`{"permission":"admin"}`, PermissionAdmin},
+		{`{"permission":"write"}`, PermissionWrite},
+		{`{"permission":"read"}`, PermissionRead},
+		{`{"permission":"none"}`, PermissionNone},
+		// GitHub's answer for an account with no grant on a public repository.
+		{`{"permission":"read","role_name":"read","user":{"login":"torvalds","type":"User"}}`, PermissionRead},
+		// Neither role_name nor the booleans is read: the base role is the answer.
+		{`{"permission":"write","role_name":"security-manager","user":{"permissions":{"admin":true}}}`, PermissionWrite},
+		{`{"permission":"read","role_name":"triage","user":{"permissions":{"push":true}}}`, PermissionRead},
+	} {
+		c, _ := serve(t, 200, tc.body)
+		got, err := c.RepoPermission("o", "r", "alice")
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %q, %v; want %q", tc.body, got, err, tc.want)
+		}
+	}
+}
+
+func TestRepoPermissionAnUnknownWordIsAnError(t *testing.T) {
+	for _, body := range []string{
+		`{"permission":"maintain"}`,
+		`{"permission":"triage"}`,
+		`{"permission":"owner"}`,
+		`{"permission":"WRITE"}`,
+		`{"permission":""}`,
+		`{"role_name":"write"}`,
+		`{"permission":null}`,
+	} {
+		c, _ := serve(t, 200, body)
+		got, err := c.RepoPermission("o", "r", "alice")
+		if err == nil || got != "" {
+			t.Errorf("%s: got %q, %v; want no permission and an error", body, got, err)
+		}
+	}
+}
+
+func TestRepoPermission404IsAnErrorNotNone(t *testing.T) {
+	c, _ := served(t, map[string]string{})
+	got, err := c.RepoPermission("o", "r", "zz-no-such-user")
+	var e *Error
+	if !errors.As(err, &e) || e.Status != 404 {
+		t.Fatalf("got %q, %T %v; want a 404 *Error", got, err, err)
+	}
+	if got != "" {
+		t.Errorf("a 404 answered a permission: %q", got)
+	}
+	if !strings.Contains(err.Error(), "not found, or no access") {
+		t.Errorf("Error(): %q", err.Error())
+	}
+}
+
+func TestRepoPermissionRefusesALoginOutsideTheAlphabet(t *testing.T) {
+	c, seen := serve(t, 200, `{"permission":"admin"}`)
+	for _, login := range []string{"a/b", "a?b", "x[bot]", "", ".", "..", "a b", "a%2Fb"} {
+		if got, err := c.RepoPermission("o", "r", login); err == nil || got != "" {
+			t.Errorf("%q: got %q, %v; want an error", login, got, err)
+		}
+	}
+	if len(*seen) != 0 {
+		t.Errorf("a refused login still sent %d requests", len(*seen))
+	}
+}
+
 func TestAnUnreachableEndpointIsAnErrorNotAPanic(t *testing.T) {
 	requireGH(t)
 	c := NewGH("http://127.0.0.1:1", "test-token")
