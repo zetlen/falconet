@@ -32,7 +32,7 @@ a finding, not a formatting error.
 | Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
 | The suite holds what only a process shows; Go tests hold the logic | I2, I3 | a property is asserted in both places, or the suite needs a tool the runner lacks | [below](#the-suite-holds-what-only-a-process-shows) |
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
-| The verbs talk to GitHub through a `Client` adapter backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-backed-by-gh) |
+| The GitHub adapter is backed by `gh` | I1, I4 | `gh` cannot be installed, or a verb needs a call `gh api` cannot express | [below](#the-github-adapter-is-backed-by-gh) |
 | A GitHub App, registered purely as a credential | I4, I5 | GitHub offers an identity that needs no App | [below](#a-github-app-purely-as-a-credential) |
 | App registration is a workstation script, not a verb | I2, I3 | the script needs something the binary's provenance story gives better (versioning against the guards, in-tree tests), or the App stops being the identity that pushes | [below](#app-registration-is-a-workstation-script) |
 | Release binaries at a tag; `go install` at any other ref | I2, I3 | a published release's assets can be changed, or the runners consumers use have no asset and compile in every job | [below](#release-binaries-at-a-tag) |
@@ -200,9 +200,11 @@ second forge cheap when one arrives is that the verbs depend on the `Client`
 interface and on files in the handoff directory, and nothing in a verb knows
 which forge is behind either. Who may start a run is a `Client` question
 too, a login's permission on the repository in four words, so the rule in
-`prepare` names no GitHub field. The event file's reader is GitHub's:
-another forge brings its own reader of the same `prepare.Event`, including
-how it tells a bot's event, which on Gitea no user field says.
+`prepare` names no GitHub field. The event file's reader is GitHub's,
+`github.DecodeEvent`: another forge brings its own reader of the same
+`prepare.Event`, including how it tells a bot's event, which on Gitea no
+user field says. `cmd/falconet/forge.go` is the one place that names the
+forge; it hands a verb its client and its event reader.
 
 ## No default for the path allowlist or the content denylist
 
@@ -330,14 +332,15 @@ dependency is a change to this row, with a reason. `go vet`, `staticcheck`,
 build. The operator must be able to read a guard cold, and the guards are
 the product.
 
-## The GitHub adapter backed by gh
+## The GitHub adapter is backed by gh
 
-`internal/github` defines a `Client` interface, the methods `prepare` and
-`pause` need, a login's permission on the repository among them, and `GH`, the one implementation, shells out to `gh api -i`
-with full URLs built from `GITHUB_API_URL`. The token (`GH_TOKEN` then
-`GITHUB_TOKEN`) is passed explicitly via `-H` so that non-github.com hosts,
-the test server and GitHub Enterprise Server, are authenticated the same
-way github.com is. The verbs depend on the interface; nothing in a verb
+`internal/forge` defines the `Client` interface, the methods `prepare` and
+`pause` need, a login's permission on the repository among them, and the
+shapes it answers in. `GH` in `internal/github`, the one implementation,
+shells out to `gh api -i` with full URLs built from `GITHUB_API_URL`. The
+token (`GH_TOKEN` then `GITHUB_TOKEN`) is passed explicitly via `-H` so that
+non-github.com hosts, the test server and GitHub Enterprise Server, are
+authenticated the same way github.com is. The verbs depend on the interface; nothing in a verb
 knows the implementation is `gh`.
 
 What a run needs in CI is git, gitleaks, `gh` and the binary; on a
