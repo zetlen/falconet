@@ -128,6 +128,12 @@ def _installation(m, b, query):
     return (404, {"message": "Not Found"}, {})
 
 
+# The answer to a request no route and no rule matches. fake-gitea.py, which
+# serves Gitea's routes through this same server, replaces it with Gitea's.
+NOT_FOUND = {"message": "Not Found",
+             "documentation_url": "https://docs.github.com/rest"}
+
+
 def open_route(handler):
     # A route GitHub serves with no Authorization; the 401 gate skips it.
     handler.open = True
@@ -288,13 +294,13 @@ class Handler(BaseHTTPRequestHandler):
                         found = handler(match, body, query)
                         break
                 if found is None:
-                    found = 404, {"message": "Not Found",
-                                  "documentation_url": "https://docs.github.com/rest"}
+                    found = 404, NOT_FOUND
                 status, answer = found[0], found[1]
                 if len(found) > 2:
                     extra = found[2]
 
-        payload = json.dumps(answer).encode("utf-8")
+        # A 204 carries no content (RFC 9110, section 15.3.5).
+        payload = b"" if status == 204 else json.dumps(answer).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))

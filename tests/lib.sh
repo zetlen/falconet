@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# lib.sh — four assertions, a scratch directory, and a fake GitHub. Sourced
+# lib.sh — four assertions, a scratch directory, and the fake forges. Sourced
 # by every tests/*.test.sh.
 #
 # Deliberately not a framework. The thing under test is one binary that
@@ -110,6 +110,34 @@ fake_github() {
   done
   GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITHUB/port")"
   export GITHUB_API_URL FAKE_GITHUB
+}
+
+# A Gitea API on loopback: tests/fixtures/fake-gitea.py, the same server with
+# Gitea's routes and answers under /api/v1. Exports GITHUB_API_URL pointing at
+# its /api/v1, FAKE_GITEA as the directory it records into, and
+# FALCONET_BOT_LOGIN as the login its GET /user answers. A case that reads it
+# puts "forge": "gitea" in the config it hands the verb. Started once per test
+# file, and killed with the scratch directory; a file uses this fake or the
+# GitHub one, never both.
+fake_gitea() {
+  FAKE_GITEA="$WORK/fake-gitea"
+  mkdir -p "$FAKE_GITEA"
+  python3 "$REPO_ROOT/tests/fixtures/fake-gitea.py" --dir "$FAKE_GITEA" &
+  FAKE_GITEA_PID=$!
+  disown "$FAKE_GITEA_PID"
+  trap 'kill "$FAKE_GITEA_PID" 2>/dev/null; rm -rf "$WORK"' EXIT
+  local waited=0
+  until [ -s "$FAKE_GITEA/port" ]; do
+    waited=$((waited + 1))
+    if [ "$waited" -gt 200 ] || ! kill -0 "$FAKE_GITEA_PID" 2>/dev/null; then
+      echo "fake-gitea.py did not start" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+  GITHUB_API_URL="http://127.0.0.1:$(cat "$FAKE_GITEA/port")/api/v1"
+  FALCONET_BOT_LOGIN=falconet-bot
+  export GITHUB_API_URL FAKE_GITEA FALCONET_BOT_LOGIN
 }
 
 # An execution log in the Claude Code CLI's JSON-array shape: an array whose

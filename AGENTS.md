@@ -181,9 +181,12 @@ GitHub is `tests/fixtures/fake-github.py`, a loopback server started by
 it was asked. The verbs shell out to `gh api` with full URLs built from
 `GITHUB_API_URL`, so pointing that variable at the fake is what routes every
 request: the real `gh`, exercised end to end, with a token that goes
-nowhere but loopback. `gitleaks`, the harness, and the `gh` that
-`setup-github.sh` stores secrets through are bash stubs whose argv, cwd and
-stdin are part of the contract. Pushes land only in bare
+nowhere but loopback. Gitea is `tests/fixtures/fake-gitea.py`, started by
+`fake_gitea`: the same server with Gitea's routes and answers behind
+`GITHUB_API_URL=…/api/v1`, reached by the Gitea client when a case's config
+sets `"forge": "gitea"`. A test file starts one fake or the other.
+`gitleaks`, the harness, and the `gh` that `setup-github.sh` stores secrets
+through are bash stubs whose argv, cwd and stdin are part of the contract. Pushes land only in bare
 repositories under a temp directory; nothing touches the network, GitHub, or
 any credential. Adding a dependency to run the tests is a decision, not a
 convenience.

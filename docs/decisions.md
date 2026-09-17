@@ -24,7 +24,7 @@ a finding, not a formatting error.
 | The harness is a configured command, and the default is the Claude Code CLI; falconet knows output formats, not harnesses | I1, I2 | a harness the default cannot be, with the same file-only grant, is what most adopters run | [below](#the-harness-is-a-configured-command) |
 | A `check` verb and a caller-owned loop | I2, I3 | a check the verb can run requires something the agent job cannot provide (a credential, a service, network access) and cannot be moved out of the critical path | [below](#a-check-verb-and-a-caller-owned-loop) |
 | No second, reviewing agent | I5 | a review harness clears the bar: an independent, uncontaminated read of diff and message, worth more than it costs, whose verdict is never in the pull request where a reviewer could mistake it for evidence | [below](#no-second-reviewing-agent) |
-| GitHub is the forge | I2, I4 | an adopter exists on another forge | [below](#github-is-the-forge) |
+| GitHub and Gitea are the forges, chosen by `forge` in the config | I2, I4 | an adopter exists on a third forge, a verb has to branch on which forge it talks to, or Gitea runs a job that holds no Actions credentials | [below](#github-and-gitea-are-the-forges) |
 | No default for the path allowlist or the content denylist | I3 | an adopter cannot set the allowlist before the first run, and the cost of one required field outweighs the cost of a default the operator did not choose | [below](#no-default-for-the-path-allowlist-or-the-content-denylist) |
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
@@ -214,20 +214,58 @@ of diff and commit message before a person is asked to look, with its
 verdict kept out of the pull request, where a reviewer could mistake an
 agent's opinion for the repository's own evidence (principle 5).
 
-## GitHub is the forge
+## GitHub and Gitea are the forges
 
-The GitHub client speaks GitHub only, the workflow is GitHub Actions, and
-the identity is a GitHub App. Forge-agnosticism is a non-goal: an adapter is
-code that pays off only when someone writes the second one. What makes a
-second forge cheap when one arrives is that the verbs depend on the `Client`
-interface and on files in the handoff directory, and nothing in a verb knows
-which forge is behind either. Who may start a run is a `Client` question
-too, a login's permission on the repository in four words, so the rule in
-`prepare` names no GitHub field. The event file's reader is GitHub's,
-`github.DecodeEvent`: another forge brings its own reader of the same
-`prepare.Event`, including how it tells a bot's event, which on Gitea no
-user field says. `cmd/falconet/forge.go` is the one place that names the
-forge; it hands a verb its client and its event reader.
+The verbs depend on the `Client` interface in `internal/forge` and on files
+in the handoff directory, and nothing in a verb knows which forge is behind
+either. `forge` in the config names the forge, `github` when the key is
+absent or `gitea`, and any other value fails the config's load.
+`cmd/falconet/forge.go` is the one place that turns it into a client and a
+reader of the event file. `prepare` and `pause` ask it for both right after
+they read the config, before any file or network, and it refuses a job on a
+Gitea Actions runner with `forge` set to github, and a job on a GitHub
+Actions runner with `forge` set to gitea, because GitHub's reader refuses a
+Gitea payload and Gitea's misreads a GitHub one. Who may start a run is a
+`Client` question too, a login's permission on the repository in four
+words, so the rule in `prepare` names no forge's field.
+
+GitHub's reader, `github.DecodeEvent`, tells falconet's own events by
+`sender.type`, and refuses a payload whose sender has a login and no type,
+which is no GitHub payload: a Gitea payload read as GitHub's would call
+falconet's own comment a person's, however `forge` came to be github.
+Gitea's users carry no type, so `gitea.DecodeEvent` marks an event
+falconet's own when its sender's login is `FALCONET_BOT_LOGIN`, compared
+without case, and the Gitea client checks that login against its token
+before its first request. The login is read from the environment, beside
+the token, and not from the config: it is a fact about the credential, the
+config is committed, and the token is whichever one the caller holds.
+
+Gitea sends one action, `label_updated`, for every change to an issue's
+labels, with the labels the request named as added and as removed. The
+replace route names the whole new set as added and the whole old set as
+removed, so the reader takes as added only a label named as added and not
+as removed, and calls the event `labeled` when there is one, as Gitea
+matches a workflow's `labeled` type. An add request that re-sends a label
+the issue already carries names it as added, and nothing in the payload
+tells that from adding it: a person with write who re-sends the queue label
+that way starts a run. A comment on a pull request carries `is_pull`.
+
+Everything else a verb reads from the environment is named as on GitHub.
+The token is `GH_TOKEN` or `GITHUB_TOKEN`, the API is `GITHUB_API_URL`, and
+the repository is `GITHUB_REPOSITORY`. On Gitea the API is the instance's
+`/api/v1`, and a verb refuses to start without it or without
+`FALCONET_BOT_LOGIN`, before it reads an event file: every other reader
+takes an unset `GITHUB_API_URL` to mean api.github.com, and the client's
+first request would send the bot's token there. `prepare` assigns the issue
+to `--assignee`, then to `GITHUB_TRIGGERING_ACTOR`, then to the event's
+sender, because act, the runner behind Gitea Actions, sets no triggering
+actor. With none of them it asks for the token's own login, which on Gitea
+is the bot's.
+
+No workflow for Gitea ships. Gitea gives every job Actions credentials of
+its own, so a job graph on Gitea has no job that holds nothing for the
+agent to run in (principle 2). The verbs run against Gitea from a
+workstation, or from a workflow the operator writes and answers for.
 
 ## No default for the path allowlist or the content denylist
 
@@ -370,11 +408,12 @@ in `internal/`, the config merge, the prompt rendering, the dispatcher's
 lists in step with what it implements. `tests/run.sh` holds what cannot be
 seen from inside: it spawns `$FALCONET <verb>` and reads the exit code, the
 one word on stdout, files in the handoff directory, git state, the calls a
-verb makes to GitHub through a loopback fake behind `GITHUB_API_URL`, and
-what the harness and the scanner are handed by bash stubs. `contract.test.sh`
-holds the wiring's shape the same way: no checkout in the agent job, the
-install before the first verb, every `uses:` ref one tag, `commit` run once,
-the loop turning on the check's word.
+verb makes to its forge through a loopback fake behind `GITHUB_API_URL`,
+`fake-github.py` or `fake-gitea.py`, and what the harness and the scanner
+are handed by bash stubs. `contract.test.sh` holds the wiring's shape the
+same way: no checkout in the agent job, the install before the first verb,
+every `uses:` ref one tag, `commit` run once, the loop turning on the
+check's word.
 
 A property lives in one of the two places, never both. Where a shell case
 and a Go test assert the same thing, the shell case goes, because two
@@ -410,8 +449,9 @@ and contain's check).
 ## The Gitea adapter speaks REST through net/http
 
 `Client` in `internal/gitea` implements `forge.Client` against Gitea's REST
-API, `/api/v1`, with `net/http` from the standard library. No verb selects
-it: `cmd/falconet/forge.go` names GitHub alone.
+API, `/api/v1`, with `net/http` from the standard library. `forge` set to
+gitea in the config selects it
+([GitHub and Gitea are the forges](#github-and-gitea-are-the-forges)).
 
 Its token belongs to a bot user who is an Administrator of the repository.
 The sender rule reads another account's permission, and Gitea answers

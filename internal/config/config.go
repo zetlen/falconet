@@ -50,6 +50,7 @@ import (
 // on whether the file names a harness.command; Load resolves it. See
 // Schema.Prompts, Schema.Paths and Schema.Harness.
 const Defaults = `{
+  "forge": "github",
   "handoff_dir": ".falconet",
   "issue": {
     "queue_label": "falconet",
@@ -86,6 +87,10 @@ const Defaults = `{
 // tags are the keys of the JSON file; the document they decode from is the
 // defaults with the user's file merged over, so every field is populated.
 type Schema struct {
+	// Forge names the forge the verbs talk to, and so which adapter and which
+	// reader of the event file cmd/falconet/forge.go hands them: github or
+	// gitea.
+	Forge      string `json:"forge"`
 	HandoffDir string `json:"handoff_dir"`
 	Issue      struct {
 		QueueLabel       string   `json:"queue_label"`
@@ -209,6 +214,14 @@ func Load(explicit string) (*Config, error) {
 	cfg := &Config{File: path, Doc: doc}
 	if err := cfg.decodeSchema(); err != nil {
 		return nil, fmt.Errorf("%s does not match the schema: %v", orDefault(path, "the built-in defaults"), err)
+	}
+	// The forge decides which reader tells a person's event from falconet's
+	// own. A value the binary does not know is refused here rather than read
+	// as either forge. A misspelled key is ignored like any other unknown
+	// key and leaves forge at github, whose reader refuses a Gitea payload on
+	// its own (github.DecodeEvent).
+	if f := cfg.Schema.Forge; f != "github" && f != "gitea" {
+		return nil, fmt.Errorf("%s: forge must be github or gitea, not %q", orDefault(path, "the built-in defaults"), f)
 	}
 	return cfg, nil
 }

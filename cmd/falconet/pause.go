@@ -58,15 +58,18 @@ GitHub refused still gets a comment: one that says the label could not be
 applied and asks the requester to contact the repository administrator.
 
 Requires GH_TOKEN or GITHUB_TOKEN, and GITHUB_REPOSITORY (owner/name), in
-the environment. GITHUB_API_URL overrides the API endpoint.
+the environment. GITHUB_API_URL overrides the API endpoint. The forge is the
+config's "forge"; with gitea, GITHUB_API_URL is required and is the
+instance's /api/v1, and FALCONET_BOT_LOGIN names the user whose token
+GH_TOKEN is.
 
 Prints exactly one word on stdout, once the flags have been read:
 
   success   the comment is posted and the label is on the issue. Releasing
             the claim is best-effort: a failed un-assign is a warning.
-  failure   anything else — a GitHub call refused, no token, no repository,
-            a --body that cannot be read. The caller must treat the issue
-            as still un-paused.
+  failure   anything else — a forge call refused, no token, no repository,
+            a forge the runner is not, a --body that cannot be read. The
+            caller must treat the issue as still un-paused.
 
 Exit codes: 0 = success, 1 = failure, 2 = usage error (nothing on stdout).
 
@@ -170,7 +173,10 @@ func runPause(args []string) int {
 	if err != nil {
 		return failure("falconet: %v", err)
 	}
-	k := forgeFor()
+	k, err := forgeFor(cfg.Schema)
+	if err != nil {
+		return failure("pause: %v", err)
+	}
 	if err := pause.Label(label, cfg.Schema.Labels.NeedsInfo, cfg.Schema.Labels.Human); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
@@ -228,7 +234,10 @@ func runPause(args []string) int {
 	// the refusal can fetch the administrator. Either refusal is the word
 	// `failure`: the issue is not fully paused, and the caller must hear
 	// that from the word and the exit code both.
-	client := k.connect(forge.APIURLFromEnv(), token)
+	client, err := k.connect(token)
+	if err != nil {
+		return failure("pause: %v", err)
+	}
 	status := 0
 	if err := client.AddIssueLabels(owner, name, number, []string{label}); err != nil {
 		fmt.Fprintf(os.Stderr, "could not add label %s to #%d: %v\n", label, number, err)

@@ -2,6 +2,7 @@ package github
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zetlen/falconet/internal/prepare"
@@ -99,6 +100,20 @@ func TestDecodeEventAFieldOfTheWrongTypeIsAnError(t *testing.T) {
 	} {
 		if _, _, err := DecodeEvent([]byte(raw)); err == nil {
 			t.Errorf("%s: no error", raw)
+		}
+	}
+}
+
+// A Gitea payload's sender has a login and no type. Read as GitHub's, its
+// bot's own comment would be a person's.
+func TestDecodeEventRefusesASenderWithNoType(t *testing.T) {
+	for _, raw := range []string{
+		`{"action":"created","sender":{"id":1,"login":"falconet-bot"},"issue":{"labels":[{"name":"falconet"},{"name":"needs-info"}]}}`,
+		`{"action":"created","sender":{"login":"falconet-bot","type":""}}`,
+		`{"action":"created","sender":{"login":"falconet-bot","type":null}}`,
+	} {
+		if _, _, err := DecodeEvent([]byte(raw)); err == nil || !strings.Contains(err.Error(), "type") {
+			t.Errorf("%s: got %v, want an error naming the sender's type", raw, err)
 		}
 	}
 }
