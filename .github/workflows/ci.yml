@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The shell: the suite and its fixtures.
       - name: Check the shell parses before running any of it
@@ -30,11 +30,10 @@ jobs:
             bash -n "$f"
           done
 
-      # No setup-go action: every third-party action already floats on a tag,
-      # and this would be one more. go.mod's `toolchain` line is the
-      # pin; exporting it as GOTOOLCHAIN makes the go command use exactly that
-      # version — downloading it when the runner's is older, and refusing to
-      # quietly substitute a newer one. One source of truth, read here.
+      # No setup-go action: go.mod's `toolchain` line is the pin; exporting
+      # it as GOTOOLCHAIN makes the go command use exactly that version —
+      # downloading it when the runner's is older, and refusing to quietly
+      # substitute a newer one. One source of truth, read here.
       - name: Pin the Go toolchain to go.mod's
         run: |
           set -euo pipefail

@@ -448,7 +448,7 @@ jobs:
 | --- | --- | --- | --- |
 | `issue` | yes | — | The issue number to work. |
 | `config` | no | `.github/falconet.json` | Path to the config file. |
-| `runs-on` | no | `ubuntu-latest` | Must stay Linux x64. |
+| `runs-on` | no | `ubuntu-latest` | Must stay Linux x64. A self-hosted runner must be Actions Runner 2.327.1 or newer, which the pinned actions require. |
 | `max-attempts` | no | `3` | How many agent passes a run may spend getting `check.command` to pass. Each pass is a fresh agent context with the check's failure in front of it; at the cap the work is committed, pushed and handed off. With no `check.command` the first pass is the only one. The agent job as a whole is capped at 60 minutes. |
 | `harness-setup` | no | `npm install -g @anthropic-ai/claude-code` | Shell that puts the harness on `PATH`, run in the agent job before the first pass. Change it together with `harness.command`. |
 | `model-api-key-env` | no | `ANTHROPIC_API_KEY` | The environment variable the harness reads its model credential from. The `model-api-key` secret is exported under this name, in the agent job only. |

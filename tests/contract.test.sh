@@ -615,16 +615,37 @@ it "and refuses one that still has a remote to push to"
 assert_contains "$implement_job" 'the shipped checkout still has a remote' "the implement job"
 
 it "the gate strips the credential before it archives anything"
-# checkout persists it into .git/config as an extraheader; prepare needs it
-# while `git ls-remote origin` runs and not one step longer. Shipping it
-# would put a push-capable token inside the one job that must not have one.
-unset_at="$(grep -n 'unset-all' <<<"$gate_job" | head -1 | cut -d: -f1)"
+# checkout writes the token to a file under $RUNNER_TEMP and points
+# .git/config at it with includeIf entries; prepare needs it while
+# `git ls-remote origin` runs and not one step longer. Shipping it, or a
+# pointer to it, would put a push-capable token within reach of the one job
+# that must not have one.
 tar_at="$(grep -n 'tar -czf' <<<"$gate_job" | head -1 | cut -d: -f1)"
-assert_eq "true" "$([[ -n "$unset_at" && -n "$tar_at" && "$unset_at" -lt "$tar_at" ]] && echo true || echo false)" \
-  "the unset ($unset_at) comes before the tar ($tar_at)"
+# Each named line is matched as a fixed string: a step that keeps its
+# listing but loses the command that acts on it fails here.
+before_tar() {
+  local at
+  at="$(grep -nF -- "$1" <<<"$gate_job" | head -1 | cut -d: -f1)"
+  assert_eq "true" "$([[ -n "$at" && -n "$tar_at" && "$at" -lt "$tar_at" ]] && echo true || echo false)" \
+    "$2 ($at) comes before the tar ($tar_at)"
+}
+before_tar 'git config --local --unset-all "http.${GITHUB_SERVER_URL}/.extraheader"' "the extraheader unset"
 
-it "and fails closed if anything in .git still authenticates"
+# The break: the extraheader unset alone, which finds nothing in .git/config
+# while the includeIf entries that name the credential file ship.
+it "and the includeIf entries that point at the credential file come out before the tar"
+before_tar "git config --local --name-only --get-regexp '^includeif\.'" "the includeIf listing"
+before_tar 'git config --local --unset-all "$key"' "the unset of each listed includeIf key"
+before_tar 'rm -f "$RUNNER_TEMP"/git-credentials-*.config' "the credential file's removal"
+
+it "and fails closed if anything in .git still authenticates, or still points at something that does"
 assert_contains "$gate_job" "refusing to ship a checkout that still authenticates" "the gate job"
+failclosed_grep="$(grep 'refusing to ship' -B2 <<<"$gate_job" | grep -F 'grep -')"
+assert_contains "$failclosed_grep" "-e includeif" "the gate's fail-closed grep"
+# git writes checkout's section as [includeIf "gitdir:..."] and the header as
+# AUTHORIZATION: a case-sensitive grep for the lowercase patterns sees neither.
+assert_eq "true" "$([[ "$failclosed_grep" =~ grep\ -[A-Za-z]*i ]] && echo true || echo false)" \
+  "the gate's fail-closed grep ignores case"
 
 it "the archive leaves out the handoff, and has nothing else to leave out"
 # "--exclude=./.falconet-tool --exclude=./.falconet" until #19.
@@ -647,7 +668,7 @@ assert_contains "$(grep -A2 'git bundle create' <<<"$wf_code" | tr '\n' ' ')" \
 # --- the artifacts that carry the handoff actually carry it -----------------
 #
 # The handoff directory's name starts with a dot, and
-# `actions/upload-artifact@v4` excludes hidden paths by DEFAULT — as a
+# `actions/upload-artifact` excludes hidden paths by DEFAULT — as a
 # WARNING, with the step still green. So `gate` uploaded nothing, said
 # success, and `implement` failed two jobs later on an artifact that had
 # never existed. Every hand-off between jobs travels through one of these
@@ -788,6 +809,36 @@ assert_eq "true" "$(awk '{ if (NF != 5) { print "false"; exit } for (i = 2; i <=
 
 it "and the release-please action is pinned to a SHA"
 assert_eq "true" "$(grep -Eq '^ *uses: googleapis/release-please-action@[0-9a-f]{40}( #.*)?$' <<<"$rel_code" && echo true || echo false)" "release-please-action pinned"
+
+# --- every action that is not falconet's is pinned to a commit ---------------
+#
+# A tag on someone else's repository is a pointer its owner can move, and the
+# steps that run those actions hold the App token and the checkout. A 40-hex
+# commit SHA names exactly one tree; the tag beside it in a comment is what a
+# reader compares against the action's changelog when the pin moves.
+# falconet's own refs are left to the cases above, and a local `./` path has
+# no ref at all.
+#
+# The break: a `uses:` line on a tag or a branch, or a SHA with no tag beside
+# it. The count is the break where the extraction matches nothing and every
+# line passes on nothing: a new action is one more here.
+third_party_uses="$(
+  for f in "$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml "$ACTION"; do
+    [ -f "$f" ] || continue
+    grep -v '^[[:space:]]*#' "$f"
+  done
+  grep -v '^[[:space:]]*#' <<<"$caller"
+)"
+third_party_uses="$(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' <<<"$third_party_uses" \
+  | sed -E 's/^[[:space:]]*(-[[:space:]]+)?//' \
+  | grep -v -E '^uses: (zetlen/falconet[@/]|\./)')"
+
+it "every third-party action in the workflows, the action and the caller template is found"
+assert_eq 17 "$(grep -c . <<<"$third_party_uses")" "third-party uses: lines"
+
+it "and each is pinned to a commit SHA, with the tag it was taken from beside it"
+assert_eq "" "$(grep -v -E '^uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$third_party_uses")" \
+  "third-party uses: lines not pinned as owner/repo@<sha> # vX.Y.Z"
 
 # The README's section on the binary is not a numbered step: the install
 # needs no binary on a laptop. It names the prebuilt binary through mise and
