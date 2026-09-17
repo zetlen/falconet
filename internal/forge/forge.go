@@ -1,8 +1,9 @@
 // Package forge is the interface the verbs talk to a forge through, the
 // shapes a forge answers in, and the handful of environment and URL helpers a
-// verb needs to find its repository and its token. The adapter behind the
-// interface is internal/github; cmd/falconet/forge.go is the one place that
-// names it, and nothing in a verb knows which forge is behind a Client.
+// verb needs to find its repository and its token. internal/github and
+// internal/gitea implement the interface; cmd/falconet/forge.go is the one
+// place that names an adapter, and nothing in a verb knows which forge is
+// behind a Client.
 //
 // A 404 means "not found" OR "no access": a private repository answers a
 // token without permission exactly as it answers a name that does not exist,
