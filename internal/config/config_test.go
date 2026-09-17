@@ -245,3 +245,58 @@ func TestRawStructured(t *testing.T) {
 		t.Errorf("structured values print as indented JSON; got %q", got)
 	}
 }
+
+// harness.output: the file's own value; else text, when the file names a
+// command of its own, whose output falconet has no business reading as the
+// default's JSON; else the default command's format.
+func TestHarnessOutputResolution(t *testing.T) {
+	cases := []struct{ name, content, want string }{
+		{"no file: the default command's format", "", "claude-stream-json"},
+		{"a file that names no harness", `{"paths":{"allow":["*"]}}`, "claude-stream-json"},
+		{"a file that names a command and no format", `{"harness":{"command":["my-agent"]}}`, "text"},
+		{"a file that names the default command again", `{"harness":{"command":["claude","--bare","-p"]}}`, "text"},
+		{"a file that names a format and no command", `{"harness":{"output":"text"}}`, "text"},
+		{"a file that names both", `{"harness":{"command":["my-agent"],"output":"claude-stream-json"}}`, "claude-stream-json"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := bare(t)
+			if c.content != "" {
+				write(t, filepath.Join(dir, ".github", "falconet.json"), c.content)
+			}
+			cfg, err := Load("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Schema.Harness.Output != c.want {
+				t.Errorf("harness.output = %q, want %q", cfg.Schema.Harness.Output, c.want)
+			}
+			if got, _ := cfg.Get(".harness.output"); got != c.want {
+				t.Errorf("config get .harness.output = %v, want %q: the document and the schema disagree", got, c.want)
+			}
+		})
+	}
+	for _, bad := range []string{`"json"`, `""`, `null`, `5`, `["text"]`} {
+		t.Run("refused: "+bad, func(t *testing.T) {
+			dir := bare(t)
+			write(t, filepath.Join(dir, ".github", "falconet.json"), `{"harness":{"output":`+bad+`}}`)
+			_, err := Load("")
+			if err == nil || !strings.Contains(err.Error(), "harness.output") || !strings.Contains(err.Error(), "text, claude-stream-json") {
+				t.Errorf("got %v, want a refusal naming harness.output and the formats", err)
+			}
+		})
+	}
+}
+
+// The default command prints what its default format reads.
+func TestTheDefaultCommandPrintsStreamJSON(t *testing.T) {
+	bare(t)
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(cfg.Schema.Harness.Command, " ")
+	if !strings.Contains(argv, "--output-format stream-json") || !strings.Contains(argv, "--verbose") {
+		t.Errorf("the default harness.command %q does not print stream-json", argv)
+	}
+}

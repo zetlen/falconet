@@ -114,6 +114,9 @@ assert_not_contains "$(git -C "$c/repo" show --name-only --format= HEAD)" ".falc
 it "and no failure-reason.txt is left behind on success"
 assert_file_missing "$c/repo/.falconet/failure-reason.txt"
 
+it "and no failure-kind.txt either"
+assert_file_missing "$c/repo/.falconet/failure-kind.txt"
+
 # --- a message with no body -------------------------------------------------
 
 c="$(new_checkout subject_only)"
@@ -135,6 +138,7 @@ out="$(run_in "$c")"
 
 it "edits without a commit message are a failure"
 assert_eq "failure" "$out" "outcome"
+assert_eq "no-message" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -152,6 +156,7 @@ out="$(run_in "$c")"
 
 it "an untouched tree with no files is a failure"
 assert_eq "failure" "$out" "outcome"
+assert_eq "unchanged" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 # --- the escalation guard ---------------------------------------------------
 
@@ -164,6 +169,7 @@ out="$(run_in "$c")"
 
 it "a change outside the allowlist is a failure, however good the message"
 assert_eq "failure" "$out" "outcome"
+assert_eq "paths" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed, including the legitimate .tf edit"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -228,6 +234,7 @@ out="$(run_in "$c")"
 
 it "a data \"external\" block routes to failure"
 assert_eq "failure" "$out" "outcome"
+assert_eq "content" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -316,6 +323,7 @@ out="$(run_in "$c")"
 
 it "a token-shaped string in needs-info.md is a failure, not a question"
 assert_eq "failure" "$out" "outcome"
+assert_eq "secret" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -354,6 +362,7 @@ out="$(run_in "$c")"
 
 it "a token-shaped string in the staged diff is a failure"
 assert_eq "failure" "$out" "outcome"
+assert_eq "secret" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -545,6 +554,7 @@ out="$(run_in "$c")"
 
 it "a change to the config file the policy was read from is refused"
 assert_eq "failure" "$out" "outcome"
+assert_eq "config-file" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and the reason names that file, and nothing about the paths it would have admitted"
 reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
@@ -584,6 +594,7 @@ out="$(run_in "$c")"
 
 it "a staged rename is refused rather than parsed"
 assert_eq "failure" "$out" "outcome"
+assert_eq "rename" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and the reason says so, naming the new path"
 reason="$(cat "$c/repo/.falconet/failure-reason.txt")"
@@ -682,6 +693,7 @@ git -C "$c/repo" config diff.external "sh $c/repo/driver.sh"
 out="$(run_in "$c")"
 it "a diff.external in the checkout's git config is refused"
 assert_eq "failure" "$out" "outcome"
+assert_eq "git-machinery" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 it "and the requester is told the git machinery was the problem"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" "git" "failure-reason.txt"
 it "and the payload never ran"
@@ -711,5 +723,21 @@ it "a planted pre-commit hook is refused, not silently skipped"
 assert_eq "failure" "$out" "outcome"
 it "and never ran"
 assert_file_missing "$c/repo/PWNED"
+
+
+# --- the kind is this run's -----------------------------------------------------
+#
+# The handoff directory is the agent's to write. A failure-kind.txt it left
+# there must not survive to be read as the commit verb's word.
+
+c="$(new_checkout planted_kind)"
+printf 'locals {\n  a = 3\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n\nAs asked.\n' >"$c/repo/.falconet/commit-msg.txt"
+printf 'secret\n' >"$c/repo/.falconet/failure-kind.txt"
+out="$(run_in "$c")"
+
+it "a failure-kind.txt the agent planted is gone after a success"
+assert_eq "success" "$out" "outcome"
+assert_file_missing "$c/repo/.falconet/failure-kind.txt"
 
 summary

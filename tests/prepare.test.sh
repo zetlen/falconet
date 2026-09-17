@@ -103,7 +103,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   : >"$FAKE_GITHUB/requests.log"
   : >"$FAKE_GITHUB/requests.jsonl"
   OUT="$( cd "$c/repo" \
-    && GITHUB_ENV="${GH_ENV:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
+    && GITHUB_ENV="${GH_ENV:-}" GITHUB_OUTPUT="${GH_OUT:-}" GITHUB_RUN_ID="${RUN_ID:-}" \
        GITHUB_RUN_ATTEMPT="${RUN_ATTEMPT:-}" \
        GITHUB_TRIGGERING_ACTOR="${ACTOR:-}" \
        "$FALCONET" prepare --issue 42 "$@" 2>"$c/err" )"
@@ -117,7 +117,7 @@ p() { # checkout [args...] -> sets OUT ERR RC
   return 0
 }
 reset() { VIEW_RC=""; EDIT_RC=""; REMOVE_RC=""; COMMENT_RC=""; USER_RC=""; PULLS_RC=""; ISSUE_NULL=""
-          GH_ENV=""; RUN_ID=""; RUN_ATTEMPT=""; ACTOR=""; PERM=""; PERM_RC=""; SENDER=""; }
+          GH_ENV=""; GH_OUT=""; RUN_ID=""; RUN_ATTEMPT=""; ACTOR=""; PERM=""; PERM_RC=""; SENDER=""; }
 reset
 
 ghlog() { cat "$1/requests.log" 2>/dev/null; }
@@ -271,6 +271,23 @@ assert_eq "" "$(cat "$c/github_env" 2>/dev/null)" "GITHUB_ENV"
 it "and leaves the checkout on its original branch"
 assert_eq "main" "$(git -C "$c/repo" branch --show-current)" "branch"
 
+# Why the word is not ready is a step output as well as a line on stderr, so
+# the run's summary shows the reason prepare decided on without reading the
+# log for it.
+c="$(new_checkout reason_output)"; issue_json "$c/issue.json" "falconet,wontfix" "x"
+GH_OUT="$c/github_output" p "$c"; reset
+it "an ineligible issue's reason is the step output reason, the sentence stderr says"
+assert_eq "ineligible" "$OUT" "outcome"
+assert_contains "$(cat "$c/github_output")" "issue #42 carries the blocking label 'wontfix'" "GITHUB_OUTPUT"
+assert_contains "$(head -1 "$c/github_output")" "reason<<FALCONET_" "GITHUB_OUTPUT: the delimited form"
+assert_contains "$ERR" "issue #42 carries the blocking label 'wontfix'" "stderr"
+
+c="$(new_checkout reason_ready)"; issue_json "$c/issue.json" "falconet" "x"
+GH_OUT="$c/github_output" p "$c"; reset
+it "and a ready issue has no reason"
+assert_eq "ready" "$OUT" "outcome"
+assert_eq "" "$(cat "$c/github_output" 2>/dev/null)" "GITHUB_OUTPUT"
+
 # --- the ready path ---------------------------------------------------------
 
 c="$(new_checkout ready_full)"; issue_json "$c/issue.json" "falconet" "Please add MX."
@@ -366,6 +383,13 @@ it "and prints no outcome word"
 assert_eq "" "$OUT" "stdout"
 it "and names what is dirty"
 assert_contains "$ERR" "dns/main.tf" "stderr"
+
+c="$(new_checkout dirty_reason)"; issue_json "$c/issue.json" "falconet" "x"
+printf 'locals {\n  a = 99\n}\n' >"$c/repo/dns/main.tf"
+GH_OUT="$c/github_output" p "$c"; reset
+it "and the reason for exit 1 is the step output reason too"
+assert_eq 1 "$RC" "exit code"
+assert_contains "$(cat "$c/github_output")" "prepare: working tree is dirty before the agent ran" "GITHUB_OUTPUT"
 
 # The origin asserted this AFTER the claim, the ack and the branch, so a dirty
 # tree thanked the requester, assigned the issue, cut a branch and then died.

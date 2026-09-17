@@ -199,7 +199,12 @@ jobs:
       # header for where the binary comes from. The action's own checkout is
       # in the runner's action cache, not in this workspace, so nothing here
       # is a path the verbs could trip over.
+      #
+      # always(): after a failed token or checkout step, and on a cancelled
+      # run, every step that does not say so is skipped, and the run's panel
+      # below needs the binary to say which.
       - name: Install falconet and gitleaks
+        if: always()
         uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       # Eligibility that needs the config is decided here and not in a
@@ -309,6 +314,24 @@ jobs:
           # nothing has failed, whatever the reason.
           if-no-files-found: error
 
+      # The run's panel, written here when the run ends here: prepare said
+      # ineligible or in-flight, or said nothing because a step failed or
+      # the job was stopped. contain writes it on every other path, so a run
+      # whose gate ran has one. job.status is `cancelled` for a job cancelled
+      # or past its timeout-minutes alike, and the panel says so. A report
+      # never changes an outcome: the step continues on error, summary exits
+      # 0, and with no falconet on PATH the panel is one fixed line.
+      - name: Summarise the run
+        if: always() && steps.prepare.outputs.outcome != 'ready'
+        continue-on-error: true
+        env:
+          FALCONET_ISSUE: ${{ inputs.issue }}
+          FALCONET_JOB_STATUS: ${{ job.status }}
+          FALCONET_PREPARE: ${{ toJSON(steps.prepare) }}
+        run: |
+          command -v falconet >/dev/null && exec falconet summary --job gate
+          echo '### falconet: no summary, because this job has no falconet to write it' >> "$GITHUB_STEP_SUMMARY"
+
   # =========================================================================
   # implement — judgment, and nothing else
   # =========================================================================
@@ -337,6 +360,11 @@ jobs:
       # reached with the check still failing, and publish hands off instead
       # of opening a pull request.
       check: ${{ steps.loop.outputs.check }}
+      # For the run's panel: the passes the loop ran, the refusal commit
+      # named, and which of the two steps failed, if one did.
+      passes: ${{ steps.loop.outputs.passes }}
+      kind: ${{ steps.kind.outputs.kind }}
+      failed: ${{ steps.loop.outcome == 'failure' && 'loop' || steps.commit.outcome == 'failure' && 'commit' || '' }}
     steps:
       # NO checkout in this job, ever — contract.test.sh holds it. The
       # repository being worked on cannot be cloned here (see gate's
@@ -417,6 +445,12 @@ jobs:
       # The model key enters this job here and nowhere else, under the name
       # the caller said the harness reads. It is the only secret this job
       # holds, and the only credential a harness with a shell could reach.
+      #
+      # Each pass and each check is a group, echoed around the verb with
+      # nothing between the verb and the log, so the agent's work streams as
+      # it happens; the verb's word is printed after the group closes, so
+      # the folded log still shows each decision. The trap closes a group a
+      # failing verb left open, and records the passes for the run's panel.
       - name: Implement, and check, until the check passes or the cap
         id: loop
         env:
@@ -430,14 +464,20 @@ jobs:
           unset MODEL_API_KEY
           attempt=0
           word=skipped
+          open=
+          trap '[ -z "$open" ] || echo "::endgroup::"; echo "passes=$attempt" >> "$GITHUB_OUTPUT"' EXIT
           while :; do
             attempt=$((attempt + 1))
-            echo "::group::Agent pass $attempt of $MAX_ATTEMPTS"
+            echo "::group::Agent pass $attempt of $MAX_ATTEMPTS"; open=1
             # shellcheck disable=SC2086
-            falconet implement $FALCONET_CONFIG_FLAG
-            echo "::endgroup::"
+            said="$(falconet implement $FALCONET_CONFIG_FLAG)"
+            echo "::endgroup::"; open=
+            echo "implement: $said"
+            echo "::group::Check after pass $attempt"; open=1
             # shellcheck disable=SC2086
             word="$(falconet check $FALCONET_CONFIG_FLAG)"
+            echo "::endgroup::"; open=
+            echo "check: $word"
             [ "$word" = fail ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ] || break
           done
           echo "check=$word" >> "$GITHUB_OUTPUT"
@@ -466,6 +506,13 @@ jobs:
           verb: commit
           setup: 'false'
           args: ${{ inputs.config && format('--config {0}', inputs.config) || '' }}
+
+      # For the run's panel: the word commit wrote beside a failure. Only a
+      # Commit that finished reaches this step, and commit removes the file
+      # before it decides, so what is here is commit's, not the agent's.
+      - name: Read which refusal it was
+        id: kind
+        run: echo "kind=$(tr -cd 'a-z-' 2>/dev/null <.falconet/failure-kind.txt)" >> "$GITHUB_OUTPUT"
 
       # Before this job ends, so the work outlives the runner. See the header.
       #
@@ -504,6 +551,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    # For the run's panel: the pull request, and which step failed, if one did.
+    outputs:
+      pr: ${{ steps.pr.outputs.url }}
+      failed: ${{ steps.push.outcome == 'failure' && 'push' || steps.pr.outcome == 'failure' && 'pr' || '' }}
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: token
@@ -558,6 +609,7 @@ jobs:
       # the bookkeeping. Nothing below runs before the work is somewhere
       # durable.
       - name: Push
+        id: push
         uses: zetlen/falconet@v1.1.2 # x-release-please-version
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -590,8 +642,11 @@ jobs:
       # from inputs.config, or nothing; unquoted so that nothing is no
       # argument. Captured in its own assignment, so a config the binary
       # refuses fails this step here and loudly, not inside gh's argument
-      # list.
+      # list. gh prints the pull request's address; its last line is the
+      # step's output, for the run's panel, which links it only when it is
+      # this repository's pull request.
       - name: Open the pull request
+        id: pr
         if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -601,12 +656,14 @@ jobs:
           set -euo pipefail
           # shellcheck disable=SC2086
           label="$(falconet config $FALCONET_CONFIG_FLAG get .labels.pr)"
-          gh pr create \
+          url="$(gh pr create \
             --base "$BASE_BRANCH" \
             --head "$PUSHED_BRANCH" \
             --title "$(cat .falconet/commit-subject.txt)" \
             --body-file .falconet/pr.md \
-            --label "$label"
+            --label "$label")"
+          printf '%s\n' "$url"
+          echo "url=${url##*$'\n'}" >> "$GITHUB_OUTPUT"
 
       # The four hand-overs are `run:` steps, not calls through the action,
       # because the action splits `args` on whitespace — by design, and its
@@ -702,7 +759,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 1 }
 
+      # always(): a cancelled run skips every step that does not say so, and
+      # the run's panel below needs the binary on a cancelled run too.
       - name: Install falconet and gitleaks
+        if: always()
         uses: zetlen/falconet@v1.1.2 # x-release-please-version
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
@@ -758,6 +818,7 @@ jobs:
       # issue, which is the silence this job exists to prevent. The one
       # thing that must not pause is a cancelled run, which a person chose.
       - name: Pause the issue, so this run is not its last word
+        id: pause
         if: "!cancelled() && steps.check.outputs.terminal != 'true'"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -771,3 +832,20 @@ jobs:
             --branch "" \
             --run-url "$RUN_URL" \
             --preamble "This run stopped before it reached a conclusion, so nobody has been told anything useful. This one needs a person."
+
+      # The run's panel, on every path where prepare said ready: the jobs'
+      # results and outputs, and what this job did. The pause step also runs
+      # when the check did not, so the panel reads both. As in gate.
+      - name: Summarise the run
+        if: always()
+        continue-on-error: true
+        env:
+          FALCONET_ISSUE: ${{ inputs.issue }}
+          FALCONET_JOB_STATUS: ${{ job.status }}
+          FALCONET_MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+          FALCONET_NEEDS: ${{ toJSON(needs) }}
+          FALCONET_CHECK: ${{ steps.check.outcome }}
+          FALCONET_PAUSE: ${{ steps.pause.outcome }}
+        run: |
+          command -v falconet >/dev/null && exec falconet summary --job contain
+          echo '### falconet: no summary, because this job has no falconet to write it' >> "$GITHUB_STEP_SUMMARY"

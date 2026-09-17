@@ -86,7 +86,10 @@ Three rows worth knowing before proposing architecture:
 - **The harness is a configured command**
   ([register](docs/decisions.md#the-harness-is-a-configured-command)): the
   implement verb is the seam, the README's contract is what a harness must
-  meet, and nothing else in the tree knows a harness's name.
+  meet, and nothing else in the tree knows a harness's name. falconet
+  knows output formats, not harnesses: `harness.output` names how the
+  harness's output is shown in the run log, and no line of it can act as
+  a workflow command.
 - **One implementing agent, and no reviewing agent**
   ([register](docs/decisions.md#no-second-reviewing-agent)); the bar a
   second one must clear is written there.
@@ -192,8 +195,11 @@ their shape: no checkout in the agent job, the install before the first
 verb in every job, every `uses: zetlen/falconet@` ref one tag and the
 manifest's version, the binary downloaded from the release at the action's
 own ref or `go install`ed at any other, the loop turning on the check's
-word, the README's input table matching the workflow's inputs. A new case
-is proved red on the break it exists for before it is made green.
+word, the README's input table matching the workflow's inputs, one run
+panel written by gate or contain from the outputs and step ids the jobs
+declare, and groups that close with the deciding word printed after them.
+A new case is proved red on the break it exists for before it is made
+green.
 
 When a Go test and a shell case would assert the same property, the Go
 test wins and the shell case is not written.

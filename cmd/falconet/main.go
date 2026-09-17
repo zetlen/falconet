@@ -11,18 +11,22 @@
 // The six pipeline verbs are the stages of the pipeline (docs/decisions.md).
 // They never call each other; they pass files through the handoff directory.
 //
-// `prompt`, `scan` and `config` are unlisted on purpose: public in the
-// sense that they work, not in the sense that they are vocabulary. `prompt`
-// is the workflow's plumbing — a prompt resolved without heredocs in YAML —
-// `scan` is the commit verb's secret scan, and `config` is what the config
-// file resolves to. Each is reachable here so that the test suite spawns it
-// through the same door as every verb.
+// `prompt`, `scan`, `config` and `summary` are unlisted on purpose: public
+// in the sense that they work, not in the sense that they are vocabulary.
+// `prompt` is the workflow's plumbing — a prompt resolved without heredocs
+// in YAML — `scan` is the commit verb's secret scan, `config` is what the
+// config file resolves to, and `summary` is the panel on the run's page.
+// Each is reachable here so that the test suite spawns it through the same
+// door as every verb.
 //
-// Exit codes, uniform across every verb:
+// Exit codes, uniform across every verb but `summary`:
 //
 //	0  an outcome was determined (which outcome is on stdout, in one word)
 //	1  refused mechanically, or a check failed
 //	2  usage error — including -h/--help, because 0 would mean "ran, fine"
+//
+// `summary` exits 0 always, usage errors included: it reports a run, and a
+// report must not change the run it reports (cmd/falconet/summary.go).
 package main
 
 import (
@@ -56,7 +60,7 @@ Run ` + "`falconet <verb> -h`" + ` for a verb's own options.
 // error.
 var (
 	verbs    = []string{"prepare", "implement", "check", "commit", "push", "pause", "version"}
-	unlisted = []string{"prompt", "scan", "config"}
+	unlisted = []string{"prompt", "scan", "config", "summary"}
 )
 
 // native is what this binary answers for: one entry per name in the two
@@ -74,6 +78,7 @@ var native = map[string]func(args []string) int{
 	"push":      runPush,
 	"pause":     runPause,
 	"prompt":    runPrompt,
+	"summary":   runSummary,
 }
 
 func main() {

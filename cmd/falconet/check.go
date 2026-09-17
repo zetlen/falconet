@@ -52,6 +52,7 @@ import (
 	"github.com/zetlen/falconet/internal/gitsafe"
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/repo"
+	"github.com/zetlen/falconet/internal/runlog"
 )
 
 const checkUsageText = `check — run the repository's own check on the tree the agent left, and say
@@ -62,7 +63,8 @@ Modes:
 
 Runs check.command from .github/falconet.json — an argv, no shell — from the
 repository root, with the tree exactly as it stands. Its output goes to
-stderr, whole. Prints exactly one word on stdout, and nothing else:
+stderr, whole, a line at a time, and no line of it can start a workflow
+command. Prints exactly one word on stdout, and nothing else:
 
   pass      the command exited 0. DIR/check-failure.txt, if a previous
             check left one, is removed.
@@ -190,14 +192,20 @@ func runCheck(args []string) int {
 	// --- the check ----------------------------------------------------------
 	//
 	// Both streams to stderr and to the tail. The command's own stdout must
-	// not reach this verb's: one word is the contract.
-	fmt.Fprintf(os.Stderr, "check: running %v in %s\n", argv, root)
+	// not reach this verb's: one word is the contract. What reaches stderr is
+	// line by line and cannot be read as a workflow command (internal/runlog),
+	// and so is the line naming the command: the check runs the agent's
+	// change, and the line after this verb's output is its word. The tail is
+	// the bytes as they were.
 	tail := &check.Tail{}
+	shown := runlog.NewText(os.Stderr)
+	_, _ = fmt.Fprintf(shown, "check: running %v in %s\n", argv, root)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
-	cmd.Stdout = io.MultiWriter(os.Stderr, tail)
+	cmd.Stdout = io.MultiWriter(shown, tail)
 	cmd.Stderr = cmd.Stdout
 	runErr := cmd.Run()
+	_ = shown.Close()
 	var exit *exec.ExitError
 	switch {
 	case runErr == nil:

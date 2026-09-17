@@ -51,6 +51,11 @@ outputs:
   outcome:
     description: 'The one word the verb printed on stdout, for the verbs that print one.'
     value: ${{ steps.run.outputs.outcome }}
+  reason:
+    description: >-
+      Why the word is not the one that goes on, for a verb that says:
+      prepare's sentence for ineligible, in-flight, or an exit 1.
+    value: ${{ steps.run.outputs.reason }}
 
 runs:
   using: composite
@@ -199,6 +204,11 @@ runs:
     #
     # Skipped when no verb was asked for: a call with an empty `verb` is an
     # install and nothing else, and `outcome` is then empty.
+    #
+    # The verb's stderr, which is everything it has to say but its word, is
+    # a group, echoed around it with nothing between the verb and the log.
+    # The word is printed after the group closes, so the folded log shows
+    # what was decided.
     - name: Run
       id: run
       if: inputs.verb != ''
@@ -209,9 +219,11 @@ runs:
         FALCONET_ARGS: ${{ inputs.args }}
       run: |
         set -uo pipefail
+        echo "::group::falconet $FALCONET_VERB"
         # shellcheck disable=SC2086
         outcome="$(falconet "$FALCONET_VERB" $FALCONET_ARGS)"
         rc=$?
+        echo "::endgroup::"
         printf '%s\n' "$outcome"
         # Written with a delimiter, not `name=value`. The verbs that decide
         # something print one word, but `push` once printed a sentence, and

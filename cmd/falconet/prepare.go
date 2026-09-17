@@ -21,7 +21,8 @@ package main
 // in-flight and ineligible write NOTHING and change NOTHING. They make no
 // GitHub call that mutates, create no branch, leave no file, and pause
 // nothing: duplicate and ineligible events are silent no-ops. The reason goes
-// to stderr, because "ineligible" on its own is not a diagnostic.
+// to stderr, because "ineligible" on its own is not a diagnostic, and to the
+// step output `reason` in CI, as the reason for exit 1 does.
 //
 // Outputs on the ready path, written into the handoff directory:
 //
@@ -85,7 +86,9 @@ Prints exactly one word on stdout — the outcome — and nothing else:
 in-flight and ineligible write NOTHING and change NOTHING. They make no
 GitHub call that mutates, create no branch, leave no file, and pause
 nothing: duplicate and ineligible events are silent no-ops. The reason goes
-to stderr, because "ineligible" on its own is not a diagnostic.
+to stderr, because "ineligible" on its own is not a diagnostic, and so does
+the reason for exit 1; either is also the step output "reason", appended to
+$GITHUB_OUTPUT when that is set.
 
 Outputs on the ready path, written into the handoff directory:
   issue.json          the one snapshot every later step reads
@@ -257,9 +260,27 @@ func runPrepare(args []string) int {
 	}
 
 	say := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
+	// Why the word is not ready, or why there is no word, is one sentence on
+	// stderr and, in CI, the step output `reason` (handoff.GitHubOutputAppend),
+	// which the action exposes and the run's summary shows. The output is the
+	// same sentence, set where it is decided, so nothing downstream has to
+	// guess which line of the log was the reason.
+	explain := func(text string) {
+		if err := handoff.GitHubOutputAppend("reason", text); err != nil {
+			say("warning: %v", err)
+		}
+	}
 	die := func(format string, a ...any) int {
-		say(format, a...)
+		text := fmt.Sprintf(format, a...)
+		say("%s", text)
+		explain(text)
 		return 1
+	}
+	decline := func(word, text string) int {
+		say("%s", text)
+		explain(text)
+		fmt.Println(word)
+		return 0
 	}
 
 	cwd, err := os.Getwd()
@@ -381,9 +402,7 @@ func runPrepare(args []string) int {
 		// --re-entry below cannot make a way in of a comment the event
 		// does not make one.
 		if reason := prepare.NotAWayIn(&ev, mode, rules); reason != "" {
-			say("issue #%d: %s", number, reason)
-			fmt.Println("ineligible")
-			return 0
+			return decline("ineligible", fmt.Sprintf("issue #%d: %s", number, reason))
 		}
 		gate = s
 	} else {
@@ -407,9 +426,7 @@ func runPrepare(args []string) int {
 	// See internal/prepare: open, no blocking label, the opt-out box
 	// unticked, the queue label present, in that order.
 	if reason := prepare.Gate(number, gate, mode, rules); reason != "" {
-		say("%s", reason)
-		fmt.Println("ineligible")
-		return 0
+		return decline("ineligible", reason)
 	}
 
 	// --- the sender rule: whoever caused this event can push ---------------------
@@ -428,9 +445,7 @@ func runPrepare(args []string) int {
 			return die("prepare: could not read %s's permission on %s/%s: %v", ev.Sender, owner, name, err)
 		}
 		if reason := prepare.SenderRule(number, ev.Sender, string(perm)); reason != "" {
-			say("%s", reason)
-			fmt.Println("ineligible")
-			return 0
+			return decline("ineligible", reason)
 		}
 	}
 
@@ -454,9 +469,7 @@ func runPrepare(args []string) int {
 		pulls = append(pulls, prepare.Pull{Number: p.Number, Head: p.Head.Ref})
 	}
 	if hits := prepare.InFlight(number, pulls, rules); len(hits) > 0 {
-		say("%s", prepare.InFlightReason(number, hits))
-		fmt.Println("in-flight")
-		return 0
+		return decline("in-flight", prepare.InFlightReason(number, hits))
 	}
 
 	// --- the gate again, on the issue as it is now ------------------------------
@@ -487,9 +500,7 @@ func runPrepare(args []string) int {
 			}
 		}
 		if reason := prepare.Gate(number, live, mode, rules); reason != "" {
-			say("%s (the issue changed after the event that queued this run)", reason)
-			fmt.Println("ineligible")
-			return 0
+			return decline("ineligible", reason+" (the issue changed after the event that queued this run)")
 		}
 	}
 
@@ -517,6 +528,7 @@ func runPrepare(args []string) int {
 	if len(bytes.TrimSpace(dirt)) > 0 {
 		say("prepare: working tree is dirty before the agent ran:")
 		_, _ = os.Stderr.Write(dirt)
+		explain("prepare: working tree is dirty before the agent ran")
 		return 1
 	}
 

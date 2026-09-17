@@ -21,13 +21,14 @@ a finding, not a formatting error.
 | --- | --- | --- | --- |
 | The pipeline is falconet's own code, not `gh-aw` | I2 | a change steered by the text of an admitted request, whoever wrote it, gets past the guards and a person's review | [below](#the-pipeline-is-falconets-own-code) |
 | A run starts only from a sender with write | I3 | an adopter needs a person without write to start runs, or a forge's adapter cannot answer a login's permission on the repository with the token the gate job holds | [below](#a-run-starts-only-from-a-sender-with-write) |
-| The harness is a configured command, and the default is the Claude Code CLI | I1, I2 | a harness the default cannot be, with the same file-only grant, is what most adopters run | [below](#the-harness-is-a-configured-command) |
+| The harness is a configured command, and the default is the Claude Code CLI; falconet knows output formats, not harnesses | I1, I2 | a harness the default cannot be, with the same file-only grant, is what most adopters run | [below](#the-harness-is-a-configured-command) |
 | A `check` verb and a caller-owned loop | I2, I3 | a check the verb can run requires something the agent job cannot provide (a credential, a service, network access) and cannot be moved out of the critical path | [below](#a-check-verb-and-a-caller-owned-loop) |
 | No second, reviewing agent | I5 | a review harness clears the bar: an independent, uncontaminated read of diff and message, worth more than it costs, whose verdict is never in the pull request where a reviewer could mistake it for evidence | [below](#no-second-reviewing-agent) |
 | GitHub is the forge | I2, I4 | an adopter exists on another forge | [below](#github-is-the-forge) |
 | No default for the path allowlist or the content denylist | I3 | an adopter cannot set the allowlist before the first run, and the cost of one required field outweighs the cost of a default the operator did not choose | [below](#no-default-for-the-path-allowlist-or-the-content-denylist) |
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
+| One panel on the run's page, written by gate or contain from job outputs | I4 | a run whose gate ran ends with no panel or with two, or the panel needs a fact no job output or handoff word can carry | [below](#one-panel-on-the-runs-page) |
 | Packaged as a reusable workflow plus a composite action | I2 | the credentials or setup it demands outgrow the README's eight steps | [below](#a-reusable-workflow-and-a-composite-action) |
 | Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
 | The suite holds what only a process shows; Go tests hold the logic | I2, I3 | a property is asserted in both places, or the suite needs a tool the runner lacks | [below](#the-suite-holds-what-only-a-process-shows) |
@@ -134,6 +135,27 @@ The command is read from the working tree after the agent has had its turn
 at it, so a tree that changed the config file is refused before anything
 runs, as the check verb refuses it.
 
+falconet knows output formats, not harnesses. `harness.output` names the
+format the command prints on stdout: `text`, shown a line at a time, or
+`claude-stream-json`, one JSON event per line, shown as one readable line
+for each thing the agent did. The default command prints
+`claude-stream-json`, and that is `harness.output`'s default when the file
+sets no `harness.command`. A file that sets one gets `text` unless it names
+a format as well, because a command the operator chose is not read as the
+default's JSON. A harness that prints another shape prints it under `text`;
+a new format is code in `internal/runlog` and a word in this list. The
+format changes what the log shows and nothing `implement` decides: the word
+is the harness's exit status.
+
+The harness reads the issue, so what it prints is steered by the issue's
+text. No line of it reaches the log as a workflow command: `implement`
+splits its output on the line breaks the runner splits on, prints every
+`##[` in a line as `##\[`, because the runner finds that form anywhere in a
+line, and prints a line whose first non-space characters are `::` behind
+`> `. `check` prints the check command's output the same way. The output reaches
+the log through a pipe, so once the harness exits, `implement` reads for
+five more seconds and stops, whatever the harness left running.
+
 ## A `check` verb and a caller-owned loop
 
 The `implement` job runs with `permissions: {}` and no secret but the model
@@ -237,15 +259,17 @@ itself should differ.
 
 A thing is a public verb if and only if a caller invokes it directly: the
 six pipeline verbs (`prepare`, `implement`, `check`, `commit`, `push`,
-`pause`) and `version`. `prompt`, `config` and `scan` exist unlisted: public
-in that they work, not vocabulary.
+`pause`) and `version`. `prompt`, `config`, `scan` and `summary` exist
+unlisted: public in that they work, not vocabulary.
 
 Exit codes are uniform: **0** outcome determined, **1** refused
 mechanically, **2** usage. A verb that decides something prints exactly one
 word on stdout. A check that ran and failed is an outcome, the word `fail`
 with exit 0, so a caller can tell it from a check that could not run, which
-is exit 1 and no word. Eligibility (queue label present, no blocking label,
-opt-out unchecked, a sender with write) is decided by `prepare`, not by a job-level `if:`: a job
+is exit 1 and no word. `summary` exits 0 always, usage errors included,
+because it reports a run and a report must not change the run.
+Eligibility (queue label present, no blocking label, opt-out unchecked, a
+sender with write) is decided by `prepare`, not by a job-level `if:`: a job
 `if:` runs before checkout and cannot read the config, and gating there
 would fork eligibility into YAML-in-CI and nothing-locally. That is
 principle 1 at the front door: what the agent will read is decided by one
@@ -265,6 +289,37 @@ it is strict and needs no `yq`. Prompt overrides are paths relative to the
 repository root; absent, the prompt embedded in the binary is used. The
 schema lives in `internal/config`, and the README's config table is its
 prose.
+
+## One panel on the run's page
+
+`falconet summary` appends one markdown panel to `$GITHUB_STEP_SUMMARY`:
+how the run ended, the issue, the branch, the agent passes used of
+`max-attempts`, and the check's last word. gate runs it when `prepare` did
+not say `ready`. contain runs it on every run where `prepare` did, which is
+every run contain runs on. The two conditions turn on the same output, so a
+run whose gate ran has one panel, and `contract.test.sh` holds the pair.
+
+The panel reads job results and outputs and nothing else: `toJSON(needs)`
+in contain, `toJSON(steps.prepare)` in gate, the writing job's own
+`job.status`, and the outcomes of contain's check and pause steps. Which
+guard refused is `failure-kind.txt`'s word, which the implement job reads
+into an output; why `prepare` said no is its `reason` output. Neither is
+read out of prose or out of the log.
+
+A job whose result is `cancelled` is shown as stopped, cancelled or out of
+time, and the panel does not say which. The runner stops a job past its
+`timeout-minutes` with the same cancel message a person's cancel sends, so
+`cancelled()` and `job.status` inside the job, and its result as the jobs
+after it read it, are the same for both.
+
+Every value that is not a fixed word of the panel's is shown in a code span
+on one line with no backtick, and the only links are to the repository's own
+issue, pull request and branch, built from a validated server, repository,
+number and branch name. The step continues on error, and where falconet
+was not installed the step writes one fixed line instead.
+
+Code in the agent job can write that job's step summary. The panel is
+falconet's only under gate or contain.
 
 ## A reusable workflow and a composite action
 
@@ -290,13 +345,16 @@ written *inside* the consumer's checkout and untracked: `request.md`,
 `base-sha.txt`, `branch.txt` from `prepare`; `prompt.md` from `implement`;
 `commit-msg.txt` or `needs-info.md` from the agent; `check-failure.txt`
 from `check`, present exactly when the last check failed;
-`commit-subject.txt`, `commit-body.md` or `failure-reason.txt` from
-`commit`; `pr.md` from the workflow's own body step. Every job that runs a
+`commit-subject.txt`, `commit-body.md`, or `failure-reason.txt` and
+`failure-kind.txt` from `commit`, the second one word naming which refusal
+it was; `pr.md` from the workflow's own body step. Every job that runs a
 verb writes `.falconet/` into `.git/info/exclude` first, because `prepare`
 refuses a dirty tree and `commit` refuses any changed path outside the
 allowlist, and the consumer's `.gitignore` is not to be relied on. The same
 verb sequence therefore runs on a workstation with no GitHub context;
-CI-facing exports go to `$GITHUB_ENV` only when it exists. The handoff
+CI-facing exports go to `$GITHUB_ENV` only when it exists, and so does the
+one step output a verb sets: `prepare`'s `reason`, the sentence behind a
+word that is not `ready` or behind an exit 1, in `$GITHUB_OUTPUT`. The handoff
 directory is how principle 1 is literal: the agent's input is a file a
 previous step wrote.
 

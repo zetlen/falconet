@@ -15,6 +15,8 @@
 package handoff
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,6 +85,43 @@ func GitHubEnvAppend(lines ...string) error {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.WriteString(strings.Join(lines, "\n") + "\n")
+	return nil
+}
+
+// GitHubOutputAppend sets a step output: it appends name and value to
+// $GITHUB_OUTPUT when there is one and it can be written, and is a silent
+// no-op otherwise, for the reason GitHubEnvAppend gives.
+//
+// The value is written in the delimited form, whose delimiter is chosen at
+// random for each write and checked against the value, because a value is
+// a sentence that can carry text from outside (a label, a login, an API's
+// error) and the `name=value` form ends at its first line break, which is a
+// step failing after its work is done.
+func GitHubOutputAppend(name, value string) error {
+	if !envKey.MatchString(name) {
+		return fmt.Errorf("refusing to write to $GITHUB_OUTPUT: %q is not an output name", name)
+	}
+	path := os.Getenv("GITHUB_OUTPUT")
+	if path == "" {
+		return nil
+	}
+	var delimiter string
+	for {
+		var b [12]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return fmt.Errorf("refusing to write to $GITHUB_OUTPUT: no random delimiter: %v", err)
+		}
+		delimiter = "FALCONET_" + hex.EncodeToString(b[:])
+		if !strings.Contains(value, delimiter) {
+			break
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(name + "<<" + delimiter + "\n" + strings.TrimRight(value, "\n") + "\n" + delimiter + "\n")
 	return nil
 }
 

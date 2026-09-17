@@ -94,6 +94,77 @@ assert_eq "done by the agent" "$(cat "$c/repo/.falconet/commit-msg.txt")" "commi
 it "and nothing was committed"
 assert_eq 1 "$(git -C "$c/repo" rev-list --count HEAD)" "commits"
 
+# --- what the log shows ---------------------------------------------------------
+#
+# The harness's output reaches the run log a line at a time, while the harness
+# is still running, in the format harness.output names; and no line of it can
+# act as a workflow command, because the agent is steered by the issue's text.
+
+c="$(new_checkout live '["'"$WORK"'/live/harness"]')"
+stub "$c/harness" 'echo "first line, before the pause"; sleep 4; echo "second line, after it"'
+( cd "$c/repo" && "$FALCONET" implement --out-dir "$c/repo/.falconet" >"$c/out" 2>"$c/err" ) &
+pid=$!
+seen=no
+for _ in $(seq 1 30); do
+  if grep -q "first line, before the pause" "$c/err"; then seen=yes; break; fi
+  sleep 0.1
+done
+running="$(kill -0 "$pid" 2>/dev/null && echo running || echo exited)"
+wait "$pid"; RC=$?
+
+it "a line the harness prints is in the log while the harness is still running"
+assert_eq "yes running" "$seen $running" "first line seen, and the verb"
+assert_eq 0 "$RC" "exit code"
+assert_contains "$(cat "$c/err")" "second line, after it" "stderr"
+
+it "and a harness command of the operator's own is shown as text, and the log says so"
+assert_contains "$(cat "$c/err")" "shown as text (harness.output)" "stderr"
+
+c="$(new_checkout commands '["'"$WORK"'/commands/harness"]')"
+stub "$c/harness" 'printf "::endgroup::\n  ::add-mask::done\rok\r::stop-commands::t\n##[group]x\n"; printf "::error::from stderr\nsaid ##[add-mask]done\n" >&2'
+run_in "$c"
+
+it "no line of a text harness's output that reaches the log is a workflow command"
+assert_eq "done" "$OUT" "stdout"
+assert_eq "" "$(printf '%s\n' "$ERR" | tr '\r' '\n' | grep -E '^[[:space:]]*::|##\[')" "command-shaped lines in stderr"
+assert_contains "$ERR" "> ::endgroup::" "stderr"
+assert_contains "$ERR" "> ::error::from stderr" "stderr"
+assert_contains "$ERR" 'said ##\[add-mask]done' "stderr"
+
+c="$(new_checkout rendered '["'"$WORK"'/rendered/harness"]')"
+printf '{"paths":{"allow":["*.toml"]},"harness":{"command":["%s/harness"],"output":"claude-stream-json"}}\n' "$c" \
+  >"$c/repo/.github/falconet.json"
+git -C "$c/repo" add -A && git -C "$c/repo" commit -qm "stream-json harness"
+stub "$c/harness" 'cat "$REPO_ROOT/internal/runlog/testdata/claude-documented.jsonl"'
+run_in "$c"
+
+# What each event renders to is internal/runlog's golden file. What only the
+# process shows is that the config's format reaches the verb: the log says
+# which format, and no event reaches it as JSON.
+it "a config that names claude-stream-json has its harness's events rendered, not shown as JSON"
+assert_eq "done" "$OUT" "stdout"
+assert_contains "$ERR" "shown as claude-stream-json (harness.output)" "stderr"
+assert_not_contains "$ERR" '{"type"' "stderr"
+
+it "and the word is the harness's exit status, whatever the events said"
+assert_eq 0 "$RC" "exit code: the fixture ends at the turn cap and the stub exits 0"
+
+# A harness can exit and leave a process of its own holding its output open.
+# The verb reads that output through a pipe, and must not wait on the
+# stranger for as long as it lives.
+c="$(new_checkout lingering '["'"$WORK"'/lingering/harness"]')"
+stub "$c/harness" 'sleep 40 & echo $! >"$dir/sleeper"; echo "left something running"'
+started=$SECONDS
+run_in "$c"
+elapsed=$((SECONDS - started))
+kill "$(cat "$c/sleeper")" 2>/dev/null
+
+it "a harness that exits leaving a process holding its output is still done, and promptly"
+assert_eq "done" "$OUT" "stdout"
+assert_eq 0 "$RC" "exit code"
+assert_eq "true" "$([[ "$elapsed" -lt 20 ]] && echo true || echo false)" "finished in ${elapsed}s, under 20s"
+assert_contains "$ERR" "left something running" "stderr"
+
 # --- a harness that fails ------------------------------------------------------
 
 c="$(new_checkout failing '["'"$WORK"'/failing/harness"]')"

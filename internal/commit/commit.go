@@ -436,6 +436,50 @@ func Body(message []byte) []byte {
 	return rest
 }
 
+// --- which refusal it was ------------------------------------------------------
+//
+// failure-reason.txt is prose for the requester. Beside it the verb writes
+// failure-kind.txt, one of the words below and nothing else, so that what
+// reads the outcome by machine (the run's summary) names the guard without
+// reading the prose. A new refusal is a new word here and a new Reason
+// function, together.
+
+// Kind names one way the commit verb says failure.
+type Kind string
+
+// The guards: a change refused on what it is.
+const (
+	KindGitMachinery Kind = "git-machinery"
+	KindRename       Kind = "rename"
+	KindConfigFile   Kind = "config-file"
+	KindPaths        Kind = "paths"
+	KindContent      Kind = "content"
+	KindSecret       Kind = "secret"
+)
+
+// The failures that are not guards: nothing to commit.
+const (
+	KindUnchanged   Kind = "unchanged"
+	KindNoMessage   Kind = "no-message"
+	KindEmptyChange Kind = "empty-change"
+)
+
+// Kinds is every Kind, guards first.
+var Kinds = []Kind{
+	KindGitMachinery, KindRename, KindConfigFile, KindPaths, KindContent, KindSecret,
+	KindUnchanged, KindNoMessage, KindEmptyChange,
+}
+
+// Guard reports whether k is a guard refusing a change, rather than a run
+// that left nothing to commit.
+func (k Kind) Guard() bool {
+	switch k {
+	case KindGitMachinery, KindRename, KindConfigFile, KindPaths, KindContent, KindSecret:
+		return true
+	}
+	return false
+}
+
 // --- what each refusal says ------------------------------------------------
 //
 // The text of failure-reason.txt, which is posted to the requester's issue
