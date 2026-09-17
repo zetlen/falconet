@@ -109,6 +109,25 @@ OUT="$( cd "$c/repo" && "$FALCONET" check 2>/dev/null )"
 assert_eq "fail" "$OUT" "outcome"
 assert_contains "$(cat "$c/repo/.falconet/check-failure.txt" 2>/dev/null)" "command: false" "report"
 
+# --- the check's output cannot command the runner --------------------------
+#
+# The check runs the agent's change, and its output is printed into the step
+# right before the check's word. A line of it that closed the group around
+# it, masked the word or stopped workflow commands would be the agent's
+# change steering the run log.
+
+c="$(new_checkout commands '["bash","-c","printf \"::endgroup::\\n  ::add-mask::fail\\rok\\r::stop-commands::t\\n##[group]x\\nok ##[endgroup]\\n\"; exit 1"]')"
+run_in "$c"
+
+it "no line of the check's output that reaches the log is a workflow command"
+assert_eq "fail" "$OUT" "outcome"
+assert_eq "" "$(printf '%s\n' "$ERR" | tr '\r' '\n' | grep -E '^[[:space:]]*::|##\[')" "command-shaped lines in stderr"
+assert_contains "$ERR" "> ::endgroup::" "stderr"
+assert_contains "$ERR" 'ok ##\[endgroup]' "stderr"
+
+it "and check-failure.txt keeps the bytes the check printed"
+assert_contains "$(cat "$c/repo/.falconet/check-failure.txt")" $'::endgroup::\n  ::add-mask::fail\rok\r::stop-commands::t' "check-failure.txt"
+
 # --- mechanical failures: no word, exit 1 -------------------------------------
 #
 # A check that did not happen is not a pass and not a failure the agent can

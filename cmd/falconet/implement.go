@@ -43,17 +43,23 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zetlen/falconet/internal/commit"
 	"github.com/zetlen/falconet/internal/config"
 	"github.com/zetlen/falconet/internal/gitsafe"
 	"github.com/zetlen/falconet/internal/handoff"
 	"github.com/zetlen/falconet/internal/repo"
+	"github.com/zetlen/falconet/internal/runlog"
 )
 
 // PromptFile is where the rendered prompt is left in the handoff directory,
 // for a harness that takes a file rather than stdin.
 const PromptFile = "prompt.md"
+
+// harnessWaitDelay is how long the harness's output is still read after the
+// harness has exited. See "the agent" below.
+const harnessWaitDelay = 5 * time.Second
 
 const implementUsageText = `implement — run the agent, once, on the tree as it stands, and stop.
 
@@ -63,8 +69,11 @@ Modes:
 Runs harness.command from .github/falconet.json — an argv, no shell — from
 the repository root, with the implement prompt (the config's override, or
 the shipped one) rendered and written to DIR/prompt.md and piped to the
-command's stdin. The harness's own output goes to stderr, whole. Prints
-exactly one word on stdout, and nothing else:
+command's stdin. The harness's own output goes to stderr, a line at a time
+as it arrives, shown in the format harness.output names: text as it is, or
+claude-stream-json as one readable line per thing the agent did. No line
+of it can be read as a workflow command. Prints exactly one word on stdout,
+and nothing else:
 
   done      the harness exited 0. What it left in the tree and in DIR
             is for the check and commit verbs to read; this verb does
@@ -189,19 +198,36 @@ func runImplement(args []string) int {
 
 	// --- the agent ------------------------------------------------------------
 	//
-	// Both of the harness's streams go to stderr: the run log gets every
-	// byte, and stdout here is exactly one word.
-	fmt.Fprintf(os.Stderr, "implement: running %v in %s\n", argv, root)
+	// Both of the harness's streams go to stderr, line by line as they arrive,
+	// shown in the format harness.output names (internal/runlog): the run log
+	// follows the agent while it works, and stdout here is exactly one word.
+	// Every line is printed so that it cannot be read as a workflow command,
+	// because the harness's output is steered by the issue's text.
+	//
+	// The streams reach the log through pipes this process reads, and a
+	// harness can exit leaving a process of its own holding them open. Wait
+	// would then wait for that process too, for as long as it lives. So once
+	// the harness has exited, its output is read for harnessWaitDelay more and
+	// no longer; the harness's own exit status still decides the word.
+	format := cfg.Schema.Harness.Output
+	shown := runlog.NewHarness(os.Stderr, format)
+	_, _ = fmt.Fprintf(shown.Stderr, "implement: running %v in %s, its output shown as %s (harness.output)\n", argv, root, format)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
 	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = shown.Stdout
+	cmd.Stderr = shown.Stderr
+	cmd.WaitDelay = harnessWaitDelay
 	runErr := cmd.Run()
+	shown.Close()
 	var exit *exec.ExitError
 	switch {
 	case runErr == nil:
 		fmt.Fprintln(os.Stderr, "implement: the harness finished")
+		fmt.Println("done")
+		return 0
+	case errors.Is(runErr, exec.ErrWaitDelay):
+		fmt.Fprintf(os.Stderr, "implement: the harness finished; something it started still held its output after %s, and is no longer shown\n", harnessWaitDelay)
 		fmt.Println("done")
 		return 0
 	case errors.As(runErr, &exit):

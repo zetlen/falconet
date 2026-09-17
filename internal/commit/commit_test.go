@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -525,5 +526,35 @@ func check(t *testing.T, f any) {
 	t.Helper()
 	if err := quick.Check(f, &quick.Config{MaxCount: 5000}); err != nil {
 		t.Error(err)
+	}
+}
+
+// failure-kind.txt is read by machine, so each word is one the workflow can
+// carry on one line, each names one refusal, and the guards are exactly the
+// refusals of a change for what it is.
+func TestKinds(t *testing.T) {
+	word := regexp.MustCompile(`^[a-z]+(-[a-z]+)*$`)
+	seen := map[Kind]bool{}
+	guards := map[Kind]bool{
+		KindGitMachinery: true, KindRename: true, KindConfigFile: true,
+		KindPaths: true, KindContent: true, KindSecret: true,
+	}
+	for _, k := range Kinds {
+		if seen[k] {
+			t.Errorf("%s is in Kinds twice", k)
+		}
+		seen[k] = true
+		if !word.MatchString(string(k)) {
+			t.Errorf("%q is not a lowercase hyphenated word", k)
+		}
+		if k.Guard() != guards[k] {
+			t.Errorf("%s: Guard() = %v", k, k.Guard())
+		}
+	}
+	if len(seen) != 9 {
+		t.Errorf("Kinds has %d entries, want the six guards and the three ways to have nothing to commit", len(seen))
+	}
+	if Kind("parked").Guard() {
+		t.Error("a word that is not a kind is a guard")
 	}
 }

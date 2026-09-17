@@ -60,7 +60,11 @@ Outputs, written into DIR (default: handoff_dir from config, .falconet/ at
 the root of the repository):
   commit-subject.txt   the message's first line — the pull-request TITLE
   commit-body.md       the rest of the message — the pull-request BODY
-  failure-reason.txt   written only on failure
+  failure-reason.txt   written only on failure: why, for the requester
+  failure-kind.txt     written only on failure: one word naming which
+                       refusal it was — git-machinery, rename, config-file,
+                       paths, content or secret for a guard; unchanged,
+                       no-message or empty-change for nothing to commit
 
 Exit codes: 0 = an outcome was determined and printed
             1 = git or the secret scan refused; nothing is printed,
@@ -157,14 +161,25 @@ func runCommit(args []string) int {
 	questions := filepath.Join(out, "needs-info.md")
 	message := filepath.Join(out, "commit-msg.txt")
 	reasonFile := filepath.Join(out, "failure-reason.txt")
-	if err := os.Remove(reasonFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "falconet: cannot remove %s: %v\n", reasonFile, err)
-		return 1
+	kindFile := filepath.Join(out, "failure-kind.txt")
+	// Both are removed before anything is decided: the handoff directory is
+	// the agent's to write, and a kind this run did not name must not be
+	// read as this run's.
+	for _, stale := range []string{reasonFile, kindFile} {
+		if err := os.Remove(stale); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "falconet: cannot remove %s: %v\n", stale, err)
+			return 1
+		}
 	}
 
 	// A failure is an outcome, not an error: print the word, exit 0, let the
-	// workflow route it.
-	giveUp := func(text string) int {
+	// workflow route it. The kind is written first, so a reason on disk
+	// always has its kind beside it.
+	giveUp := func(kind commit.Kind, text string) int {
+		if err := os.WriteFile(kindFile, []byte(string(kind)+"\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", kindFile, err)
+			return 1
+		}
 		if err := os.WriteFile(reasonFile, []byte(text), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "falconet: cannot write %s: %v\n", reasonFile, err)
 			return 1
@@ -196,7 +211,7 @@ func runCommit(args []string) int {
 			return 1, true
 		}
 		if hit {
-			return giveUp(commit.ReasonSecret(found)), true
+			return giveUp(commit.KindSecret, commit.ReasonSecret(found)), true
 		}
 		return 0, false
 	}
@@ -211,7 +226,7 @@ func runCommit(args []string) int {
 	// any of them is refused here, before the first git command, and the
 	// commands themselves are hardened besides (internal/gitsafe).
 	if reason := gitsafe.Untrusted(root); reason != "" {
-		return giveUp(commit.ReasonUntrustedGit(reason))
+		return giveUp(commit.KindGitMachinery, commit.ReasonUntrustedGit(reason))
 	}
 
 	// --- what did the agent leave behind? ---------------------------------
@@ -228,7 +243,7 @@ func runCommit(args []string) int {
 	}
 	changed, renamed := commit.ParseStatus(listing)
 	if renamed != nil {
-		return giveUp(commit.ReasonRename(renamed.Code, renamed.Path))
+		return giveUp(commit.KindRename, commit.ReasonRename(renamed.Code, renamed.Path))
 	}
 
 	// --- the guard's own configuration ------------------------------------
@@ -238,7 +253,7 @@ func runCommit(args []string) int {
 	// tree is the agent's. Before that policy decides anything, refuse a
 	// change to the file it came from — whatever that file now says.
 	if path, hit := commit.ConfigChanged(cfg.File, root, changed); hit {
-		return giveUp(commit.ReasonConfigChanged(path))
+		return giveUp(commit.KindConfigFile, commit.ReasonConfigChanged(path))
 	}
 
 	// --- the allowlist ------------------------------------------------------
@@ -283,10 +298,10 @@ func runCommit(args []string) int {
 	// escalate and asked a question should fail loudly rather than park
 	// quietly.
 	if len(denied) > 0 {
-		return giveUp(commit.ReasonDeniedPaths(policy.Allow, denied))
+		return giveUp(commit.KindPaths, commit.ReasonDeniedPaths(policy.Allow, denied))
 	}
 	if len(contentDenied) > 0 {
-		return giveUp(commit.ReasonDeniedContent(contentDenied))
+		return giveUp(commit.KindContent, commit.ReasonDeniedContent(contentDenied))
 	}
 
 	// Above both needs-info exits, for the same reason the two refusals above
@@ -302,7 +317,7 @@ func runCommit(args []string) int {
 			fmt.Println("needs-info")
 			return 0
 		}
-		return giveUp(commit.ReasonUnchanged())
+		return giveUp(commit.KindUnchanged, commit.ReasonUnchanged())
 	}
 
 	if !nonEmptyFile(message) {
@@ -310,7 +325,7 @@ func runCommit(args []string) int {
 			fmt.Println("needs-info")
 			return 0
 		}
-		return giveUp(commit.ReasonNoMessage(filepath.Join(filepath.Base(out), "commit-msg.txt"), changed))
+		return giveUp(commit.KindNoMessage, commit.ReasonNoMessage(filepath.Join(filepath.Base(out), "commit-msg.txt"), changed))
 	}
 
 	// --- commit ---------------------------------------------------------------
@@ -340,7 +355,7 @@ func runCommit(args []string) int {
 	var exit *exec.ExitError
 	switch err := quiet.Run(); {
 	case err == nil:
-		return giveUp(commit.ReasonEmptyStaged(changed))
+		return giveUp(commit.KindEmptyChange, commit.ReasonEmptyStaged(changed))
 	case errors.As(err, &exit) && exit.ExitCode() == 1:
 		// Something is staged. Carry on.
 	default:

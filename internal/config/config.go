@@ -36,15 +36,19 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/zetlen/falconet/internal/runlog"
 )
 
 // Defaults is the schema with every default, as one JSON document. Every key
-// in docs/decisions.md is here but prompts, so a verb never has to ask
-// whether a key is set. Two have no usable default: paths.allow is an empty
-// list (an allowlist the operator did not write is a choice made for them —
-// the commit verb refuses to run without one), and prompts is absent (the
-// shipped prompts are embedded in the binary, so an absent key means exactly
-// that). See Schema.Prompts and Schema.Paths.
+// in docs/decisions.md is here but prompts and harness.output, so a verb
+// never has to ask whether a key is set. paths.allow has no usable default:
+// it is an empty list (an allowlist the operator did not write is a choice
+// made for them — the commit verb refuses to run without one). prompts is
+// absent (the shipped prompts are embedded in the binary, so an absent key
+// means exactly that). harness.output is absent because its default depends
+// on whether the file names a harness.command; Load resolves it. See
+// Schema.Prompts, Schema.Paths and Schema.Harness.
 const Defaults = `{
   "handoff_dir": ".falconet",
   "issue": {
@@ -72,7 +76,8 @@ const Defaults = `{
       "--permission-mode", "dontAsk",
       "--model", "claude-opus-5",
       "--allowedTools", "Read,Edit,Write,Grep,Glob",
-      "--max-turns", "40"
+      "--max-turns", "40",
+      "--output-format", "stream-json", "--verbose"
     ]
   }
 }`
@@ -118,8 +123,18 @@ type Schema struct {
 	// command that meets the implement contract (README, "The implement
 	// contract") may replace it. Empty is refused: a pipeline with no agent
 	// in it is a misconfiguration, not a pass.
+	//
+	// Output is the format the harness prints, which is how implement shows
+	// it in the run log: one of runlog.Formats. falconet knows formats, not
+	// harnesses. Load resolves it, and it is never empty afterwards: the
+	// file's own value when it has one; otherwise `text` when the file names
+	// a harness.command, because a command the operator chose prints what it
+	// prints, and reading it as the default's JSON would be a guess; and
+	// otherwise `claude-stream-json`, which is what the default command
+	// prints.
 	Harness struct {
 		Command []string `json:"command"`
+		Output  string   `json:"output"`
 	} `json:"harness"`
 	// Prompts is keyed by prompt name with `-` folded to `_`, and is a map
 	// because `falconet prompt <name>` looks names up dynamically. It has no
@@ -172,12 +187,13 @@ func Load(explicit string) (*Config, error) {
 		return nil, fmt.Errorf("the built-in defaults are not valid JSON: %v", err)
 	}
 
+	var user map[string]any
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s cannot be read: %v", path, err)
 		}
-		user, err := parseObject(raw)
+		user, err = parseObject(raw)
 		if err != nil {
 			// The message names OUR file rather than leaving a bare parse
 			// error in a log with nothing around it.
@@ -186,11 +202,47 @@ func Load(explicit string) (*Config, error) {
 		doc = Merge(doc, user)
 	}
 
+	if err := resolveOutput(doc, user); err != nil {
+		return nil, fmt.Errorf("%s: %v", orDefault(path, "the built-in defaults"), err)
+	}
+
 	cfg := &Config{File: path, Doc: doc}
 	if err := cfg.decodeSchema(); err != nil {
 		return nil, fmt.Errorf("%s does not match the schema: %v", orDefault(path, "the built-in defaults"), err)
 	}
 	return cfg, nil
+}
+
+// resolveOutput writes harness.output into the merged document: the file's
+// value, refused unless it is a format falconet knows; else `text` when the
+// file sets harness.command; else `claude-stream-json`, the default
+// command's format. See Schema.Harness.
+func resolveOutput(doc, user map[string]any) error {
+	harness, ok := doc["harness"].(map[string]any)
+	if !ok {
+		// Not an object: the schema decode refuses it by name.
+		return nil
+	}
+	userHarness, _ := user["harness"].(map[string]any)
+	if v, set := userHarness["output"]; set {
+		format, ok := v.(string)
+		if !ok || !runlog.Known(format) {
+			return fmt.Errorf("harness.output is %s; it must be one of %s",
+				Raw(v), strings.Join(runlog.Formats, ", "))
+		}
+		return nil
+	}
+	out := make(map[string]any, len(harness)+1)
+	for k, v := range harness {
+		out[k] = v
+	}
+	if _, set := userHarness["command"]; set {
+		out["output"] = runlog.Text
+	} else {
+		out["output"] = runlog.ClaudeStreamJSON
+	}
+	doc["harness"] = out
+	return nil
 }
 
 func orDefault(s, d string) string {

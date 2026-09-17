@@ -134,7 +134,7 @@ What the harness must leave:
 
 A harness that exits non-zero has failed mechanically, and the run ends in a
 hand-off. The default configuration runs the Claude Code CLI with the five
-file tools and a 40-turn cap:
+file tools and a 40-turn cap, printing its session as JSON events:
 
 ```json
 "harness": {
@@ -142,9 +142,23 @@ file tools and a 40-turn cap:
               "--permission-mode", "dontAsk",
               "--model", "claude-opus-5",
               "--allowedTools", "Read,Edit,Write,Grep,Glob",
-              "--max-turns", "40"]
+              "--max-turns", "40",
+              "--output-format", "stream-json", "--verbose"],
+  "output": "claude-stream-json"
 }
 ```
+
+What the harness prints on stdout and stderr goes to the run log a line at a
+time, while it runs. `harness.output` names the format its stdout is in, and
+falconet knows formats, not harnesses. `text` is shown as it arrives.
+`claude-stream-json` is shown as one line for each thing the agent did: its
+words, each tool call with the path or pattern it named, each tool call that
+failed, and a last line with the turns, the time and the cost, which says
+when the session stopped at the turn cap. Long text is cut with a marker. A
+line that is not JSON is shown as text. No line from the harness can act as
+a workflow command: every `##[` in a line is shown as `##\[`, and a line that
+starts with `::` is shown behind `> `. The format changes only what the log
+shows. The contract above is the same for every format.
 
 The default pins the model it runs, and a `harness.command` of your own
 should pin its model too: the same issue produces the same kind of pull
@@ -370,6 +384,7 @@ Every key, with its default:
 | `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. In an OpenTofu repository this is where `data "external"`, `provisioner`, `templatefile(` and `file(` go: the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
 | `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
 | `harness.command` | the Claude Code CLI, as shown under [the implement contract](#the-implement-contract) | The agent, as an argv run with no shell from the repository root, with the rendered prompt on its stdin. Any program meeting the contract. Empty is refused. The default pins the model; a `harness.command` of your own should pin its model too, so the same issue produces the same kind of pull request across runs. |
+| `harness.output` | `claude-stream-json` when the file sets no `harness.command`; `text` when it sets one | The format the harness prints on stdout, which is how the run log shows it: `text` or `claude-stream-json`. A file that names a command of its own gets `text` unless it names a format too, so a command you chose is never read as the default's JSON. Any other value is refused. The run log's `implement: running` line names the format in use. |
 | `issue.queue_label` | `falconet` | The label that queues an issue, applied by a person with write access. A label event for any other label is not a way in. |
 | `issue.blocking_labels` | `needs-info`, `ready-for-human`, `do-not-apply`, `wontfix` | Any of these present and the issue is ineligible. Need not exist. |
 | `issue.opt_out_text` | `Not eligible for AI agents` | A ticked checkbox with this text makes the issue ineligible. |
@@ -524,6 +539,7 @@ Then watch. `gh run watch` follows it, or the Actions tab:
 | next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then the pull request. |
 | within ~15 minutes, or ~45 with three passes | One of exactly three endings on the issue, below. |
 | always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
+| at the end | The run's page carries one panel: how the run ended (pull request, question, hand-off, the guard that refused, not started and why, failed in which job, or stopped in which job, cancelled or out of time), the issue, the branch, the agent passes used of `max-attempts`, and the check's last word. **gate** writes it when the run ends there, and **contain** on every other run. |
 
 The three endings:
 
@@ -573,6 +589,7 @@ to be fixed before the next request.
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
 | `paths.allow is empty — set it in .github/falconet.json` in the Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
 | Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
+| `harness.output is …; it must be one of text, claude-stream-json` in a verb's step | `harness.output` names a format falconet does not know. | Step 6: `text`, `claude-stream-json`, or no key. |
 | `check: could not run [...]` in the agent job's loop step, and the run ends in **contain**'s hand-off | `check.command` names a program the runner does not have, or its first element is not on `PATH`. A check that could not run is neither a pass nor a failure the agent can act on, so the job stops. | Step 6: an argv the runner can start, or install it in `harness-setup`. Test it with `falconet check` from a clean checkout. |
 | `implement: could not run [...]` or `implement: the harness failed` in the loop step, and the run ends in **contain**'s hand-off | `harness.command` names a program the agent job does not have, or the harness exited non-zero: a bad model key, a model outage, a crash. The harness's own output is above the line. | `harness-setup` installs what `harness.command` names; the key is stored under the name `model-api-key-env` says. Test it with `falconet implement` from a clean checkout, with the key in your environment. |
 | Paused `ready-for-human`: *the repository's own check fails on it and I could not get it passing* | The agent's change failed `check.command` on every pass it was allowed. The branch is pushed and the check's output is in the comment. | Read the output. A check that fails on the base tree too fails every run; fix that first. |
@@ -612,6 +629,13 @@ to be fixed before the next request.
   the caller's `if:` lets through still starts a gate job, and on a public
   repository a self-hosted runner is exposed to that; the forge's interaction limits are what slow a
   flood.
+- **The run's panel is falconet's only under gate and contain.** Code the
+  agent job runs, a harness with a shell or the repository's check, can
+  write to the implement job's own step summary. falconet writes its panel
+  from gate or contain, and only a panel under one of those two jobs is
+  falconet's.
+- **A run whose gate never started has no panel.** A caller's `if:` that
+  skips the gate, or a `startup_failure`, leaves the run page empty.
 - **Never put issue text in `args`.** If you call `action.yml` directly, its
   `args` input is split on whitespace and reaches a shell. Issue titles,
   bodies and comments are attacker-controlled, and the reason every verb

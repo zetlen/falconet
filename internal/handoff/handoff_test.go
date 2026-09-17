@@ -3,6 +3,7 @@ package handoff
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zetlen/falconet/internal/config"
@@ -141,6 +142,82 @@ func TestGitHubEnvAppend(t *testing.T) {
 		t.Setenv("GITHUB_ENV", filepath.Join(dir, "empty_value"))
 		if err := GitHubEnvAppend("PUSHED_BRANCH="); err != nil {
 			t.Error(err)
+		}
+	})
+}
+
+// readOutputs parses $GITHUB_OUTPUT the way the runner does, both forms, so
+// a value is asserted on what a later step would see.
+func readOutputs(t *testing.T, text string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		if name, delim, ok := strings.Cut(line, "<<"); ok && !strings.Contains(name, "=") {
+			var value []string
+			for i++; i < len(lines) && lines[i] != delim; i++ {
+				value = append(value, lines[i])
+			}
+			if i == len(lines) {
+				t.Fatalf("delimiter %q never closes", delim)
+			}
+			out[name] = strings.Join(value, "\n")
+			continue
+		}
+		name, value, _ := strings.Cut(line, "=")
+		out[name] = value
+	}
+	return out
+}
+
+func TestGitHubOutputAppend(t *testing.T) {
+	dir := t.TempDir()
+	t.Run("unset: a silent no-op", func(t *testing.T) {
+		t.Setenv("GITHUB_OUTPUT", "")
+		if err := GitHubOutputAppend("reason", "x"); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run("a value that would end a name=value line, or pose as the next output, stays one value", func(t *testing.T) {
+		path := filepath.Join(dir, "gh_output")
+		t.Setenv("GITHUB_OUTPUT", path)
+		values := map[string]string{
+			"reason":  "issue #4 carries the blocking label 'x\noutcome=ready'\n",
+			"second":  "EOF\nFALCONET_\n<<",
+			"outcome": "ineligible",
+		}
+		for _, name := range []string{"reason", "second", "outcome"} {
+			if err := GitHubOutputAppend(name, values[name]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := readOutputs(t, string(raw))
+		want := map[string]string{
+			"reason":  "issue #4 carries the blocking label 'x\noutcome=ready'",
+			"second":  "EOF\nFALCONET_\n<<",
+			"outcome": "ineligible",
+		}
+		if len(got) != len(want) {
+			t.Errorf("outputs %q, want %q", got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s = %q, want %q", k, got[k], v)
+			}
+		}
+	})
+	t.Run("refused: a name that is not one", func(t *testing.T) {
+		t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "refused"))
+		if err := GitHubOutputAppend("a\nb", "x"); err == nil {
+			t.Error("expected an error")
 		}
 	})
 }

@@ -268,6 +268,196 @@ assert_eq 3 "$(grep -cE '^ *[a-z]+="\$\(gh ' <<<"$contain_job")" "captured gh an
 it "and reads gh's JSON with gh's own template, because jq is no longer a dependency"
 assert_eq 3 "$(grep -c -- '--template' <<<"$contain_job")" "gh --template uses in contain"
 
+# --- the run's panel ----------------------------------------------------------
+#
+# One panel on the run's page for every run whose gate ran: gate writes it
+# when prepare did not say ready, contain whenever prepare did, and no other
+# job writes one. The two conditions turn on the same word, so exactly one
+# holds. A report never changes an outcome, so each step continues on error.
+
+# One step's text, comments stripped, from its name to the next step.
+step() { # job-text name
+  awk -v n="$2" 'index($0, "- name: " n) { f = 1; print; next } f && /^      - / { exit } f' <<<"$1"
+}
+# The body of a step's `run: |` block, as the shell will see it.
+run_block() { # step-text
+  awk '/^        run: \|$/ { f = 1; next } f { sub(/^          /, ""); print }' <<<"$1"
+}
+
+gate_summary="$(step "$gate_job" "Summarise the run")"
+contain_summary="$(step "$contain_job" "Summarise the run")"
+
+it "falconet summary runs in two steps, gate's and contain's, and in no other job"
+assert_eq 2 "$(grep -c 'falconet summary' <<<"$wf_code")" "summary invocations"
+assert_contains "$gate_summary" "exec falconet summary --job gate" "gate's panel step"
+assert_contains "$contain_summary" "exec falconet summary --job contain" "contain's panel step"
+
+# The break: gate's panel on `always()` alone, which writes a second panel on
+# every run contain also describes; or contain's job condition loosened, which
+# writes a second panel on a run gate described.
+it "gate writes it exactly when prepare did not say ready, and contain exactly when it did"
+assert_contains "$gate_summary" "if: always() && steps.prepare.outputs.outcome != 'ready'" "gate's panel step"
+assert_contains "$contain_job" "if: always() && needs.gate.outputs.outcome == 'ready'" "contain's job condition"
+assert_contains "$contain_summary" "if: always()" "contain's panel step"
+assert_eq 1 "$(grep -c '^        if:' <<<"$contain_summary")" "conditions on contain's panel step"
+
+it "and neither step can fail its job"
+assert_contains "$gate_summary" "continue-on-error: true" "gate's panel step"
+assert_contains "$contain_summary" "continue-on-error: true" "contain's panel step"
+
+# The break: an install on the implicit success(), so a failed token or
+# checkout, or a cancel, leaves the panel step no binary and the panel one
+# fixed line.
+it "and each job's install runs after a failed step and on a cancelled run, so the panel has a binary"
+assert_contains "$(step "$gate_job" "Install falconet and gitleaks")" "if: always()" "gate's install"
+assert_contains "$(step "$contain_job" "Install falconet and gitleaks")" "if: always()" "contain's install"
+
+# The break: an env line dropped or pointed elsewhere, which the panel reads as
+# a fact that did not arrive: no passes of the cap, no pause, no stopped job.
+it "the panel steps hand over the job's own status, and contain's inputs, check and pause"
+for st in "$gate_summary" "$contain_summary"; do
+  assert_contains "$st" 'FALCONET_ISSUE: ${{ inputs.issue }}' "a panel step"
+  assert_contains "$st" 'FALCONET_JOB_STATUS: ${{ job.status }}' "a panel step"
+done
+assert_contains "$contain_summary" 'FALCONET_MAX_ATTEMPTS: ${{ inputs.max-attempts }}' "contain's panel step"
+assert_contains "$contain_summary" 'FALCONET_CHECK: ${{ steps.check.outcome }}' "contain's panel step"
+assert_contains "$contain_summary" 'FALCONET_PAUSE: ${{ steps.pause.outcome }}' "contain's panel step"
+
+# The break: toJSON(steps) in contain, which hands the App token to the panel's
+# process; or a secret named in either step.
+it "the panel is handed job results and outputs, never a job's whole steps context or a secret"
+assert_contains "$contain_summary" 'FALCONET_NEEDS: ${{ toJSON(needs) }}' "contain's panel step"
+assert_contains "$gate_summary" 'FALCONET_PREPARE: ${{ toJSON(steps.prepare) }}' "gate's panel step"
+assert_eq 0 "$(grep -c 'toJSON(steps)\|secrets\.\|steps.token' <<<"$gate_summary$contain_summary")" "steps contexts and secrets in the panel steps"
+
+it "the jobs report what the panel reads, from outputs, not from the log"
+assert_contains "$implement_job" 'passes: ${{ steps.loop.outputs.passes }}' "the implement job's outputs"
+assert_contains "$implement_job" 'kind: ${{ steps.kind.outputs.kind }}' "the implement job's outputs"
+assert_contains "$publish_job" 'pr: ${{ steps.pr.outputs.url }}' "the publish job's outputs"
+assert_contains "$(step "$implement_job" "Read which refusal it was")" ".falconet/failure-kind.txt" "the kind step"
+assert_contains "$(grep -A4 '^  reason:$' <<<"$action_code")" 'value: ${{ steps.run.outputs.reason }}' "the action's reason output"
+
+# A step context names a step by its id, and one with no such id reads as
+# empty: the job's `failed` output, contain's pause outcome, the pull request.
+# The break: an `id:` removed or renamed while an expression still names it.
+it "every step a job's expressions name has that id in the same job"
+for j in gate implement publish contain; do
+  jt="$(job "$j")"
+  named="$(grep -oE 'steps\.[a-z][a-z0-9_-]*\.' <<<"$jt" | sed 's/^steps\.//; s/\.$//' | sort -u)"
+  for id in $named; do
+    assert_eq 1 "$(grep -cE "^ +id: $id\$" <<<"$jt")" "$j: steps named $id"
+  done
+done
+
+# The step a job's `failed` output names is a word the panel knows, written
+# once in the workflow and once in internal/summary. The break: either side
+# renamed, or the expression emptied, and the panel says "the step that
+# failed is named" a word, or nothing.
+it "each job's failed output names its steps, in words the panel turns into step names"
+for pair in "implement:loop commit" "publish:push pr"; do
+  j="${pair%%:*}"
+  expr="$(grep -E '^      failed: ' <<<"$(job "$j")")"
+  words="$(grep -oE "&& '[a-z-]+'" <<<"$expr" | sed "s/^&& '//; s/'\$//" | tr '\n' ' ')"
+  assert_eq "${pair#*:} " "$words" "$j's failed output"
+  for w in $words; do
+    panel="$(env -i PATH=/usr/bin:/bin FALCONET_ISSUE=42 \
+      FALCONET_NEEDS="{\"gate\":{\"result\":\"success\",\"outputs\":{\"outcome\":\"ready\"}},\"$j\":{\"result\":\"failure\",\"outputs\":{\"failed\":\"$w\"}}}" \
+      "$FALCONET" summary --job contain 2>/dev/null)"
+    assert_contains "$panel" "The step that failed: " "the panel for $j failing at $w"
+  done
+done
+
+# Run, not read: the pull request step under the runner's shell, with gh
+# printing a notice before the address. The break: the whole of gh's output
+# as the step's url, which the panel then cannot link.
+pr_body="$(run_block "$(step "$publish_job" "Open the pull request")")"
+mkdir -p "$WORK/prbin" "$WORK/prtree/.falconet"
+printf '#!/usr/bin/env bash\necho pr-label\n' >"$WORK/prbin/falconet"
+printf '#!/usr/bin/env bash\necho "Warning: 1 uncommitted change"\necho https://github.com/acme/infra/pull/57\n' >"$WORK/prbin/gh"
+chmod +x "$WORK/prbin/falconet" "$WORK/prbin/gh"
+echo "docs: a subject" >"$WORK/prtree/.falconet/commit-subject.txt"
+: >"$WORK/pr-output"
+( cd "$WORK/prtree" && env -i PATH="$WORK/prbin:/usr/bin:/bin" GITHUB_OUTPUT="$WORK/pr-output" \
+  BASE_BRANCH=main PUSHED_BRANCH=issue-42-x FALCONET_CONFIG_FLAG= bash -eo pipefail -c "$pr_body" >/dev/null )
+it "the pull request step's url output is the address gh printed last"
+assert_eq "url=https://github.com/acme/infra/pull/57" "$(cat "$WORK/pr-output")" "GITHUB_OUTPUT"
+
+# The break: a fallback that interpolates something, which is text from
+# outside rendered as markdown, or no fallback, which is no panel when the
+# install failed.
+it "without falconet each step writes one fixed line to the summary, and exits 0"
+for st in "$gate_summary" "$contain_summary"; do
+  body="$(run_block "$st")"
+  assert_eq 1 "$(grep -c 'GITHUB_STEP_SUMMARY' <<<"$body")" "summary writes in the fallback"
+  assert_eq 0 "$(grep -v 'exec falconet summary' <<<"$body" | sed 's/"\$GITHUB_STEP_SUMMARY"//' | grep -c '\$')" "expansions in the fallback but the summary file's"
+  : >"$WORK/step-summary"
+  ( cd "$WORK" && env -i PATH=/usr/bin:/bin GITHUB_STEP_SUMMARY="$WORK/step-summary" bash -eo pipefail -c "$body" )
+  assert_eq "0 1" "$? $(grep -c '^### falconet: no summary' "$WORK/step-summary")" "exit code, and fallback panels written"
+done
+
+# --- groups fold the detail, and the decision is outside them -----------------
+#
+# A group is an echo on each side of a verb, with nothing between the verb and
+# the log: output streams as it arrives. The word that decides is printed
+# after the group closes. A pipe or a tee in the loop would buffer the agent's
+# output or hang on a process the harness left holding it.
+
+loop_body="$(run_block "$loop_step")"
+action_run="$(awk '/- name: Run$/ { f = 1 } f && /^      run: \|$/ { g = 1; next } g { sub(/^        /, ""); print }' <<<"$action_code")"
+
+it "the loop and the action's Run step open as many groups as they close"
+assert_eq "$(grep -c '::group::' <<<"$loop_body")" "$(grep -c 'echo "::endgroup::"; open=' <<<"$loop_body")" "the loop's groups"
+assert_eq 2 "$(grep -c '::group::' <<<"$loop_body")" "groups in the loop: a pass and a check"
+assert_eq "1 1" "$(grep -c '::group::' <<<"$action_run") $(grep -c '::endgroup::' <<<"$action_run")" "the Run step's groups"
+
+it "and nothing in the loop or the Run step is piped or teed"
+assert_eq 0 "$(grep -v '^ *#' <<<"$loop_body$action_run" | grep -cE '(^|[^|])\|([^|]|$)|\btee\b')" "pipes and tees"
+
+it "and the word each verb said is printed after its group closes"
+assert_contains "$(grep -A1 'said="$(falconet implement' <<<"$loop_body" | tail -1)" 'echo "::endgroup::"' "after implement"
+assert_contains "$(grep -A2 'word="$(falconet check' <<<"$loop_body" | tail -1)" 'echo "check: $word"' "after check"
+assert_contains "$(grep -A1 'echo "::endgroup::"' <<<"$action_run")" "printf '%s\n' \"\$outcome\"" "after the Run step's verb"
+
+# Run, not read: the loop body under the runner's own shell, with a falconet
+# stub. The break: the trap dropped, so a pass whose implement fails leaves
+# its group open over everything the job prints next.
+loop_run() { # stub-body -> sets LOG and OUTPUTS
+  mkdir -p "$WORK/loopbin"
+  printf '#!/usr/bin/env bash\n%s\n' "$1" >"$WORK/loopbin/falconet"
+  chmod +x "$WORK/loopbin/falconet"
+  : >"$WORK/loop-output"; : >"$WORK/loop-count"
+  LOG="$(cd "$WORK" && env -i PATH="$WORK/loopbin:/usr/bin:/bin" GITHUB_OUTPUT="$WORK/loop-output" \
+    MAX_ATTEMPTS=2 MODEL_API_KEY_ENV=MODEL_KEY MODEL_API_KEY=k FALCONET_CONFIG_FLAG= COUNT="$WORK/loop-count" \
+    bash -eo pipefail -c "$loop_body" 2>&1)"
+  OUTPUTS="$(cat "$WORK/loop-output")"
+}
+
+loop_run 'case "$1" in implement) echo "agent line" >&2; echo done ;; check) echo x >>"$COUNT"; [ "$(wc -l <"$COUNT")" -ge 2 ] && echo pass || echo fail ;; esac'
+it "the loop, run: a group per pass and per check, each word after its group, the passes recorded"
+assert_eq "::group::Agent pass 1 of 2
+agent line
+::endgroup::
+implement: done
+::group::Check after pass 1
+::endgroup::
+check: fail
+::group::Agent pass 2 of 2
+agent line
+::endgroup::
+implement: done
+::group::Check after pass 2
+::endgroup::
+check: pass" "$LOG" "the log"
+assert_eq "check=pass
+passes=2" "$OUTPUTS" "GITHUB_OUTPUT"
+
+loop_run 'case "$1" in implement) echo "the harness failed" >&2; exit 1 ;; esac'
+it "and a verb that fails inside a group still closes it, and the passes are recorded"
+assert_eq "::group::Agent pass 1 of 2
+the harness failed
+::endgroup::" "$LOG" "the log"
+assert_eq "passes=1" "$OUTPUTS" "GITHUB_OUTPUT"
+
 # --- the review protocol stays unwired -------------------------------------
 
 it "the workflow names review-verdict zero times"

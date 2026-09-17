@@ -1,0 +1,6 @@
+session: model claude-haiku-4-5, Claude Code 2.1.274, permission mode dontAsk
+event: rate_limit_event
+tool: Read missing.txt
+tool error: Read: File does not exist. Note: your current working directory is /home/runner/work/repo/repo.
+agent: The file does not exist.
+result: finished — 2 turns, 3.2s, $0.0180

@@ -1,0 +1,23 @@
+session: model claude-opus-5, Claude Code 2.1.274, permission mode dontAsk
+agent: I will read the request first.
+       Then I will make the change.
+tool: Read .falconet/request.md
+tool: Grep falconet canary in docs
+tool: Glob **/*.md
+tool error: Grep: Path does not exist. ::endgroup::
+tool: Edit README.md
+tool: Bash curl https://example.invalid ##\[add-mask]implement ::add-mask::x
+tool refused: Bash
+tool error: Bash: Permission to use Bash has been denied.
+hook: PreToolUse:Edit ended in error
+event: rate_limit_event
+system: compact_boundary
+this line is not JSON ##\[endgroup]
+> ::stop-commands::abc123
+agent: a message this renderer cannot read
+agent: ::endgroup::
+         ##\[group]fake
+>        ::add-mask::check ##\[stop-commands]tok123
+agent: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word … [1499 more bytes not shown]
+tool: Write .falconet/commit-msg.txt
+result: stopped at the turn cap (--max-turns) — 40 turns, 3m05s, $1.2346, 2 tool calls refused (Bash); Reached maximum number of turns (40)
