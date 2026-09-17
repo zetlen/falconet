@@ -3,9 +3,9 @@
 What the operator does, what only the operator can do, and where the pieces
 live.
 
-## Two things an agent cannot do for you
+## Three things an agent cannot do for you
 
-Both are credentials. Ask for them when they are needed; do not attempt to
+All three are credentials. Ask for them when they are needed; do not attempt to
 create GitHub resources, register apps, or mint keys on the operator's
 behalf. The operator makes each one by hand, at the keyboard, following the
 README's steps, and puts it into a repository secret by hand.
@@ -23,6 +23,10 @@ the `.pem` is deleted once the secret holds it.
 The App token also carries a property `GITHUB_TOKEN` lacks: pull requests
 opened with `GITHUB_TOKEN` do not trigger workflows, so CI never runs on
 them, while pushes authenticated with an App token trigger them normally.
+
+**A token for the release pull request.** `RELEASE_PLEASE_TOKEN`, described
+under *Releases* below. The operator mints it on GitHub's **Fine-grained
+personal access tokens** page and sets it with `gh secret set`.
 
 **A dedicated model API key, with a budget alert.** The one secret the agent
 job holds. For the default harness it is an Anthropic API key rather than a
@@ -65,12 +69,17 @@ A version is a release, and release-please cuts it:
    runs `make test`, runs `make assets`, uploads the three archives and
    `checksums.txt`, and publishes the release.
 
-release-please acts with `GITHUB_TOKEN`. It can open the release pull
-request because **Settings → Actions → General → Workflow permissions →
-Allow GitHub Actions to create and approve pull requests** is on. GitHub
-starts no workflow for an event that token caused. So `ci.yml` does not run on the release pull
-request or on the tag, and the `assets` job runs the pin check and the suite
-itself.
+release-please acts with `RELEASE_PLEASE_TOKEN`, a fine-grained personal
+access token scoped to this repository with contents, pull requests and
+workflows write. The workflows permission is what the release pull request
+needs: it rewrites `.github/workflows/falconet.yml`, and GitHub refuses a
+workflow file written with `GITHUB_TOKEN`. That token expires, and a release
+that stops at the release-please step with `Error adding to tree` wants it
+minted again and set with `gh secret set RELEASE_PLEASE_TOKEN`.
+
+Because a personal access token is a person's, `ci.yml` runs on the release
+pull request. A tag push starts no workflow here, so the `assets` job runs
+the pin check and the suite itself.
 
 The repository has immutable releases turned on (**Settings → General →
 Releases**). Once a release is published, its assets cannot be added,
