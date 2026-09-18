@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/zetlen/falconet/compare/v2.0.0...v3.0.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **commit:** `falconet commit` refuses changes to CI, automation and scanner configuration whatever `paths.allow` says. Name a path in `paths.allow_dangerous_access_to` to exempt it.
+
+### Features
+
+* **commit:** run the guards in their own job and refuse changes to CI configuration ([#56](https://github.com/zetlen/falconet/issues/56)) ([eb36010](https://github.com/zetlen/falconet/commit/eb3601053af6f5b5b675836cb8b5cb48f3fd0914))
+
 ## [2.0.0](https://github.com/zetlen/falconet/compare/v1.1.2...v2.0.0) (2026-09-17)
 
 
