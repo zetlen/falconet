@@ -212,7 +212,7 @@ jobs:
       # below needs the binary to say which.
       - name: Install falconet and gitleaks
         if: always()
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
 
       # Eligibility that needs the config is decided here and not in a
       # job-level `if:`, because an `if:` evaluates before checkout and can
@@ -225,7 +225,7 @@ jobs:
       # ineligible and posts nothing.
       - name: Prepare
         id: prepare
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           FALCONET_EVENT_PATH: ${{ github.event_path }}
@@ -377,7 +377,7 @@ jobs:
       # from the runner's action cache, and what it fetches is this public
       # module through the module proxy, with no token.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -550,7 +550,7 @@ jobs:
       # NO checkout in this job either — contract.test.sh holds it. The tree
       # is gate's, shipped without its credential.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -622,7 +622,7 @@ jobs:
       # on a missing scanner.
       - name: Commit
         id: commit
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
         with:
           verb: commit
           setup: 'false'
@@ -717,7 +717,7 @@ jobs:
       # binary, and the binary is a download. It is the only thing that runs
       # before the push, and the work is durable as an artifact throughout.
       - name: Install falconet and gitleaks
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
 
       # Unconditional, and the first verb. Every run leaves its branch on the
       # remote, so a stale branch is ordinary and the collision rename does
@@ -725,7 +725,7 @@ jobs:
       # durable.
       - name: Push
         id: push
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         with:
@@ -878,7 +878,7 @@ jobs:
       # the run's panel below needs the binary on a cancelled run too.
       - name: Install falconet and gitleaks
         if: always()
-        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+        uses: zetlen/falconet@v3.0.0 # x-release-please-version
 
       # Terminal state, or pause. Closed, already paused, or an open PR across
       # either branch prefix all count as terminal; anything else gets a
