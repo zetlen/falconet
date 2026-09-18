@@ -30,7 +30,7 @@ a finding, not a formatting error.
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
 | One panel on the run's page, written by gate or contain from job outputs | I4 | a run whose gate ran ends with no panel or with two, or the panel needs a fact no job output or handoff word can carry | [below](#one-panel-on-the-runs-page) |
-| Packaged as a reusable workflow plus a composite action | I2 | the credentials or setup it demands outgrow the README's eight steps | [below](#a-reusable-workflow-and-a-composite-action) |
+| Packaged as a reusable workflow plus a composite action; the guards run in a job the agent's code never ran in | I2, I3 | the credentials or setup it demands outgrow the README's eight steps, or a CI system offers a way for code in one step to leave the environment of later steps alone | [below](#a-reusable-workflow-and-a-composite-action) |
 | Verbs never call each other; they leave files in `.falconet/` | I1, I4 | the pipeline stops being a job graph | [below](#verbs-never-call-each-other) |
 | The suite holds what only a process shows; Go tests hold the logic | I2, I3 | a property is asserted in both places, or the suite needs a tool the runner lacks | [below](#the-suite-holds-what-only-a-process-shows) |
 | The language is Go | I2, I3 | a guard cannot be expressed safely in it, or the operator stops being able to read the guards | [below](#the-language-is-go) |
@@ -190,7 +190,7 @@ after the loop.
 What feeds back is `check-failure.txt` and nothing else. A guard refusal
 (path allowlist, content denylist, rename, secret scan, the config file
 itself) is terminal, because a guard the agent can iterate against is an
-oracle, not a guard (principle 3), and is decided once, in the commit step,
+oracle, not a guard (principle 3), and is decided once, in the commit job,
 after the loop, where nothing before it reads the answer. Each attempt is a
 fresh agent context on the same prompt: the agent sees the tree with its
 earlier edits, the failure file, and the request, and not its own earlier
@@ -358,7 +358,7 @@ run whose gate ran has one panel, and `contract.test.sh` holds the pair.
 The panel reads job results and outputs and nothing else: `toJSON(needs)`
 in contain, `toJSON(steps.prepare)` in gate, the writing job's own
 `job.status`, and the outcomes of contain's check and pause steps. Which
-guard refused is `failure-kind.txt`'s word, which the implement job reads
+guard refused is `failure-kind.txt`'s word, which the commit job reads
 into an output; why `prepare` said no is its `reason` output. Neither is
 read out of prose or out of the log.
 
@@ -380,10 +380,22 @@ falconet's only under gate or contain.
 ## A reusable workflow and a composite action
 
 `.github/workflows/falconet.yml` (`on: workflow_call`) is the job graph:
-**gate → implement → publish**, with **contain** running whatever happened.
-The boundaries between jobs are the security model: the agent's job holds no
-token, the scripted jobs never run the agent, and App installation tokens are
-minted per step in the jobs that need them. `action.yml` is setup plus
+**gate → implement → commit → publish**, with **contain** running whatever
+happened. The boundaries between jobs are the security model: the agent's
+job holds no token, the scripted jobs never run the agent, the guards run in
+a job the agent's code never ran in, and App installation tokens are minted
+per step in the jobs that need them.
+
+The guards need their own job because a step can write `$GITHUB_ENV` and
+`$GITHUB_PATH`, and every later step in its job runs with what it wrote.
+The repository's check runs code the agent wrote. So the agent's job hands
+its change on as a patch in the handoff directory, and the commit job
+applies it to gate's checkout and judges it with its own git, gitleaks and
+environment. Whatever the agent's job uploads is shaped by the agent; the
+commit job verifies it. The loop's `check` output is the agent job's too,
+and code the check runs can forge it. That decides only whether the run
+opens a pull request or hands off, and the pull request's own checks show
+the real result. `action.yml` is setup plus
 pass-through: it installs gitleaks by version and digest and falconet at
 its own ref, then runs one verb, for a caller that wants a
 verb inside a workflow of its own. Nothing of falconet's is vendored into

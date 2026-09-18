@@ -1,7 +1,7 @@
 # falconet — the documented job graph.
 #
-# gate → implement → publish → contain. Four jobs, and the boundaries between
-# them are the security model rather than a tidy diagram:
+# gate → implement → commit → publish → contain. Five jobs, and the
+# boundaries between them are the security model rather than a tidy diagram:
 #
 #   the AGENT JOB never holds a token. Not a blanked one — none. Blanking
 #   credentials on the agent's step would be best-effort: whether a `uses:`
@@ -9,10 +9,17 @@
 #   a workflow can promise. A job with `permissions: {}` and no secrets:
 #   block is enforced by GitHub.
 #
-#   the SCRIPTED JOBS never run the agent. They hold the token and do the
-#   mechanics — the branch, the guards, the commit, the push, the pull
-#   request — none of which is judgment and none of which an agent should
-#   be able to skip, improvise, or be argued out of.
+#   the SCRIPTED JOBS never run the agent. They do the mechanics — the
+#   branch, the guards, the commit, the push, the pull request — none of
+#   which is judgment and none of which an agent should be able to skip,
+#   improvise, or be argued out of.
+#
+#   the GUARDS run in a job the agent's code never ran in. A step can write
+#   $GITHUB_ENV and $GITHUB_PATH, and every later step in its job runs with
+#   what it wrote; the repository's check runs code the agent wrote. So the
+#   agent job hands its change on as a patch, and the commit job applies it
+#   to gate's checkout and judges it with its own git, its own gitleaks and
+#   its own environment.
 #
 #   the EVIDENCE is somebody else's job. falconet opens the pull request
 #   and stops; what a reviewer reads about the change is posted on it by
@@ -65,7 +72,7 @@
 # A job boundary between the commit and the push opens a window in that
 # guard — a small one, but a real one. Two things close it:
 #
-#   1. `implement` uploads a git BUNDLE of the branch before it ends. The
+#   1. `commit` uploads a git BUNDLE of the branch before it ends. The
 #      bundle outlives the runner, so the work is durable the instant it
 #      exists.
 #   2. `publish`'s first verb is the push. Nothing is posted before the
@@ -181,7 +188,7 @@ jobs:
       # The handoff directory is written INSIDE the consumer's tree — it is
       # where the verbs leave files for each other — and it is an untracked
       # path that two verbs will see: prepare refuses a dirty tree, and
-      # commit, in the implement job, reads `git status --untracked-files=all`
+      # commit, in the commit job, reads `git status --untracked-files=all`
       # on a tree that carries the downloaded handoff and refuses any changed
       # path outside the allowlist. A run in CI must not depend on the
       # consumer's .gitignore knowing the directory's name, so it is excluded
@@ -355,16 +362,14 @@ jobs:
     timeout-minutes: 60
     permissions: {}
     outputs:
-      outcome: ${{ steps.commit.outputs.outcome }}
       # The word of the LAST check that ran. `fail` here means the cap was
       # reached with the check still failing, and publish hands off instead
       # of opening a pull request.
       check: ${{ steps.loop.outputs.check }}
-      # For the run's panel: the passes the loop ran, the refusal commit
-      # named, and which of the two steps failed, if one did.
+      # For the run's panel: the passes the loop ran, and which step failed,
+      # if one did.
       passes: ${{ steps.loop.outputs.passes }}
-      kind: ${{ steps.kind.outputs.kind }}
-      failed: ${{ steps.loop.outcome == 'failure' && 'loop' || steps.commit.outcome == 'failure' && 'commit' || '' }}
+      failed: ${{ steps.loop.outcome == 'failure' && 'loop' || steps.change.outcome == 'failure' && 'change' || '' }}
     steps:
       # NO checkout in this job, ever — contract.test.sh holds it. The
       # repository being worked on cannot be cloned here (see gate's
@@ -413,14 +418,11 @@ jobs:
           path: .falconet
 
       # prepare already opened this branch, and the tar carries it. The
-      # fallback is for a handover that ever arrives detached; the identity is
-      # set here because the commit is made here.
+      # fallback is for a handover that ever arrives detached.
       - name: Take the working branch
         run: |
           set -euo pipefail
           git switch -q "$BRANCH" 2>/dev/null || git switch -qc "$BRANCH"
-          git config user.name  "falconet[bot]"
-          git config user.email "falconet[bot]@users.noreply.github.com"
         env:
           BRANCH: ${{ needs.gate.outputs.branch }}
 
@@ -482,18 +484,137 @@ jobs:
           done
           echo "check=$word" >> "$GITHUB_OUTPUT"
 
-      # Every guard rides here: the checkout's own git machinery (a
-      # .git/config, hook or attributes file that would run a program is
-      # refused before any git runs), the path allowlist, the content
-      # denylist, the secret scan over the agent's drafts and then over the
-      # staged change, and a vetted-path-only `git add`. Every git command
-      # this job runs is hardened besides (internal/gitsafe). A refusal beats
-      # a question: a
+      # The agent's change leaves this job as a patch against the base, and
+      # nothing else of the tree goes with it. Code the check ran in this job
+      # could have written $GITHUB_ENV and $GITHUB_PATH, or anything under
+      # .git, and every later step here would run with what it wrote. So the
+      # guards do not run here: the commit job applies this patch to gate's
+      # checkout, with its own git, and judges it there. What this step
+      # produces is shaped by the agent, like everything else this job
+      # uploads, and the commit job verifies all of it.
+      #
+      # Written INTO the handoff directory, not beside it. An upload naming
+      # two paths is rooted at their least common ancestor — here
+      # `/home/runner/work` — so the archive would arrive as
+      # `<repo>/<repo>/.falconet/…` and the download of `.falconet` would
+      # match nothing. One path, one root.
+      - name: Hand the change to the commit job
+        id: change
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p .falconet
+          git add -A
+          git diff --cached --binary --no-ext-diff --no-textconv "$BASE_SHA" >.falconet/change.patch
+        env:
+          BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: handoff-implement
+          path: .falconet/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # =========================================================================
+  # commit — the guards, in a job the agent's code never ran in
+  # =========================================================================
+  #
+  # The guards are principle 3, and nothing the agent writes may decide them.
+  # This job starts from gate's checkout, not implement's: its .git, its PATH
+  # and its environment are its own, and the one thing that arrives from the
+  # agent's job is the handoff directory, holding the patch and the agent's
+  # drafts. Every guard rides here: the checkout's own git machinery, the
+  # rename refusal, the config file itself, the refusal of CI and automation
+  # configuration, the path allowlist, the content denylist, the secret scan
+  # over the agent's drafts and then over the staged change, and a
+  # vetted-path-only `git add`. Every git command is hardened besides
+  # (internal/gitsafe).
+  #
+  # No token: the commit is local, and the bundle carries it to publish.
+  commit:
+    needs: [gate, implement]
+    if: needs.implement.result == 'success'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    permissions: {}
+    # For the run's panel: commit's word, the refusal it named, and which
+    # step failed, if one did.
+    outputs:
+      outcome: ${{ steps.commit.outputs.outcome }}
+      kind: ${{ steps.kind.outputs.kind }}
+      failed: ${{ steps.take.outcome == 'failure' && 'take' || steps.apply.outcome == 'failure' && 'apply' || steps.commit.outcome == 'failure' && 'commit' || '' }}
+    steps:
+      # NO checkout in this job either — contract.test.sh holds it. The tree
+      # is gate's, shipped without its credential.
+      - name: Install falconet and gitleaks
+        uses: zetlen/falconet@v2.0.0 # x-release-please-version
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: source-gate
+          path: ${{ runner.temp }}/source
+
+      # As in implement: fail closed on a tree that is not the one the gate
+      # planned. The branch prepare opened travels in the tar, and the
+      # identity is set here because the commit is made here.
+      - name: Take the checkout the gate prepared, and the working branch
+        id: take
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/source/source.tgz" -C .
+          git rev-parse --is-inside-work-tree >/dev/null \
+            || { echo "the shipped source is not a git repository" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$BASE_SHA" \
+            || { echo "shipped HEAD is not the base the gate recorded" >&2; exit 1; }
+          test -z "$(git remote)" \
+            || { echo "the shipped checkout still has a remote" >&2; exit 1; }
+          git switch -q "$BRANCH" 2>/dev/null || git switch -qc "$BRANCH"
+          test "$(git symbolic-ref HEAD)" = "refs/heads/$BRANCH" \
+            || { echo "the working branch is not checked out" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$BASE_SHA" \
+            || { echo "the working branch is not at the base the gate recorded" >&2; exit 1; }
+          git config user.name  "falconet[bot]"
+          git config user.email "falconet[bot]@users.noreply.github.com"
+        env:
+          BASE_SHA: ${{ needs.gate.outputs.base_sha }}
+          BRANCH: ${{ needs.gate.outputs.branch }}
+
+      # As in gate: commit reads `git status --untracked-files=all`, and the
+      # handoff it is about to download is the one untracked path that is not
+      # the agent's.
+      - name: Keep the handoff out of the working tree
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' .falconet/ >> .git/info/exclude
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: handoff-implement
+          path: .falconet
+
+      # `git apply` refuses a path inside .git and a path beyond a symbolic
+      # link, and without --index it leaves the change in the working tree,
+      # where commit reads it exactly as it would have read the agent's. An
+      # empty patch is a run that changed nothing, which commit decides.
+      - name: Apply the agent's change
+        id: apply
+        run: |
+          set -euo pipefail
+          test -f .falconet/change.patch \
+            || { echo "the implement hand-off carried no patch" >&2; exit 1; }
+          if [ -s .falconet/change.patch ]; then
+            git apply --binary --whitespace=nowarn .falconet/change.patch
+          fi
+          rm -f .falconet/change.patch
+
+      # Unconditional on the check's word: at the cap the guard-clean work is
+      # committed and pushed anyway, so nothing is lost, and publish hands it
+      # off rather than opening a pull request. A refusal beats a question: a
       # denied run commits nothing, so there is no committed work for
-      # needs-info's ordering to protect. Unconditional on the check's
-      # word: at the cap the guard-clean work is committed and pushed
-      # anyway, so nothing is lost, and publish hands it off rather than
-      # opening a pull request.
+      # needs-info's ordering to protect.
       #
       # `setup: false` claims an earlier step in THIS job installed the
       # binaries, and a job is a fresh runner: the install is this job's
@@ -515,12 +636,6 @@ jobs:
         run: echo "kind=$(tr -cd 'a-z-' 2>/dev/null <.falconet/failure-kind.txt)" >> "$GITHUB_OUTPUT"
 
       # Before this job ends, so the work outlives the runner. See the header.
-      #
-      # Written INTO the handoff directory, not beside it. An upload naming
-      # two paths is rooted at their least common ancestor — here
-      # `/home/runner/work` — so the archive would arrive as
-      # `<repo>/<repo>/.falconet/…` and publish's download of `.falconet`
-      # would match nothing. One path, one root.
       - name: Bundle the work
         if: always()
         run: |
@@ -533,7 +648,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: handoff-implement
+          name: handoff-commit
           path: .falconet/
           include-hidden-files: true
           if-no-files-found: error
@@ -543,8 +658,8 @@ jobs:
   # publish — the push first, then everything that depends on it
   # =========================================================================
   publish:
-    needs: [gate, implement]
-    if: always() && needs.implement.result != 'skipped'
+    needs: [gate, implement, commit]
+    if: always() && needs.commit.result != 'skipped'
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 20
     permissions:
@@ -578,7 +693,7 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: handoff-implement
+          name: handoff-commit
           path: .falconet
 
       - name: Restore the branch
@@ -589,7 +704,7 @@ jobs:
           # download that quietly matched nothing would be a pushed branch
           # and a pull request that cannot be assembled.
           test -f .falconet/branch.bundle \
-            || { echo "the implement hand-off carried no bundle" >&2; exit 1; }
+            || { echo "the commit hand-off carried no bundle" >&2; exit 1; }
           git switch -c "$BRANCH"
           if [ -s .falconet/branch.bundle ]; then
             git fetch .falconet/branch.bundle HEAD
@@ -625,7 +740,7 @@ jobs:
       # person is asked to look at is the change plus whatever those checks
       # say about it.
       - name: Assemble the pull-request body
-        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
+        if: needs.commit.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
           ISSUE: ${{ inputs.issue }}
         run: |
@@ -647,7 +762,7 @@ jobs:
       # this repository's pull request.
       - name: Open the pull request
         id: pr
-        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
+        if: needs.commit.outputs.outcome == 'success' && needs.implement.outputs.check != 'fail'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
@@ -683,7 +798,7 @@ jobs:
       # `${PUSHED_BRANCH:-}` passes the empty string, which pause accepts as
       # "no branch".
       - name: Hand over — the agent asked a question
-        if: needs.implement.outputs.outcome == 'needs-info'
+        if: needs.commit.outputs.outcome == 'needs-info'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE: ${{ inputs.issue }}
@@ -705,7 +820,7 @@ jobs:
       # either: the branch is named and linked, and the check's output is
       # the body, fenced and collapsed, because it is machine output.
       - name: Hand over — the check failed at the cap
-        if: needs.implement.outputs.outcome == 'success' && needs.implement.outputs.check == 'fail'
+        if: needs.commit.outputs.outcome == 'success' && needs.implement.outputs.check == 'fail'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE: ${{ inputs.issue }}
@@ -722,7 +837,7 @@ jobs:
             --preamble "I prepared this change and pushed it, but the repository's own check fails on it and I could not get it passing in the attempts I'm allowed. This one needs a person."
 
       - name: Hand over — the run could not prepare a change
-        if: needs.implement.outputs.outcome == 'failure'
+        if: needs.commit.outputs.outcome == 'failure'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE: ${{ inputs.issue }}
@@ -741,7 +856,7 @@ jobs:
   # contain — a request never disappears into a green run that produced nothing
   # =========================================================================
   contain:
-    needs: [gate, implement, publish]
+    needs: [gate, implement, commit, publish]
     if: always() && needs.gate.outputs.outcome == 'ready'
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 10

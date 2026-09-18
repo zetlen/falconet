@@ -12,7 +12,8 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 needs='{"gate":{"result":"success","outputs":{"outcome":"ready","branch":"issue-42-add-a-line"}},
-"implement":{"result":"success","outputs":{"outcome":"failure","check":"pass","passes":"1","kind":"paths"}},
+"implement":{"result":"success","outputs":{"check":"pass","passes":"1"}},
+"commit":{"result":"success","outputs":{"outcome":"failure","kind":"paths"}},
 "publish":{"result":"success","outputs":{}}}'
 
 run_summary() { # file [args...] -> sets OUT ERR RC

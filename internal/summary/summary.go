@@ -11,7 +11,7 @@
 // prepare did. The panel says what those jobs can see: each job's result,
 // the outputs the jobs declare, the writing job's own status, and contain's
 // check and pause steps. It reads no prose. Which guard refused is
-// failure-kind.txt's word, carried as an output of the implement job; why
+// failure-kind.txt's word, carried as an output of the commit job; why
 // prepare did not say ready is prepare's own `reason` output.
 //
 // # What it never shows
@@ -70,7 +70,7 @@ type Run struct {
 	// Prepare is gate's Prepare step: toJSON(steps.prepare).
 	Prepare Step
 
-	// Needs is contain's toJSON(needs): gate, implement and publish.
+	// Needs is contain's toJSON(needs): gate, implement, commit and publish.
 	Needs map[string]Job
 	// Check is the outcome of contain's step that looks for an ending on the
 	// issue, and Pause the outcome of its pause step, which runs when that
@@ -128,7 +128,7 @@ type Decision struct {
 }
 
 // jobs in the order they run.
-var jobs = []string{"gate", "implement", "publish"}
+var jobs = []string{"gate", "implement", "commit", "publish"}
 
 // Decide reads how the run ended.
 func Decide(r Run) Decision {
@@ -169,9 +169,10 @@ func decideGate(r Run) Decision {
 // issue is what a person sees; then the first job, in order, that stopped or
 // failed; then contain itself stopping.
 func decideContain(r Run) Decision {
-	implement, publish := r.Needs["implement"], r.Needs["publish"]
-	outcome, check, kind := implement.Outputs["outcome"], implement.Outputs["check"], implement.Outputs["kind"]
-	if implement.Result == "success" && publish.Result == "success" {
+	implement, committed, publish := r.Needs["implement"], r.Needs["commit"], r.Needs["publish"]
+	outcome, kind := committed.Outputs["outcome"], committed.Outputs["kind"]
+	check := implement.Outputs["check"]
+	if implement.Result == "success" && committed.Result == "success" && publish.Result == "success" {
 		switch {
 		case outcome == "success" && check != "fail":
 			return Decision{Ending: Published}
@@ -224,6 +225,9 @@ var steps = map[string]string{
 	"before-prepare": "a step before Prepare (the App token, the checkout or the install)",
 	"prepare":        "Prepare",
 	"loop":           "Implement, and check (the harness or the check could not run)",
+	"change":         "Hand the change to the commit job",
+	"take":           "Take the checkout the gate prepared, or the working branch",
+	"apply":          "Apply the agent's change",
 	"commit":         "Commit",
 	"push":           "Push",
 	"pr":             "Open the pull request",
@@ -320,7 +324,7 @@ func Render(r Run) string {
 	}
 	if r.Job == "contain" {
 		if branch := r.Needs["gate"].Outputs["branch"]; branch != "" {
-			pushed := implement.Outputs["outcome"] == "success" && r.Needs["publish"].Result == "success"
+			pushed := r.Needs["commit"].Outputs["outcome"] == "success" && r.Needs["publish"].Result == "success"
 			if link := r.branchLink(branch); pushed && link != "" {
 				line("- **Branch:** %s", link)
 			} else {

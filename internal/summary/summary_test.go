@@ -20,10 +20,20 @@ func contain(needs map[string]Job) Run {
 	return Run{Job: "contain", Issue: "42", Server: testServer, Repository: testRepo, MaxAttempts: "3", Needs: needs}
 }
 
+// ready is the jobs after a gate that said ready. The commit job follows
+// implement: it runs only after a green implement, and carries the outcome
+// and kind impl names, since commit is where those words are said.
 func ready(implement, publish Job) map[string]Job {
+	committed := skipped
+	if implement.Result == "success" {
+		committed = Job{Result: "success", Outputs: map[string]string{
+			"outcome": implement.Outputs["outcome"], "kind": implement.Outputs["kind"],
+		}}
+	}
 	return map[string]Job{
 		"gate":      {Result: "success", Outputs: map[string]string{"outcome": "ready", "branch": "issue-42-add-a-line"}},
 		"implement": implement,
+		"commit":    committed,
 		"publish":   publish,
 	}
 }
@@ -113,6 +123,13 @@ func TestDecide(t *testing.T) {
 		{"the harness failed in the loop",
 			contain(ready(impl("failure", "", "", "1", "failed", "loop"), pub("failure", "failed", "push"))),
 			Decision{Ending: Failed, Job: "implement", Step: "loop"}},
+		{"the agent's change could not be applied in the commit job",
+			func() Run {
+				r := contain(ready(impl("success", "", "pass", "1"), skipped))
+				r.Needs["commit"] = Job{Result: "failure", Outputs: map[string]string{"failed": "apply"}}
+				return r
+			}(),
+			Decision{Ending: Failed, Job: "commit", Step: "apply"}},
 		{"implement cancelled or out of time, whatever contain's own status",
 			func() Run {
 				r := contain(ready(impl("cancelled", "", "", "2"), skipped))
@@ -189,6 +206,13 @@ func TestRenderPanels(t *testing.T) {
 			[]string{"### falconet: failed in **implement**\n", "Implement, and check (the harness or the check could not run)",
 				"**contain** found no ending on the issue, and paused it `ready-for-human`", "- **Check's last word:** none, the loop did not finish"},
 			[]string{"requester has not been told"}},
+		{"a failure in the commit job names it and its step",
+			func() Run {
+				r := contain(ready(impl("success", "", "pass", "1"), skipped))
+				r.Needs["commit"] = Job{Result: "failure", Outputs: map[string]string{"failed": "apply"}}
+				return r
+			}(),
+			[]string{"### falconet: failed in **commit**\n", "Apply the agent's change", "- **Branch:** `issue-42-add-a-line`"}, nil},
 		{"contain that could not pause says so",
 			func() Run {
 				r := contain(ready(impl("cancelled", "", "", "1"), pub("failure")))
@@ -303,7 +327,8 @@ func TestNothingFromOutsideRenders(t *testing.T) {
 		pick := func(i int) string { return results[i%len(results)] }
 		r.Needs = map[string]Job{
 			"gate":      {Result: pick(len(reason)), Outputs: map[string]string{"outcome": "ready", "branch": string(branch), "failed": string(failed)}},
-			"implement": {Result: pick(len(kind)), Outputs: map[string]string{"outcome": []string{"success", "failure", "needs-info", string(outcome)}[len(word)%4], "check": string(check), "passes": string(passes), "kind": string(kind), "failed": string(failed)}},
+			"implement": {Result: pick(len(kind)), Outputs: map[string]string{"check": string(check), "passes": string(passes), "failed": string(failed)}},
+			"commit":    {Result: pick(len(word)), Outputs: map[string]string{"outcome": []string{"success", "failure", "needs-info", string(outcome)}[len(word)%4], "kind": string(kind), "failed": string(failed)}},
 			"publish":   {Result: pick(len(pr)), Outputs: map[string]string{"pr": string(pr), "failed": string(failed)}},
 		}
 		r.Pause, r.Check, r.JobStatus = pick(len(check)), pick(len(passes)), pick(len(issue))
