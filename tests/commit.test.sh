@@ -167,9 +167,9 @@ printf 'locals {\n  a = 5\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
-it "a change outside the allowlist is a failure, however good the message"
+it "a change to a workflow is a failure, however good the message"
 assert_eq "failure" "$out" "outcome"
-assert_eq "paths" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
+assert_eq "protected" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed, including the legitimate .tf edit"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -177,6 +177,48 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 it "and the reason names the offending path"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   ".github/workflows/infra-issues.yml" "failure reason"
+
+# The built-in refusal of CI and automation configuration holds whatever
+# paths.allow says, and paths.allow_dangerous_access_to lifts exactly the
+# paths it names, which must still be allowed.
+c="$(new_checkout protected_wide_allow)"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "allow everything"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/ci.yml"
+printf 'Edit CI\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "a workflow is refused even when paths.allow admits every path"
+assert_eq "protected" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
+
+c="$(new_checkout protected_exempt)"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":[".github/workflows/lint.yml"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt one workflow"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/lint.yml"
+printf 'Edit lint\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "an exempted and allowed workflow is committed"
+assert_eq "success" "$out" "outcome"
+
+c="$(new_checkout protected_exempt_not_allowed)"
+printf '{"paths":{"allow":["*.tf"],"allow_dangerous_access_to":[".github/workflows/lint.yml"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt one workflow, allow only .tf"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/lint.yml"
+printf 'Edit lint\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "an exempted workflow outside paths.allow is still refused, by the allowlist"
+assert_eq "paths" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
+
+c="$(new_checkout protected_exempt_config)"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":["*"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt everything"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":["*"],"deny_content":[]}}\n' >"$c/repo/.github/falconet.json"
+printf 'Edit config\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "no exemption reaches the config file itself"
+assert_eq "config-file" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
 
 # --- the allowlist is .tf and nothing else ----------------------------------
 #

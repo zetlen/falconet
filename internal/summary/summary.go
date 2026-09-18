@@ -206,6 +206,7 @@ var guards = map[commit.Kind]string{
 	commit.KindGitMachinery: "the checkout's own git machinery",
 	commit.KindRename:       "the rename refusal",
 	commit.KindConfigFile:   "the config file itself",
+	commit.KindProtected:    "the refusal of CI and automation configuration",
 	commit.KindPaths:        "the path allowlist",
 	commit.KindContent:      "the content denylist",
 	commit.KindSecret:       "the secret scan",

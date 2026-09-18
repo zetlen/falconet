@@ -26,6 +26,7 @@ a finding, not a formatting error.
 | No second, reviewing agent | I5 | a review harness clears the bar: an independent, uncontaminated read of diff and message, worth more than it costs, whose verdict is never in the pull request where a reviewer could mistake it for evidence | [below](#no-second-reviewing-agent) |
 | GitHub and Gitea are the forges, chosen by `forge` in the config | I2, I4 | an adopter exists on a third forge, a verb has to branch on which forge it talks to, or Gitea runs a job that holds no Actions credentials | [below](#github-and-gitea-are-the-forges) |
 | No default for the path allowlist or the content denylist | I3 | an adopter cannot set the allowlist before the first run, and the cost of one required field outweighs the cost of a default the operator did not choose | [below](#no-default-for-the-path-allowlist-or-the-content-denylist) |
+| CI and automation configuration is refused by default, and exempted one path at a time | I3, I5 | a forge or CI system reads its configuration from somewhere the list does not name, or adopters' ordinary requests need those files changed often enough that the hand-offs cost more than the exposure | [below](#ci-and-automation-configuration-is-refused-by-default) |
 | The shipped prompt says what the config says | I1, I3 | a placeholder the prompt needs has no config key behind it | [below](#the-shipped-prompt-says-what-the-config-says) |
 | Stage-level verbs, one JSON config file | I1, I3 | a caller needs an operation no verb exposes, or config needs a type JSON cannot carry | [below](#stage-level-verbs-one-json-config-file) |
 | One panel on the run's page, written by gate or contain from job outputs | I4 | a run whose gate ran ends with no panel or with two, or the panel needs a fact no job output or handoff word can carry | [below](#one-panel-on-the-runs-page) |
@@ -278,6 +279,23 @@ denylist over a program is a tripwire and not a wall. The recommended shape
 for such a repository is that the agent edits a data surface the program
 reads, YAML or JSON under an allowlist of its own, and the program stays a
 person's; pure data has no denylist to get wrong.
+
+## CI and automation configuration is refused by default
+
+A person merges on the strength of the checks posted on the pull request
+(principle 5). For a branch in the same repository, GitHub runs those checks
+from the workflow files on that branch, and other forges and CI systems do
+the same with their own files. A change to one of them can switch off the
+check that would judge it, and no guard can tell a harmless edit to such a
+file from one that does that.
+
+So `commit` refuses a change to any path on `ProtectedPaths` in
+`internal/commit`, whatever `paths.allow` says: workflows, other CI systems'
+files, `CODEOWNERS`, dependency bots, scanner configuration and hook
+managers. The operator lifts one entry at a time with
+`paths.allow_dangerous_access_to`, and an exempted path must still match
+`paths.allow`. The refusal of `.github/falconet.json` runs first, so no
+exemption reaches it.
 
 ## The shipped prompt says what the config says
 
