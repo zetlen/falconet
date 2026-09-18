@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/zetlen/falconet/internal/commit"
 	"github.com/zetlen/falconet/internal/config"
@@ -225,7 +226,17 @@ func runCommit(args []string) int {
 	// visible to the git status the allowlist reads, so a tree that carries
 	// any of them is refused here, before the first git command, and the
 	// commands themselves are hardened besides (internal/gitsafe).
-	if reason := gitsafe.Untrusted(root); reason != "" {
+	// The workflow excludes the handoff directory in .git/info/exclude, so
+	// that one entry is expected there. Physical, as root is.
+	physicalOut, err := filepath.EvalSymlinks(out)
+	if err != nil {
+		physicalOut = out
+	}
+	handoffRel, err := filepath.Rel(root, physicalOut)
+	if err != nil || handoffRel == ".." || strings.HasPrefix(handoffRel, "../") {
+		handoffRel = ""
+	}
+	if reason := gitsafe.Untrusted(root, handoffRel); reason != "" {
 		return giveUp(commit.KindGitMachinery, commit.ReasonUntrustedGit(reason))
 	}
 

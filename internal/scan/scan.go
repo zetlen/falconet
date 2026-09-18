@@ -67,6 +67,26 @@
 // Treat a finding here as "a person must look, and probably rotate", and treat
 // the absence of one as no evidence at all.
 //
+// # What gitleaks is configured by
+//
+// gitleaks takes its rules from `--config`, then $GITLEAKS_CONFIG, then
+// $GITLEAKS_CONFIG_TOML, then a `.gitleaks.toml` in its working directory,
+// and its list of findings to ignore from a `.gitleaksignore` there. It also
+// skips any line carrying a `gitleaks:allow` comment. Every one of those is
+// something the agent can write: a file in the tree, a variable through
+// $GITHUB_ENV, a comment on the line that holds the secret. A
+// `.gitleaks.toml` with one rule that never matches turns every hit into a
+// pass.
+//
+// So the scan decides its own configuration. gitleaks runs in an empty
+// directory outside the tree, with every GITLEAKS_ variable removed from its
+// environment, with `--ignore-gitleaks-allow`, and with an explicit
+// `--config`. The config and the ignore file are the repository's own, as
+// committed at HEAD: the commit verb runs before the agent's change is
+// committed, so HEAD is the base the run started from, and an agent's edit to
+// either file is never read. With no `.gitleaks.toml` at HEAD the config is
+// gitleaks's default rules.
+//
 // $GITLEAKS overrides the binary, for the tests and for a local run. In CI
 // the composite action (action.yml) installs a pinned version and verifies
 // the download's SHA-256. A local run uses whatever gitleaks is on the PATH,
@@ -138,6 +158,14 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 		return false, &NotRun{fmt.Sprintf("'%s' not found — refusing to report a "+
 			"clean scan that never happened. Install it, or set $GITLEAKS.", s.Gitleaks)}
 	}
+	dir, err := s.workdir()
+	if dir != "" {
+		defer func() { _ = os.RemoveAll(dir) }()
+	}
+	if err != nil {
+		return false, err
+	}
+	run := &runner{bin: bin, dir: dir, stderr: s.Stderr}
 	for _, file := range files {
 		info, err := os.Stat(file)
 		if err != nil || info.Size() == 0 {
@@ -149,7 +177,7 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 				"not complete, so nothing may be published on its word.", file, err)}
 		}
 		label := s.label(file)
-		found, err := s.one(bin, label, content)
+		found, err := run.one(label, content)
 		if err != nil {
 			return hit, err
 		}
@@ -171,7 +199,7 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 			return hit, &NotRun{"git diff --cached failed"}
 		}
 		if len(out) > 0 {
-			found, err := s.one(bin, StagedLabel, out)
+			found, err := run.one(StagedLabel, out)
 			if err != nil {
 				return hit, err
 			}
@@ -195,12 +223,17 @@ func (s *Scanner) Scan(files []string, staged bool, matched func(label string)) 
 // STDOUT, and the caller's stdout is a list of channel names it splices into
 // a comment. A chatty subprocess in a program with a stdout contract is a
 // bug waiting for a release.
-func (s *Scanner) one(bin, label string, content []byte) (bool, error) {
-	cmd := exec.Command(bin, "stdin",
+func (r *runner) one(label string, content []byte) (bool, error) {
+	cmd := exec.Command(r.bin, "stdin",
+		"--config", filepath.Join(r.dir, configName),
+		"--gitleaks-ignore-path", r.dir,
+		"--ignore-gitleaks-allow",
 		"--no-banner", "--no-color", "--redact", "--verbose", "--exit-code", strconv.Itoa(Hit))
+	cmd.Dir = r.dir
+	cmd.Env = withoutGitleaksVars(os.Environ())
 	cmd.Stdin = bytes.NewReader(content)
-	cmd.Stdout = s.Stderr
-	cmd.Stderr = s.Stderr
+	cmd.Stdout = r.stderr
+	cmd.Stderr = r.stderr
 	err := cmd.Run()
 	var exit *exec.ExitError
 	switch {
@@ -215,6 +248,92 @@ func (s *Scanner) one(bin, label string, content []byte) (bool, error) {
 		return false, &NotRun{fmt.Sprintf("gitleaks could not be run scanning %s (%v) — the "+
 			"scan did not complete, so nothing may be published on its word.", label, err)}
 	}
+}
+
+// runner is gitleaks as the scan runs it: the binary, the directory it runs
+// in, which holds its config and ignore file, and where its output goes.
+type runner struct {
+	bin    string
+	dir    string
+	stderr io.Writer
+}
+
+const (
+	configName = ".gitleaks.toml"
+	ignoreName = ".gitleaksignore"
+)
+
+// defaultConfig is gitleaks's own rule set, named explicitly so that no
+// config file gitleaks would otherwise look for is consulted.
+const defaultConfig = "[extend]\nuseDefault = true\n"
+
+// workdir makes the directory gitleaks runs in: outside the tree, holding
+// the config and the ignore file as committed at HEAD. See "What gitleaks is
+// configured by" above. A non-empty dir is returned even with an error, for
+// the caller to remove.
+func (s *Scanner) workdir() (string, error) {
+	dir, err := os.MkdirTemp("", "falconet-gitleaks-")
+	if err != nil {
+		return "", &NotRun{fmt.Sprintf("could not make a directory for gitleaks (%v) — the "+
+			"scan did not run, so nothing may be published on its word.", err)}
+	}
+	config, err := s.atHead(configName)
+	if err != nil {
+		return dir, err
+	}
+	if config == nil {
+		config = []byte(defaultConfig)
+	}
+	if err := os.WriteFile(filepath.Join(dir, configName), config, 0o600); err != nil {
+		return dir, &NotRun{fmt.Sprintf("could not write gitleaks's config (%v) — the "+
+			"scan did not run, so nothing may be published on its word.", err)}
+	}
+	ignore, err := s.atHead(ignoreName)
+	if err != nil {
+		return dir, err
+	}
+	if ignore != nil {
+		if err := os.WriteFile(filepath.Join(dir, ignoreName), ignore, 0o600); err != nil {
+			return dir, &NotRun{fmt.Sprintf("could not write gitleaks's ignore file (%v) — the "+
+				"scan did not run, so nothing may be published on its word.", err)}
+		}
+	}
+	return dir, nil
+}
+
+// atHead is a file at the repository root as committed at HEAD, or nil when
+// HEAD has no such file. A git that cannot answer is a scan that did not run.
+func (s *Scanner) atHead(name string) ([]byte, error) {
+	ls := gitsafe.Command(s.Root, "ls-tree", "--name-only", "-z", "HEAD", "--", name)
+	ls.Stderr = s.Stderr
+	listed, err := ls.Output()
+	if err != nil {
+		return nil, &NotRun{fmt.Sprintf("git could not list %s at HEAD — the scan did "+
+			"not run, so nothing may be published on its word.", name)}
+	}
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	show := gitsafe.Command(s.Root, "cat-file", "blob", "HEAD:"+name)
+	show.Stderr = s.Stderr
+	content, err := show.Output()
+	if err != nil {
+		return nil, &NotRun{fmt.Sprintf("git could not read %s at HEAD — the scan did "+
+			"not run, so nothing may be published on its word.", name)}
+	}
+	return content, nil
+}
+
+// withoutGitleaksVars is env with every GITLEAKS_ variable removed: each one
+// is a way to hand gitleaks a config.
+func withoutGitleaksVars(env []string) []string {
+	kept := env[:0:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "GITLEAKS_") {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 // label names a file the way the requester's issue should see it.

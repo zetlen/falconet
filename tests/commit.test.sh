@@ -46,7 +46,7 @@ CFG
   # separate stub, on purpose.
   cat >"$base/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 code=1
 prev=""
 for a in "$@"; do [[ "$prev" == "--exit-code" ]] && code="$a"; prev="$a"; done
@@ -64,7 +64,7 @@ STUB
 run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   local c="$1" g="$2"
   ( cd "$c/repo" \
-    && GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+    && GITLEAKS="$g" STUB_CALLS="$c/gitleaks-calls.txt" \
        "$FALCONET" commit --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
@@ -382,7 +382,7 @@ assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
 c="$(new_checkout scanner_stdout_purity)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 printf 'Finding:     locals { a = REDACTED }\n'
 printf 'RuleID:      github-pat\n'
@@ -405,7 +405,7 @@ assert_eq "success" "$out" "outcome"
 c="$(new_checkout scanner_stdout_in_reason)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 printf 'Finding:     the header was REDACTED\n'
 printf 'RuleID:      github-pat\n'
@@ -445,7 +445,7 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 c="$(new_checkout scanner_broken)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 echo "FTL failed to load config" >&2
 exit 1
@@ -615,7 +615,7 @@ c="$(new_checkout default_handoff)"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" STUB_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "with no --out-dir the handoff directory defaults to .falconet"
@@ -638,7 +638,7 @@ mkdir -p "$c/repo/.ci-handoff"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" STUB_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "and handoff_dir in config moves it, which is how a consumer migrates"
@@ -723,6 +723,27 @@ it "a planted pre-commit hook is refused, not silently skipped"
 assert_eq "failure" "$out" "outcome"
 it "and never ran"
 assert_file_missing "$c/repo/PWNED"
+
+# .git/info/exclude hides an untracked file from the git status the path
+# allowlist reads. The workflow writes the handoff directory there in every
+# job, and that entry is the only one allowed.
+c="$(new_checkout exclude_handoff)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '.falconet/\n.falconet/\n' >>"$c/repo/.git/info/exclude"
+out="$(run_in "$c")"
+it "an exclude entry naming the handoff directory is expected, and commits"
+assert_eq "success" "$out" "outcome"
+
+c="$(new_checkout exclude_hides)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '.falconet/\n.gitleaks.toml\n' >>"$c/repo/.git/info/exclude"
+printf '[extend]\nuseDefault = false\n' >"$c/repo/.gitleaks.toml"
+out="$(run_in "$c")"
+it "an exclude entry hiding any other file is refused"
+assert_eq "failure" "$out" "outcome"
+assert_eq "git-machinery" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 
 # --- the kind is this run's -----------------------------------------------------

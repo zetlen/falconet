@@ -71,24 +71,25 @@ func TestCommandDisablesExternalDiff(t *testing.T) {
 
 func TestUntrusted(t *testing.T) {
 	t.Run("a clean checkout is not flagged", func(t *testing.T) {
-		if r := Untrusted(initRepo(t)); r != "" {
+		if r := Untrusted(initRepo(t), ".falconet"); r != "" {
 			t.Fatalf("clean repo flagged: %s", r)
 		}
 	})
 
 	dangerous := map[string][2]string{
-		"diff.external":   {"diff.external", "sh x.sh"},
-		"core.fsmonitor":  {"core.fsmonitor", "sh x.sh"},
-		"core.hooksPath":  {"core.hooksPath", "/tmp/hooks"},
-		"a diff driver":   {"diff.d.command", "sh x.sh"},
-		"a clean filter":  {"filter.f.clean", "sh x.sh"},
-		"a smudge filter": {"filter.f.smudge", "sh x.sh"},
+		"diff.external":    {"diff.external", "sh x.sh"},
+		"core.fsmonitor":   {"core.fsmonitor", "sh x.sh"},
+		"core.hooksPath":   {"core.hooksPath", "/tmp/hooks"},
+		"a diff driver":    {"diff.d.command", "sh x.sh"},
+		"a clean filter":   {"filter.f.clean", "sh x.sh"},
+		"a smudge filter":  {"filter.f.smudge", "sh x.sh"},
+		"an excludes file": {"core.excludesFile", "/tmp/hide"},
 	}
 	for name, kv := range dangerous {
 		t.Run(name+" is flagged", func(t *testing.T) {
 			dir := initRepo(t)
 			git(t, dir, "config", kv[0], kv[1])
-			if Untrusted(dir) == "" {
+			if Untrusted(dir, ".falconet") == "" {
 				t.Fatalf("%s (%s) not flagged", name, kv[0])
 			}
 		})
@@ -97,7 +98,7 @@ func TestUntrusted(t *testing.T) {
 	t.Run("a planted hook is flagged", func(t *testing.T) {
 		dir := initRepo(t)
 		write(t, filepath.Join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\ntrue\n")
-		if Untrusted(dir) == "" {
+		if Untrusted(dir, ".falconet") == "" {
 			t.Fatal("pre-commit hook not flagged")
 		}
 	})
@@ -105,7 +106,7 @@ func TestUntrusted(t *testing.T) {
 	t.Run("a sample hook is not flagged", func(t *testing.T) {
 		dir := initRepo(t)
 		write(t, filepath.Join(dir, ".git", "hooks", "pre-commit.sample"), "#!/bin/sh\ntrue\n")
-		if r := Untrusted(dir); r != "" {
+		if r := Untrusted(dir, ".falconet"); r != "" {
 			t.Fatalf("sample hook flagged: %s", r)
 		}
 	})
@@ -113,8 +114,35 @@ func TestUntrusted(t *testing.T) {
 	t.Run(".git/info/attributes is flagged", func(t *testing.T) {
 		dir := initRepo(t)
 		write(t, filepath.Join(dir, ".git", "info", "attributes"), "* filter=f\n")
-		if Untrusted(dir) == "" {
+		if Untrusted(dir, ".falconet") == "" {
 			t.Fatal(".git/info/attributes not flagged")
+		}
+	})
+
+	t.Run(".git/info/exclude naming the handoff directory is not flagged", func(t *testing.T) {
+		dir := initRepo(t)
+		write(t, filepath.Join(dir, ".git", "info", "exclude"),
+			"# git ls-files --others --exclude-from=.git/info/exclude\n\n.falconet/\n.falconet/\n/.falconet\n")
+		if r := Untrusted(dir, ".falconet"); r != "" {
+			t.Fatalf("handoff exclude flagged: %s", r)
+		}
+	})
+
+	t.Run(".git/info/exclude naming anything else is flagged", func(t *testing.T) {
+		for _, entry := range []string{".gitleaks.toml", ".falconet/../x", "*", ".falconet*"} {
+			dir := initRepo(t)
+			write(t, filepath.Join(dir, ".git", "info", "exclude"), ".falconet/\n"+entry+"\n")
+			if Untrusted(dir, ".falconet") == "" {
+				t.Errorf("exclude entry %q not flagged", entry)
+			}
+		}
+	})
+
+	t.Run("a handoff directory outside the checkout excuses no entry", func(t *testing.T) {
+		dir := initRepo(t)
+		write(t, filepath.Join(dir, ".git", "info", "exclude"), ".falconet/\n")
+		if Untrusted(dir, "") == "" {
+			t.Fatal("exclude entry excused with no handoff directory inside the checkout")
 		}
 	})
 }
