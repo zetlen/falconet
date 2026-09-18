@@ -89,6 +89,13 @@ the workflow, not the scripts, not AGENTS.md. A commit touching
 anything else is refused by the next stage, and the whole request
 goes to a human.
 
+Whatever that list says, the same stage refuses a change to CI and
+automation configuration: workflow files, other CI systems' files,
+CODEOWNERS, dependency-bot, scanner and hook-manager configuration,
+unless the repository owner has exempted that one file. If the
+request needs one of those changed, it is not a request you can
+work.
+
 The same stage refuses a changed file that contains {deny},
 wherever in the file it appears. That guard is a string match,
 not a judgment — a refusal ends the run and hands the request to

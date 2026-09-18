@@ -96,7 +96,7 @@ that a reviewer could mistake for that evidence.
 | --- | --- |
 | Assemble | `falconet prepare`: eligibility, the claim, the branch, and `request.md` in the handoff directory |
 | Implement | `falconet implement`: the prompt rendered from the config, then `harness.command` run once from the repository root with the prompt on its stdin, in the `implement` job of `.github/workflows/falconet.yml`, which has `permissions: {}` and a tree with its remote stripped |
-| Check | `falconet check` after every agent pass, with the workflow owning the loop: a failing check is another pass, at most `max-attempts` times. Then the guards in `falconet commit`: path allowlist, content denylist, rename refusal, secret scan, the config file itself, and the checkout's own git machinery, once, terminally |
+| Check | `falconet check` after every agent pass, with the workflow owning the loop: a failing check is another pass, at most `max-attempts` times. Then the guards in `falconet commit`, in the `commit` job, which applies the agent's change as a patch to gate's checkout so that nothing the agent's code wrote into its own job's environment reaches them: path allowlist, the refusal of CI and automation configuration, content denylist, rename refusal, secret scan, the config file itself, and the checkout's own git machinery, once, terminally |
 | Deliver | `falconet push` the moment a commit exists, then the pull request, or `falconet pause` for a question or a hand-off, including a change whose check still fails at the cap |
 
 [The decision register](docs/decisions.md) holds every live decision, the
@@ -126,7 +126,9 @@ What the harness finds:
 
 What the harness must leave:
 
-- The edited tree, uncommitted, touching only paths in `paths.allow`; and
+- The edited tree, uncommitted, touching only paths in `paths.allow` and
+  none on the built-in list of CI and automation configuration that
+  `paths.allow_dangerous_access_to` describes; and
   `commit-msg.txt` in the handoff directory, a commit subject, a blank line
   and a body written for a reviewer. Or:
 - The tree untouched, and `needs-info.md` in the handoff directory: questions
@@ -381,6 +383,7 @@ Every key, with its default:
 | Key | Default | What it is |
 | --- | --- | --- |
 | `paths.allow` | none — **required** | Globs the agent's change must stay inside; `*` crosses `/`, so `*.tf` matches `dns/records.tf`. Anything outside is refused and nothing is committed. The shipped prompt tells the agent this list, at `{allow}`. |
+| `paths.allow_dangerous_access_to` | `[]` | ***Do not set this unless you must. Every entry lets the agent edit something that runs or judges its own change.*** `commit` refuses a change to CI, automation and scanner configuration whatever `paths.allow` says: workflows and actions for GitHub, Gitea and Forgejo, other CI systems' files, `CODEOWNERS`, Dependabot, Renovate, the gitleaks, Trivy, Semgrep and Snyk configurations, and hook managers. The full list is `ProtectedPaths` in [`internal/commit`](internal/commit/commit.go). This key holds globs that exempt paths from that refusal. An exempted path is allowed only when it also matches a glob in `paths.allow`. ***Name single files, never directories: `.github/workflows/lint.yml`, not `.github/workflows*`.*** ***If you set this, restrict the harness so the agent's only way to change those files is a codemod you wrote, with no general file-editing tool.*** A check the agent can edit is not a check, and the guards cannot tell a harmless edit from one that switches the check off. `.github/falconet.json` is refused before this list is read, so no entry exempts it. |
 | `paths.deny_content` | `[]` | Strings refused anywhere in a changed file, in this order. The shipped prompt tells the agent this list, at `{deny}`; empty, and the prompt says nothing about refused content. In an OpenTofu repository this is where `data "external"`, `provisioner`, `templatefile(` and `file(` go: the constructs that run a command or read a file during a plan. For a repository whose program is code, a string list is a tripwire and not a wall; the honest shape there is an allowlist over a data surface the program reads, and no denylist. |
 | `check.command` | `[]` | The repository's own check — tests, a linter, a build — as an argv, run from the repository root with no shell: `["make", "test"]`, `["npm", "test"]`, `["go", "test", "./..."]`. Several commands is a script or a Makefile target. Empty, and `falconet check` says `skipped`. Its output goes to the run log, and on a failure the last 64 KiB of it to `check-failure.txt` in the handoff directory, which the next agent pass reads. |
 | `harness.command` | the Claude Code CLI, as shown under [the implement contract](#the-implement-contract) | The agent, as an argv run with no shell from the repository root, with the rendered prompt on its stdin. Any program meeting the contract. Empty is refused. The default pins the model; a `harness.command` of your own should pin its model too, so the same issue produces the same kind of pull request across runs. |
@@ -536,7 +539,8 @@ Then watch. `gh run watch` follows it, or the Actions tab:
 | When | What you should see |
 | --- | --- |
 | within a minute | A comment on the issue: *Thanks — this request has been picked up and is being worked on automatically.* That is **gate** saying `ready`: eligibility passed, the issue is assigned and the branch exists. |
-| next | **implement**: one agent pass, then `falconet check`, your `check.command` or `skipped`, and, if it failed, another pass with the failure in front of it, up to `max-attempts`. Then every guard, once, and the commit. The agent's only output that outlives the run is its commit message. |
+| next | **implement**: one agent pass, then `falconet check`, your `check.command` or `skipped`, and, if it failed, another pass with the failure in front of it, up to `max-attempts`. The change leaves the job as a patch. |
+| next | **commit**: gate's checkout, the patch applied to it, then every guard, once, and the commit. The agent's only output that outlives the run is its commit message. |
 | next | **publish**: the push first — `issue-<n>-canary-add-a-txt-record-for-falconet` appears on the remote before anything else happens — then the pull request. |
 | within ~15 minutes, or ~45 with three passes | One of exactly three endings on the issue, below. |
 | always | **contain** runs whatever happened above, and if the issue is still open with neither a pause label nor an open PR, it pauses it `ready-for-human` with a link to the run. |
@@ -588,8 +592,10 @@ to be fixed before the next request.
 | `sha256sum: WARNING: 1 computed checksum did NOT match` in the gitleaks install step | The runner is not Linux x64 — gitleaks' pinned asset is the Linux x86-64 one, and the digest is checked before anything is installed — or the asset was replaced, which is what the digest exists to catch. | `runs-on: ubuntu-latest`. A replaced asset is not yours to fix; do not run it. |
 | `curl: (22) The requested URL returned error: 404` in the **Install falconet** step | The ref on the workflow's `uses:` line names a tag with no published release: typed by hand, or a release still a draft. | Pin a tag from [the releases page](https://github.com/zetlen/falconet/releases). |
 | Paused `ready-for-human`: *The agent changed files it is not allowed to change … Refused paths: .falconet/…* | A run by hand with the handoff directory not ignored. | Step 2. |
-| `paths.allow is empty — set it in .github/falconet.json` in the Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
+| `paths.allow is empty — set it in .github/falconet.json` in the **commit** job's Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
+| Paused `ready-for-human`: *The agent changed files that run or judge this repository's own checks* | The change touched a workflow, a CI configuration, a scanner's configuration or a hook manager's file. `commit` refuses those whatever `paths.allow` says. | Nothing, unless that file should change, in which case a person changes it. Read the request for what it was trying to reach. `paths.allow_dangerous_access_to` exists, and its row in step 6 says why you should not use it. |
 | Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
+| `gitleaks exited 1 scanning …` in the **commit** job's Commit step, after `failed to load extended config` | The secret scan reads your `.gitleaks.toml` as committed on the default branch and runs gitleaks outside the tree, so an `[extend] path` to another file in the repository does not resolve. The scan fails closed. | Make `.gitleaks.toml` self-contained: copy the extended rules into it, or use `[extend] useDefault = true`. |
 | `harness.output is …; it must be one of text, claude-stream-json` in a verb's step | `harness.output` names a format falconet does not know. | Step 6: `text`, `claude-stream-json`, or no key. |
 | `check: could not run [...]` in the agent job's loop step, and the run ends in **contain**'s hand-off | `check.command` names a program the runner does not have, or its first element is not on `PATH`. A check that could not run is neither a pass nor a failure the agent can act on, so the job stops. | Step 6: an argv the runner can start, or install it in `harness-setup`. Test it with `falconet check` from a clean checkout. |
 | `implement: could not run [...]` or `implement: the harness failed` in the loop step, and the run ends in **contain**'s hand-off | `harness.command` names a program the agent job does not have, or the harness exited non-zero: a bad model key, a model outage, a crash. The harness's own output is above the line. | `harness-setup` installs what `harness.command` names; the key is stored under the name `model-api-key-env` says. Test it with `falconet implement` from a clean checkout, with the key in your environment. |
@@ -630,6 +636,11 @@ to be fixed before the next request.
   the caller's `if:` lets through still starts a gate job, and on a public
   repository a self-hosted runner is exposed to that; the forge's interaction limits are what slow a
   flood.
+- **An exempted path means the agent may have written the pull request's own
+  checks.** Every entry in `paths.allow_dangerous_access_to` is a file that
+  runs or judges the change. When a pull request touches one, the checks
+  posted on it may be the agent's, and a reviewer reads those files before
+  trusting anything the checks say.
 - **The run's panel is falconet's only under gate and contain.** Code the
   agent job runs, a harness with a shell or the repository's check, can
   write to the implement job's own step summary. falconet writes its panel

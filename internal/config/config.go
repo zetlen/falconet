@@ -66,6 +66,7 @@ const Defaults = `{
   },
   "paths": {
     "allow": [],
+    "allow_dangerous_access_to": [],
     "deny_content": []
   },
   "check": {
@@ -106,6 +107,11 @@ type Schema struct {
 	} `json:"labels"`
 	Paths struct {
 		Allow []string `json:"allow"`
+		// AllowDangerousAccessTo exempts paths from the commit verb's
+		// built-in refusal of CI, automation and scanner configuration
+		// (internal/commit.ProtectedPaths). An exempted path must still match
+		// Allow.
+		AllowDangerousAccessTo []string `json:"allow_dangerous_access_to"`
 		// DenyContent is tested IN ORDER: `templatefile(` before `file(`, or a
 		// templatefile() call is reported as file() — the right refusal naming
 		// the wrong construct. Nothing downstream can recover the distinction,

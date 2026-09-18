@@ -60,6 +60,22 @@
 // defaults — is refused before the policy is consulted, whatever the
 // allowlist now says. A guard the agent can rewrite is not a guard.
 //
+// # The configuration that runs or judges the change
+//
+// The pull request the agent's change becomes is judged by the repository's
+// own checks, and for a branch in the same repository GitHub runs those
+// checks from the workflow files on that branch. Other forges and CI systems
+// do the same with their own files. So a change to a workflow, a CI
+// configuration, a scanner's configuration or a hook manager's can switch off
+// the check that would have judged it, and the guards cannot tell a harmless
+// edit to one of those files from one that does that.
+//
+// ProtectedPaths is a built-in list of those paths, refused whatever
+// paths.allow says. An operator exempts an entry only by naming it in
+// paths.allow_dangerous_access_to; an exempted path must still match
+// paths.allow. The refusal of the guard's own configuration runs before this
+// one, so no exemption reaches .github/falconet.json.
+//
 // # The content denylist
 //
 // The path guard above says WHERE an agent may write; it says nothing about
@@ -100,16 +116,59 @@ import (
 	"strings"
 )
 
-// Policy is the allowlist and the denylist, compiled once.
+// ProtectedPaths is the built-in list of CI, automation and scanner
+// configuration, as paths.allow globs. See "The configuration that runs or
+// judges the change" above. A directory entry has no trailing slash, so it
+// also matches a symlink standing where the directory belongs.
+var ProtectedPaths = []string{
+	// GitHub
+	".github/workflows*", ".github/actions*",
+	".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS",
+	".github/dependabot.yml", ".github/dependabot.yaml",
+	// Gitea and Forgejo
+	".gitea/workflows*", ".gitea/actions*", ".forgejo*",
+	// Other CI
+	".circleci*", ".gitlab-ci.yml", ".gitlab*", ".travis.yml", ".buildkite*",
+	"Jenkinsfile*", "*/Jenkinsfile*", "azure-pipelines.yml", ".azure-pipelines*",
+	"bitbucket-pipelines.yml", ".drone.yml", ".woodpecker*",
+	// Scanner configuration
+	"trivy.yaml", "trivy.yml", ".trivyignore*", ".gitleaks.toml", ".gitleaksignore",
+	".semgrepignore", ".snyk",
+	// Hooks and bots
+	"lefthook.yml", "lefthook.yaml", ".lefthook*", ".pre-commit-config.yaml", ".husky*",
+	"renovate.json*", ".github/renovate.json*", ".renovaterc*",
+}
+
+// protected is ProtectedPaths compiled once. The list is this package's own,
+// so a glob that does not compile is a bug here, not an operator's typo.
+var protected = func() []*regexp.Regexp {
+	out := make([]*regexp.Regexp, len(ProtectedPaths))
+	for i, glob := range ProtectedPaths {
+		out[i] = regexp.MustCompile(mustAllowPattern(glob))
+	}
+	return out
+}()
+
+func mustAllowPattern(glob string) string {
+	re, err := AllowPattern(glob)
+	if err != nil {
+		panic(fmt.Sprintf("ProtectedPaths entry %q: %v", glob, err))
+	}
+	return re.String()
+}
+
+// Policy is the allowlist, the exemptions from ProtectedPaths and the
+// denylist, compiled once.
 //
 // Read once, here, rather than at each use: a guard that re-reads its own rule
 // mid-run is a guard whose behavior depends on when you look.
 type Policy struct {
 	// Allow is paths.allow as configured, empty entries dropped, for the
 	// refusal that names the allowlist a path was measured against.
-	Allow []string
-	allow []*regexp.Regexp
-	deny  []denyEntry
+	Allow  []string
+	allow  []*regexp.Regexp
+	exempt []*regexp.Regexp
+	deny   []denyEntry
 }
 
 type denyEntry struct {
@@ -117,12 +176,12 @@ type denyEntry struct {
 	re      *regexp.Regexp
 }
 
-// NewPolicy compiles paths.allow and paths.deny_content. An empty entry in
-// either is skipped; an entry that cannot be compiled is an error, because a
+// NewPolicy compiles paths.allow, paths.allow_dangerous_access_to and
+// paths.deny_content. An empty entry in any of them is skipped; an entry that cannot be compiled is an error, because a
 // rule that silently matches nothing is not a rule. An empty
 // paths.allow — no non-empty entries — is refused: an allowlist with nothing
 // in it admits nothing, and the operator must name what the agent may touch.
-func NewPolicy(allow, denyContent []string) (*Policy, error) {
+func NewPolicy(allow, dangerous, denyContent []string) (*Policy, error) {
 	p := &Policy{}
 	for _, glob := range allow {
 		if glob == "" {
@@ -137,6 +196,16 @@ func NewPolicy(allow, denyContent []string) (*Policy, error) {
 	}
 	if len(p.Allow) == 0 {
 		return nil, fmt.Errorf("paths.allow is empty — set it in .github/falconet.json to name the paths the agent may change")
+	}
+	for _, glob := range dangerous {
+		if glob == "" {
+			continue
+		}
+		re, err := AllowPattern(glob)
+		if err != nil {
+			return nil, fmt.Errorf("paths.allow_dangerous_access_to entry %q: %v", glob, err)
+		}
+		p.exempt = append(p.exempt, re)
 	}
 	for _, literal := range denyContent {
 		if literal == "" {
@@ -154,6 +223,22 @@ func NewPolicy(allow, denyContent []string) (*Policy, error) {
 // PathAllowed reports whether ANY paths.allow glob matches the path.
 func (p *Policy) PathAllowed(path string) bool {
 	for _, re := range p.allow {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// Protected reports whether the path is on ProtectedPaths and no
+// paths.allow_dangerous_access_to glob exempts it.
+func (p *Policy) Protected(path string) bool {
+	for _, re := range p.exempt {
+		if re.MatchString(path) {
+			return false
+		}
+	}
+	for _, re := range protected {
 		if re.MatchString(path) {
 			return true
 		}
@@ -452,6 +537,7 @@ const (
 	KindGitMachinery Kind = "git-machinery"
 	KindRename       Kind = "rename"
 	KindConfigFile   Kind = "config-file"
+	KindProtected    Kind = "protected"
 	KindPaths        Kind = "paths"
 	KindContent      Kind = "content"
 	KindSecret       Kind = "secret"
@@ -466,7 +552,7 @@ const (
 
 // Kinds is every Kind, guards first.
 var Kinds = []Kind{
-	KindGitMachinery, KindRename, KindConfigFile, KindPaths, KindContent, KindSecret,
+	KindGitMachinery, KindRename, KindConfigFile, KindProtected, KindPaths, KindContent, KindSecret,
 	KindUnchanged, KindNoMessage, KindEmptyChange,
 }
 
@@ -474,7 +560,7 @@ var Kinds = []Kind{
 // that left nothing to commit.
 func (k Kind) Guard() bool {
 	switch k {
-	case KindGitMachinery, KindRename, KindConfigFile, KindPaths, KindContent, KindSecret:
+	case KindGitMachinery, KindRename, KindConfigFile, KindProtected, KindPaths, KindContent, KindSecret:
 		return true
 	}
 	return false
@@ -529,6 +615,18 @@ func ReasonConfigChanged(path string) string {
 		"file is never the agent's to edit, whatever it now says the",
 		"agent may touch: a guard the agent can rewrite is not a guard.",
 		"If the configuration should change, a person changes it.")
+}
+
+// ReasonProtectedPaths is the refusal of a change to CI, automation or
+// scanner configuration on ProtectedPaths.
+func ReasonProtectedPaths(refused []string) string {
+	return reason(
+		"The agent changed files that run or judge this repository's own",
+		"checks, so nothing was committed. A change to them could switch",
+		"off the check that would review it, and falconet refuses them",
+		"whatever paths.allow says. Refused paths:",
+		indented(refused),
+		"If one of these should change, a person changes it.")
 }
 
 // ReasonUntrustedGit is the refusal of a checkout whose own git

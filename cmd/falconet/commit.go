@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/zetlen/falconet/internal/commit"
 	"github.com/zetlen/falconet/internal/config"
@@ -63,7 +64,7 @@ the root of the repository):
   failure-reason.txt   written only on failure: why, for the requester
   failure-kind.txt     written only on failure: one word naming which
                        refusal it was — git-machinery, rename, config-file,
-                       paths, content or secret for a guard; unchanged,
+                       protected, paths, content or secret for a guard; unchanged,
                        no-message or empty-change for nothing to commit
 
 Exit codes: 0 = an outcome was determined and printed
@@ -152,7 +153,7 @@ func runCommit(args []string) int {
 	//
 	// Read once, here, rather than at each use: a guard that re-reads its own
 	// rule mid-run is a guard whose behavior depends on when you look.
-	policy, err := commit.NewPolicy(cfg.Schema.Paths.Allow, cfg.Schema.Paths.DenyContent)
+	policy, err := commit.NewPolicy(cfg.Schema.Paths.Allow, cfg.Schema.Paths.AllowDangerousAccessTo, cfg.Schema.Paths.DenyContent)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "falconet: %v\n", err)
 		return 1
@@ -225,7 +226,17 @@ func runCommit(args []string) int {
 	// visible to the git status the allowlist reads, so a tree that carries
 	// any of them is refused here, before the first git command, and the
 	// commands themselves are hardened besides (internal/gitsafe).
-	if reason := gitsafe.Untrusted(root); reason != "" {
+	// The workflow excludes the handoff directory in .git/info/exclude, so
+	// that one entry is expected there. Physical, as root is.
+	physicalOut, err := filepath.EvalSymlinks(out)
+	if err != nil {
+		physicalOut = out
+	}
+	handoffRel, err := filepath.Rel(root, physicalOut)
+	if err != nil || handoffRel == ".." || strings.HasPrefix(handoffRel, "../") {
+		handoffRel = ""
+	}
+	if reason := gitsafe.Untrusted(root, handoffRel); reason != "" {
 		return giveUp(commit.KindGitMachinery, commit.ReasonUntrustedGit(reason))
 	}
 
@@ -254,6 +265,21 @@ func runCommit(args []string) int {
 	// change to the file it came from — whatever that file now says.
 	if path, hit := commit.ConfigChanged(cfg.File, root, changed); hit {
 		return giveUp(commit.KindConfigFile, commit.ReasonConfigChanged(path))
+	}
+
+	// --- the configuration that runs or judges the change -----------------
+	//
+	// See "The configuration that runs or judges the change" in
+	// internal/commit. After the config-file refusal above, so no exemption
+	// reaches the file the exemptions are read from.
+	var protectedHit []string
+	for _, path := range changed {
+		if policy.Protected(path) {
+			protectedHit = append(protectedHit, path)
+		}
+	}
+	if len(protectedHit) > 0 {
+		return giveUp(commit.KindProtected, commit.ReasonProtectedPaths(protectedHit))
 	}
 
 	// --- the allowlist ------------------------------------------------------

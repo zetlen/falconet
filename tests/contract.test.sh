@@ -34,6 +34,7 @@ job() { # name
 }
 gate_job="$(job gate)"
 implement_job="$(job implement)"
+commit_job="$(job commit)"
 publish_job="$(job publish)"
 contain_job="$(job contain)"
 
@@ -98,7 +99,7 @@ assert_contains "$wf" "permissions: {}" "workflow"
 
 it "and the workflow's default is the same, so a new job must opt in"
 # Comment lines excluded: the header explains the rule and would be counted.
-assert_eq 2 "$(grep -c 'permissions: {}' <<<"$wf_code")" "permissions: {} declarations"
+assert_eq 3 "$(grep -c 'permissions: {}' <<<"$wf_code")" "permissions: {} declarations"
 
 # "the agent job checks out without persisting credentials" lived here until
 # #19. The checkout it was about — falconet's own, the one ADR-0005 allowed —
@@ -163,12 +164,48 @@ it "and that snippet is the only template expression inside a run: block"
 assert_eq 1 "$(grep -c 'run: \${{' <<<"$wf_code")" "run: lines that are expressions"
 
 it "the commit runs after the loop, and is not conditioned on its word"
-loop_at="$(grep -n 'falconet check' <<<"$implement_job" | cut -d: -f1)"
-commit_at="$(grep -n 'verb: commit' <<<"$implement_job" | cut -d: -f1)"
-assert_eq "true" "$([[ -n "$loop_at" && -n "$commit_at" && "$loop_at" -lt "$commit_at" ]] && echo true || echo false)" \
-  "the loop ($loop_at) precedes the commit ($commit_at)"
-commit_step="$(awk '/name: Commit$/{f=1} f && /verb: commit/{print; exit} f' <<<"$implement_job")"
+assert_contains "$commit_job" "needs: [gate, implement]" "the commit job"
+assert_contains "$commit_job" "if: needs.implement.result == 'success'" "the commit job"
+assert_not_contains "$commit_job" "outputs.check" "the commit job"
+commit_step="$(awk '/name: Commit$/{f=1} f && /verb: commit/{print; exit} f' <<<"$commit_job")"
 assert_not_contains "$commit_step" "if:" "the commit step"
+
+# --- the guards run in a job the agent's code never ran in ----------------
+#
+# A step can write $GITHUB_ENV and $GITHUB_PATH, and every later step in its
+# job runs with what it wrote. The check runs code the agent wrote. So the
+# guards are in a job of their own, which starts from gate's checkout and
+# takes from the agent's job only the handoff directory. The break: the
+# commit verb back in the agent's job, or the commit job taking the agent's
+# tree, a token, or anything that runs the agent's code.
+it "the commit verb runs in the commit job, and never in the agent's"
+assert_eq 1 "$(grep -c 'verb: commit' <<<"$commit_job")" "commit steps in the commit job"
+assert_eq 0 "$(grep -c 'verb: commit' <<<"$implement_job")" "commit steps in the agent job"
+
+it "and the commit job holds no token and runs nothing of the agent's"
+assert_contains "$commit_job" "permissions: {}" "the commit job"
+assert_eq 0 "$(grep -c 'steps.token\|secrets\.\|actions/checkout\|harness-setup\|falconet implement\|falconet check' <<<"$commit_job")" \
+  "tokens, secrets, checkouts and agent code in the commit job"
+
+it "and it starts from gate's checkout, taking only the handoff from the agent's job"
+assert_eq "name: source-gate name: handoff-implement " \
+  "$(grep -oE 'name: (source|handoff)-[a-z]+$' <<<"$commit_job" | head -2 | tr '\n' ' ')" \
+  "the commit job's downloads, in order"
+assert_contains "$commit_job" 'git apply --binary' "the commit job"
+apply_at="$(grep -n 'git apply' <<<"$commit_job" | cut -d: -f1)"
+commit_at="$(grep -n 'verb: commit' <<<"$commit_job" | cut -d: -f1)"
+assert_eq "true" "$([[ -n "$apply_at" && "$apply_at" -lt "$commit_at" ]] && echo true || echo false)" \
+  "the patch ($apply_at) is applied before the commit ($commit_at)"
+assert_contains "$implement_job" 'git diff --cached --binary --no-ext-diff --no-textconv "$BASE_SHA" >.falconet/change.patch' "the agent job's hand-off"
+
+it "and it checks the tree is the base on the working branch before it applies anything"
+take="$(awk '/- name: Take the checkout the gate prepared/ { f = 1; next } f && /^      - / { exit } f' <<<"$commit_job")"
+assert_contains "$take" 'test "$(git rev-parse HEAD)" = "$BASE_SHA"' "the take step"
+assert_contains "$take" 'test "$(git symbolic-ref HEAD)" = "refs/heads/$BRANCH"' "the take step"
+
+it "and publish restores the branch from the commit job's bundle"
+assert_contains "$publish_job" "name: handoff-commit" "the publish job"
+assert_not_contains "$publish_job" "name: handoff-implement" "the publish job"
 
 it "and the job reports the word of the last check that ran"
 assert_contains "$implement_job" 'check: ${{ steps.loop.outputs.check }}' "the implement job's outputs"
@@ -332,16 +369,17 @@ assert_eq 0 "$(grep -c 'toJSON(steps)\|secrets\.\|steps.token' <<<"$gate_summary
 
 it "the jobs report what the panel reads, from outputs, not from the log"
 assert_contains "$implement_job" 'passes: ${{ steps.loop.outputs.passes }}' "the implement job's outputs"
-assert_contains "$implement_job" 'kind: ${{ steps.kind.outputs.kind }}' "the implement job's outputs"
+assert_contains "$commit_job" 'kind: ${{ steps.kind.outputs.kind }}' "the commit job's outputs"
+assert_contains "$commit_job" 'outcome: ${{ steps.commit.outputs.outcome }}' "the commit job's outputs"
 assert_contains "$publish_job" 'pr: ${{ steps.pr.outputs.url }}' "the publish job's outputs"
-assert_contains "$(step "$implement_job" "Read which refusal it was")" ".falconet/failure-kind.txt" "the kind step"
+assert_contains "$(step "$commit_job" "Read which refusal it was")" ".falconet/failure-kind.txt" "the kind step"
 assert_contains "$(grep -A4 '^  reason:$' <<<"$action_code")" 'value: ${{ steps.run.outputs.reason }}' "the action's reason output"
 
 # A step context names a step by its id, and one with no such id reads as
 # empty: the job's `failed` output, contain's pause outcome, the pull request.
 # The break: an `id:` removed or renamed while an expression still names it.
 it "every step a job's expressions name has that id in the same job"
-for j in gate implement publish contain; do
+for j in gate implement commit publish contain; do
   jt="$(job "$j")"
   named="$(grep -oE 'steps\.[a-z][a-z0-9_-]*\.' <<<"$jt" | sed 's/^steps\.//; s/\.$//' | sort -u)"
   for id in $named; do
@@ -354,7 +392,7 @@ done
 # renamed, or the expression emptied, and the panel says "the step that
 # failed is named" a word, or nothing.
 it "each job's failed output names its steps, in words the panel turns into step names"
-for pair in "implement:loop commit" "publish:push pr"; do
+for pair in "implement:loop change" "commit:take apply commit" "publish:push pr"; do
   j="${pair%%:*}"
   expr="$(grep -E '^      failed: ' <<<"$(job "$j")")"
   words="$(grep -oE "&& '[a-z-]+'" <<<"$expr" | sed "s/^&& '//; s/'\$//" | tr '\n' ' ')"
@@ -634,7 +672,7 @@ unmet="$(awk '
 assert_eq "" "$unmet" "steps running falconet before their job installed it"
 
 it "and every job installs exactly once"
-assert_eq 4 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
+assert_eq 5 "$(grep -c 'name: Install falconet and gitleaks' <<<"$wf_code")" "install steps"
 
 # Four verbs read `git status`: prepare refuses a dirty tree, commit
 # refuses every changed path outside the allowlist, untracked included, and
@@ -672,7 +710,7 @@ assert_eq "" "$unexcluded" "verbs reading git status with the handoff still visi
 
 it "and the exclude names the handoff directory and nothing else"
 # ".falconet-tool/ .falconet/" until #19; the tool is on PATH now.
-assert_eq 3 "$(grep -c "printf '%s\\\\n' .falconet/ >> .git/info/exclude" <<<"$wf_code")" "exclude lines"
+assert_eq 4 "$(grep -c "printf '%s\\\\n' .falconet/ >> .git/info/exclude" <<<"$wf_code")" "exclude lines"
 assert_not_contains "$wf" ".falconet-tool" "workflow"
 
 it "and writes it per clone, never into a file the commit verb could see"
@@ -901,10 +939,10 @@ assert_eq "" "$(awk '
 ' "$WF")" "uploads with a multi-line path"
 
 it "and every hand-off between jobs fails rather than upload nothing"
-# The three that are plumbing: the handoff out of gate, the source out of
-# gate, and the handoff out of implement.
+# The four that are plumbing: the handoff out of gate, the source out of
+# gate, the handoff out of implement, and the handoff out of commit.
 # Comments stripped: the prose above the first upload names the setting.
-assert_eq 3 "$(grep -c 'if-no-files-found: error' <<<"$wf_code")" \
+assert_eq 4 "$(grep -c 'if-no-files-found: error' <<<"$wf_code")" \
   "uploads that fail on an empty result"
 
 # --- a verb's stdout cannot break the step that ran it ----------------------
@@ -1034,7 +1072,7 @@ third_party_uses="$(grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' <<<"$third_part
   | grep -v -E '^uses: (zetlen/falconet[@/]|\./)')"
 
 it "every third-party action in the workflows, the action and the caller template is found"
-assert_eq 17 "$(grep -c . <<<"$third_party_uses")" "third-party uses: lines"
+assert_eq 20 "$(grep -c . <<<"$third_party_uses")" "third-party uses: lines"
 
 it "and each is pinned to a commit SHA, with the tag it was taken from beside it"
 assert_eq "" "$(grep -v -E '^uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$third_party_uses")" \

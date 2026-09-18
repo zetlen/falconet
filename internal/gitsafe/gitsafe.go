@@ -41,6 +41,7 @@ var hardening = []string{
 	"-c", "core.fsmonitor=",
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.attributesFile=/dev/null",
+	"-c", "core.excludesFile=/dev/null",
 }
 
 // scrubbed is the process environment with the global and system git config —
@@ -68,16 +69,21 @@ func Command(dir string, args ...string) *exec.Cmd {
 }
 
 // Untrusted reports a checkout whose own git machinery would run a program
-// when a guard runs git over it — the one thing a file-only agent must not be
-// able to arrange. It reads the checkout's effective configuration (global
-// and system scrubbed, so only what the checkout carries) and looks at the
-// on-disk hook and attribute files; it never runs anything the configuration
-// names. A non-empty return is the reason to refuse; "" is a clean tree.
-func Untrusted(dir string) string {
+// when a guard runs git over it, or would hide a file from `git status` — the
+// things a file-only agent must not be able to arrange. It reads the
+// checkout's effective configuration (global and system scrubbed, so only
+// what the checkout carries) and looks at the on-disk hook, attribute and
+// exclude files; it never runs anything the configuration names. A non-empty
+// return is the reason to refuse; "" is a clean tree.
+//
+// handoff is the handoff directory relative to dir, or "" when it lies
+// outside. The workflow writes it into .git/info/exclude in every job, so it
+// is the one entry that file may carry.
+func Untrusted(dir, handoff string) string {
 	if reason := untrustedConfig(dir); reason != "" {
 		return reason
 	}
-	return untrustedFiles(dir)
+	return untrustedFiles(dir, handoff)
 }
 
 func untrustedConfig(dir string) string {
@@ -112,7 +118,9 @@ func untrustedConfig(dir string) string {
 // --list, so the comparisons are lower-case.
 func dangerousKey(key string) bool {
 	switch key {
-	case "core.fsmonitor", "core.hookspath", "core.sshcommand", "core.pager", "diff.external":
+	case "core.fsmonitor", "core.hookspath", "core.sshcommand", "core.pager", "diff.external",
+		// Not a program: a file of patterns git status then leaves out.
+		"core.excludesfile":
 		return true
 	}
 	// [diff "x"] command / textconv, and [filter "x"] clean/smudge/process:
@@ -127,10 +135,22 @@ func dangerousKey(key string) bool {
 	return false
 }
 
-func untrustedFiles(dir string) string {
+func untrustedFiles(dir, handoff string) string {
 	gitDir := resolveGitDir(dir)
 	if gitDir == "" {
 		return ""
+	}
+	// .git/info/exclude hides untracked files from the status the allowlist
+	// reads. Comments and blank lines are what git writes on init; the
+	// handoff directory is what the workflow adds.
+	if content, err := os.ReadFile(filepath.Join(gitDir, "info", "exclude")); err == nil {
+		for _, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || isHandoff(line, handoff) {
+				continue
+			}
+			return "the checkout's .git/info/exclude hides " + line
+		}
 	}
 	// .git/info/attributes binds diff drivers and filters from a file the
 	// path allowlist never sees.
@@ -150,6 +170,16 @@ func untrustedFiles(dir string) string {
 		return "the checkout carries the git hook " + e.Name()
 	}
 	return ""
+}
+
+// isHandoff reports whether an exclude pattern names the handoff directory
+// and nothing else.
+func isHandoff(pattern, handoff string) bool {
+	handoff = strings.Trim(filepath.ToSlash(handoff), "/")
+	if handoff == "" || handoff == "." || strings.HasPrefix(handoff, "../") {
+		return false
+	}
+	return strings.Trim(pattern, "/") == handoff
 }
 
 // resolveGitDir is the checkout's git directory, usually dir/.git but not

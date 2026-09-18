@@ -46,7 +46,7 @@ CFG
   # separate stub, on purpose.
   cat >"$base/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 code=1
 prev=""
 for a in "$@"; do [[ "$prev" == "--exit-code" ]] && code="$a"; prev="$a"; done
@@ -64,7 +64,7 @@ STUB
 run_in_with() { # checkout gitleaks-path -> runs the script, stdout only
   local c="$1" g="$2"
   ( cd "$c/repo" \
-    && GITLEAKS="$g" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+    && GITLEAKS="$g" STUB_CALLS="$c/gitleaks-calls.txt" \
        "$FALCONET" commit --out-dir "$c/repo/.falconet" 2>/dev/null )
 }
 
@@ -167,9 +167,9 @@ printf 'locals {\n  a = 5\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Widen the toolset\n\nThe issue asked me to.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$(run_in "$c")"
 
-it "a change outside the allowlist is a failure, however good the message"
+it "a change to a workflow is a failure, however good the message"
 assert_eq "failure" "$out" "outcome"
-assert_eq "paths" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
+assert_eq "protected" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 it "and nothing is committed, including the legitimate .tf edit"
 assert_eq 1 "$(commit_count "$c")" "commits"
@@ -177,6 +177,48 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 it "and the reason names the offending path"
 assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
   ".github/workflows/infra-issues.yml" "failure reason"
+
+# The built-in refusal of CI and automation configuration holds whatever
+# paths.allow says, and paths.allow_dangerous_access_to lifts exactly the
+# paths it names, which must still be allowed.
+c="$(new_checkout protected_wide_allow)"
+printf '{"paths":{"allow":["*"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "allow everything"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/ci.yml"
+printf 'Edit CI\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "a workflow is refused even when paths.allow admits every path"
+assert_eq "protected" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
+
+c="$(new_checkout protected_exempt)"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":[".github/workflows/lint.yml"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt one workflow"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/lint.yml"
+printf 'Edit lint\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "an exempted and allowed workflow is committed"
+assert_eq "success" "$out" "outcome"
+
+c="$(new_checkout protected_exempt_not_allowed)"
+printf '{"paths":{"allow":["*.tf"],"allow_dangerous_access_to":[".github/workflows/lint.yml"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt one workflow, allow only .tf"
+mkdir -p "$c/repo/.github/workflows"
+printf 'on: push\n' >"$c/repo/.github/workflows/lint.yml"
+printf 'Edit lint\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "an exempted workflow outside paths.allow is still refused, by the allowlist"
+assert_eq "paths" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
+
+c="$(new_checkout protected_exempt_config)"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":["*"]}}\n' >"$c/repo/.github/falconet.json"
+git -C "$c/repo" commit -qam "exempt everything"
+printf '{"paths":{"allow":["*"],"allow_dangerous_access_to":["*"],"deny_content":[]}}\n' >"$c/repo/.github/falconet.json"
+printf 'Edit config\n' >"$c/repo/.falconet/commit-msg.txt"
+out="$(run_in "$c")"
+it "no exemption reaches the config file itself"
+assert_eq "config-file" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt"
 
 # --- the allowlist is .tf and nothing else ----------------------------------
 #
@@ -382,7 +424,7 @@ assert_contains "$(cat "$c/repo/.falconet/failure-reason.txt")" \
 c="$(new_checkout scanner_stdout_purity)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 printf 'Finding:     locals { a = REDACTED }\n'
 printf 'RuleID:      github-pat\n'
@@ -405,7 +447,7 @@ assert_eq "success" "$out" "outcome"
 c="$(new_checkout scanner_stdout_in_reason)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 printf 'Finding:     the header was REDACTED\n'
 printf 'RuleID:      github-pat\n'
@@ -445,7 +487,7 @@ assert_eq 1 "$(commit_count "$c")" "commits"
 c="$(new_checkout scanner_broken)"
 cat >"$c/bin/gitleaks" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$GITLEAKS_CALLS"
+printf '%s\n' "$*" >>"$STUB_CALLS"
 cat >/dev/null
 echo "FTL failed to load config" >&2
 exit 1
@@ -615,7 +657,7 @@ c="$(new_checkout default_handoff)"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.falconet/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" STUB_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "with no --out-dir the handoff directory defaults to .falconet"
@@ -638,7 +680,7 @@ mkdir -p "$c/repo/.ci-handoff"
 printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
 printf 'Add the thing\n\nBecause the requester asked.\n' >"$c/repo/.ci-handoff/commit-msg.txt"
 out="$( cd "$c/repo" \
-        && GITLEAKS="$c/bin/gitleaks" GITLEAKS_CALLS="$c/gitleaks-calls.txt" \
+        && GITLEAKS="$c/bin/gitleaks" STUB_CALLS="$c/gitleaks-calls.txt" \
            "$FALCONET" commit 2>/dev/null )"
 
 it "and handoff_dir in config moves it, which is how a consumer migrates"
@@ -723,6 +765,27 @@ it "a planted pre-commit hook is refused, not silently skipped"
 assert_eq "failure" "$out" "outcome"
 it "and never ran"
 assert_file_missing "$c/repo/PWNED"
+
+# .git/info/exclude hides an untracked file from the git status the path
+# allowlist reads. The workflow writes the handoff directory there in every
+# job, and that entry is the only one allowed.
+c="$(new_checkout exclude_handoff)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '.falconet/\n.falconet/\n' >>"$c/repo/.git/info/exclude"
+out="$(run_in "$c")"
+it "an exclude entry naming the handoff directory is expected, and commits"
+assert_eq "success" "$out" "outcome"
+
+c="$(new_checkout exclude_hides)"
+printf 'locals {\n  a = 2\n}\n' >"$c/repo/records-example-tech.tf"
+printf 'Add the thing\n' >"$c/repo/.falconet/commit-msg.txt"
+printf '.falconet/\n.gitleaks.toml\n' >>"$c/repo/.git/info/exclude"
+printf '[extend]\nuseDefault = false\n' >"$c/repo/.gitleaks.toml"
+out="$(run_in "$c")"
+it "an exclude entry hiding any other file is refused"
+assert_eq "failure" "$out" "outcome"
+assert_eq "git-machinery" "$(cat "$c/repo/.falconet/failure-kind.txt")" "failure-kind.txt: which refusal, as one word"
 
 
 # --- the kind is this run's -----------------------------------------------------

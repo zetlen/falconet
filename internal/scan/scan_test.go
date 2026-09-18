@@ -32,7 +32,7 @@ func TestRelative(t *testing.T) {
 func stub(t *testing.T, dir, body string) string {
 	t.Helper()
 	path := filepath.Join(dir, "gitleaks")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$GITLEAKS_CALLS\"\n" + body
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$STUB_CALLS\"\n" + body
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -49,17 +49,43 @@ echo "no leaks found" >&2; exit 0
 
 func fakeToken() string { return "ghp_" + "0123456789abcdefghijABCDEFGHIJ012345" }
 
+// gitRepo makes dir a repository with one commit holding files, and returns
+// its physical root. The scan reads gitleaks's configuration from HEAD, so
+// every Root is a repository.
+func gitRepo(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("add", "-A")
+	git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "base")
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestScanDiscipline(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh for a stub")
 	}
 	dir := t.TempDir()
-	root, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := gitRepo(t, dir, nil)
 	calls := filepath.Join(dir, "calls.txt")
-	t.Setenv("GITLEAKS_CALLS", calls)
+	t.Setenv("STUB_CALLS", calls)
 	write := func(name, content string) string {
 		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
@@ -97,7 +123,7 @@ func TestScanDiscipline(t *testing.T) {
 	if got := strings.Count(string(argv), "\n"); got != 2 {
 		t.Errorf("gitleaks ran %d times; the missing and empty files must be skipped", got)
 	}
-	if !strings.Contains(string(argv), "stdin --no-banner --no-color --redact --verbose --exit-code 3") {
+	if !strings.Contains(string(argv), "--ignore-gitleaks-allow --no-banner --no-color --redact --verbose --exit-code 3") {
 		t.Errorf("argv: %q", argv)
 	}
 }
@@ -107,7 +133,8 @@ func TestScanFailsClosed(t *testing.T) {
 		t.Skip("no sh for a stub")
 	}
 	dir := t.TempDir()
-	t.Setenv("GITLEAKS_CALLS", filepath.Join(dir, "calls.txt"))
+	gitRepo(t, dir, nil)
+	t.Setenv("STUB_CALLS", filepath.Join(dir, "calls.txt"))
 	file := filepath.Join(dir, "msg.txt")
 	if err := os.WriteFile(file, []byte("anything at all\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -151,7 +178,8 @@ func TestAHitBeforeAFailureStaysReported(t *testing.T) {
 		t.Skip("no sh for a stub")
 	}
 	dir := t.TempDir()
-	t.Setenv("GITLEAKS_CALLS", filepath.Join(dir, "calls.txt"))
+	gitRepo(t, dir, nil)
+	t.Setenv("STUB_CALLS", filepath.Join(dir, "calls.txt"))
 	first := filepath.Join(dir, "first.txt")
 	second := filepath.Join(dir, "second.txt")
 	for _, f := range []string{first, second} {
@@ -160,7 +188,7 @@ func TestAHitBeforeAFailureStaysReported(t *testing.T) {
 		}
 	}
 	// Hits on the first call, dies on the second.
-	body := "n=$(wc -l <\"$GITLEAKS_CALLS\"); cat >/dev/null; [ \"$n\" -le 1 ] && exit 3; exit 1\n"
+	body := "n=$(wc -l <\"$STUB_CALLS\"); cat >/dev/null; [ \"$n\" -le 1 ] && exit 3; exit 1\n"
 	s := &Scanner{Gitleaks: stub(t, dir, body), Root: dir}
 	var matched []string
 	hit, err := s.Scan([]string{first, second}, false, func(l string) { matched = append(matched, l) })
@@ -175,4 +203,86 @@ func TestAHitBeforeAFailureStaysReported(t *testing.T) {
 func isNotRun(err error) bool {
 	var nr *NotRun
 	return errors.As(err, &nr)
+}
+
+// TestGitleaksConfigIsTheScansOwn: gitleaks runs outside the tree, with no
+// GITLEAKS_ variable, with gitleaks:allow comments ignored, and with the
+// config and ignore file committed at HEAD — never the working tree's copies.
+// See "What gitleaks is configured by" in scan.go.
+func TestGitleaksConfigIsTheScansOwn(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh for a stub")
+	}
+	// The stub records where it ran, whether a GITLEAKS_ variable reached it,
+	// and the config and ignore file it was handed.
+	record := `cat >/dev/null
+prev=""; config=""; ignore=""
+for a in "$@"; do
+  [ "$prev" = "--config" ] && config="$a"
+  [ "$prev" = "--gitleaks-ignore-path" ] && ignore="$a"
+  prev="$a"
+done
+{ echo "cwd=$(pwd -P)"; echo "env=$(env | grep -c '^GITLEAKS_')"
+  echo "config=$(cat "$config")"; echo "ignore=$(cat "$ignore/.gitleaksignore" 2>/dev/null)"
+} >"$STUB_OUT"
+exit 0
+`
+	for _, c := range []struct {
+		name       string
+		committed  map[string]string
+		wantConfig string
+		wantIgnore string
+	}{
+		{"committed", map[string]string{".gitleaks.toml": "title = \"base\"", ".gitleaksignore": "base-fingerprint"}, `title = "base"`, "base-fingerprint"},
+		{"none committed", nil, "[extend]\nuseDefault = true", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			root := gitRepo(t, dir, c.committed)
+			// The agent's copies, in the working tree.
+			for name, content := range map[string]string{
+				".gitleaks.toml":  "title = \"agent\"",
+				".gitleaksignore": "agent-fingerprint",
+			} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := filepath.Join(t.TempDir(), "out.txt")
+			t.Setenv("STUB_OUT", out)
+			t.Setenv("STUB_CALLS", filepath.Join(t.TempDir(), "calls.txt"))
+			t.Setenv("GITLEAKS_CONFIG", filepath.Join(root, ".gitleaks.toml"))
+			t.Setenv("GITLEAKS_CONFIG_TOML", "title = \"env\"")
+			msg := filepath.Join(root, "msg.txt")
+			if err := os.WriteFile(msg, []byte("text\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s := &Scanner{Gitleaks: stub(t, t.TempDir(), record), Root: root, Stderr: &bytes.Buffer{}}
+			if _, err := s.Scan([]string{msg}, false, func(string) {}); err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(string(got), "\n")
+			cwd := strings.TrimPrefix(lines[0], "cwd=")
+			if cwd == root || strings.HasPrefix(cwd, root+"/") {
+				t.Errorf("gitleaks ran inside the tree: %s", cwd)
+			}
+			if lines[1] != "env=0" {
+				t.Errorf("a GITLEAKS_ variable reached gitleaks: %s", lines[1])
+			}
+			body := strings.Join(lines[2:], "\n")
+			if !strings.Contains(body, "config="+c.wantConfig) {
+				t.Errorf("config: got %q, want %q", body, c.wantConfig)
+			}
+			if !strings.Contains(body, "ignore="+c.wantIgnore+"\n") {
+				t.Errorf("ignore file: got %q, want %q", body, c.wantIgnore)
+			}
+			if strings.Contains(body, "agent") {
+				t.Errorf("the working tree's copy was read: %q", body)
+			}
+		})
+	}
 }

@@ -99,7 +99,7 @@ func TestUnreadableGlobsAreRefusedLoudly(t *testing.T) {
 		if _, err := AllowPattern(glob); err == nil {
 			t.Errorf("AllowPattern(%q) compiled; it must refuse", glob)
 		}
-		if _, err := NewPolicy([]string{"*.tf", glob}, nil); err == nil {
+		if _, err := NewPolicy([]string{"*.tf", glob}, nil, nil); err == nil {
 			t.Errorf("NewPolicy accepted %q", glob)
 		}
 	}
@@ -223,7 +223,7 @@ done`
 }
 
 func TestPathAllowedIsAny(t *testing.T) {
-	p, err := NewPolicy([]string{"", "*.tf", "docs/*.md", ""}, nil)
+	p, err := NewPolicy([]string{"", "*.tf", "docs/*.md", ""}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ var hclDenylist = []string{
 
 func hclPolicy(t *testing.T) *Policy {
 	t.Helper()
-	p, err := NewPolicy([]string{"*"}, hclDenylist)
+	p, err := NewPolicy([]string{"*"}, nil, hclDenylist)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestDenylistMatchesPerLine(t *testing.T) {
 }
 
 func TestConfiguredDenylistReplaces(t *testing.T) {
-	p, err := NewPolicy([]string{"*"}, []string{"jsondecode("})
+	p, err := NewPolicy([]string{"*"}, nil, []string{"jsondecode("})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestDenyPatternMatchesItsOwnLiteral(t *testing.T) {
 		if s == "" || strings.ContainsRune(s, '\n') {
 			return true
 		}
-		p, err := NewPolicy([]string{"*"}, []string{s})
+		p, err := NewPolicy([]string{"*"}, nil, []string{s})
 		if err != nil {
 			return false
 		}
@@ -505,6 +505,7 @@ func TestReasonsKeepGiveUpsLineStructure(t *testing.T) {
 	for _, r := range []string{
 		ReasonRename("R ", "new.tf"),
 		ReasonDeniedContent([]string{"a.tf: file()"}),
+		ReasonProtectedPaths([]string{".github/workflows/ci.yml"}),
 		ReasonUnchanged(),
 		ReasonNoMessage(".falconet/commit-msg.txt", []string{"a.tf"}),
 		ReasonEmptyStaged([]string{"a.tf"}),
@@ -537,7 +538,7 @@ func TestKinds(t *testing.T) {
 	seen := map[Kind]bool{}
 	guards := map[Kind]bool{
 		KindGitMachinery: true, KindRename: true, KindConfigFile: true,
-		KindPaths: true, KindContent: true, KindSecret: true,
+		KindProtected: true, KindPaths: true, KindContent: true, KindSecret: true,
 	}
 	for _, k := range Kinds {
 		if seen[k] {
@@ -551,10 +552,54 @@ func TestKinds(t *testing.T) {
 			t.Errorf("%s: Guard() = %v", k, k.Guard())
 		}
 	}
-	if len(seen) != 9 {
-		t.Errorf("Kinds has %d entries, want the six guards and the three ways to have nothing to commit", len(seen))
+	if len(seen) != 10 {
+		t.Errorf("Kinds has %d entries, want the seven guards and the three ways to have nothing to commit", len(seen))
 	}
 	if Kind("parked").Guard() {
 		t.Error("a word that is not a kind is a guard")
+	}
+}
+
+// TestProtectedPaths: the built-in list refuses CI, automation and scanner
+// configuration wherever paths.allow reaches, and an exemption lifts exactly
+// the paths it names.
+func TestProtectedPaths(t *testing.T) {
+	p, err := NewPolicy([]string{"*"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		".github/workflows/ci.yml", ".github/workflows", ".github/actions/setup/action.yml",
+		".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS", ".github/dependabot.yml",
+		".gitea/workflows/ci.yml", ".forgejo/workflows/ci.yml",
+		".circleci/config.yml", ".gitlab-ci.yml", ".gitlab/ci/build.yml", ".travis.yml",
+		".buildkite/pipeline.yml", "Jenkinsfile", "ci/Jenkinsfile", "azure-pipelines.yml",
+		"bitbucket-pipelines.yml", ".drone.yml", ".woodpecker/build.yml",
+		"trivy.yaml", ".trivyignore", ".gitleaks.toml", ".gitleaksignore", ".semgrepignore", ".snyk",
+		"lefthook.yml", ".pre-commit-config.yaml", ".husky/pre-commit", "renovate.json", ".github/renovate.json5",
+	} {
+		if !p.Protected(path) {
+			t.Errorf("%s is not protected", path)
+		}
+	}
+	for _, path := range []string{"main.tf", "docs/workflows.md", "src/github/workflows.go", ".github/ISSUE_TEMPLATE/bug.md", ".github/falconet.json"} {
+		if p.Protected(path) {
+			t.Errorf("%s is protected", path)
+		}
+	}
+
+	exempt, err := NewPolicy([]string{"*"}, []string{".github/workflows/lint.yml"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exempt.Protected(".github/workflows/lint.yml") {
+		t.Error("an exempted path is still protected")
+	}
+	if !exempt.Protected(".github/workflows/deploy.yml") {
+		t.Error("an exemption lifted a path it does not name")
+	}
+
+	if _, err := NewPolicy([]string{"*"}, []string{"a\\"}, nil); err == nil {
+		t.Error("an exemption that does not compile was accepted")
 	}
 }
