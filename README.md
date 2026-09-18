@@ -126,7 +126,9 @@ What the harness finds:
 
 What the harness must leave:
 
-- The edited tree, uncommitted, touching only paths in `paths.allow`; and
+- The edited tree, uncommitted, touching only paths in `paths.allow` and
+  none on the built-in list of CI and automation configuration that
+  `paths.allow_dangerous_access_to` describes; and
   `commit-msg.txt` in the handoff directory, a commit subject, a blank line
   and a body written for a reviewer. Or:
 - The tree untouched, and `needs-info.md` in the handoff directory: questions
@@ -593,6 +595,7 @@ to be fixed before the next request.
 | `paths.allow is empty — set it in .github/falconet.json` in the **commit** job's Commit step, and the run ends in **contain**'s hand-off | The config names no allowlist, and `commit` refuses to guess one. | Step 6: `paths.allow`. |
 | Paused `ready-for-human`: *The agent changed files that run or judge this repository's own checks* | The change touched a workflow, a CI configuration, a scanner's configuration or a hook manager's file. `commit` refuses those whatever `paths.allow` says. | Nothing, unless that file should change, in which case a person changes it. Read the request for what it was trying to reach. `paths.allow_dangerous_access_to` exists, and its row in step 6 says why you should not use it. |
 | Paused `ready-for-human`: *The agent changed .github/falconet.json, which is where the rules for what it may change are read from* | The request talked the agent into editing the config — widening the allowlist, say — which is refused before the new contents are consulted. | Nothing, unless the config should change, in which case a person changes it. Read the request for what it was trying to get past the guard. |
+| `gitleaks exited 1 scanning …` in the **commit** job's Commit step, after `failed to load extended config` | The secret scan reads your `.gitleaks.toml` as committed on the default branch and runs gitleaks outside the tree, so an `[extend] path` to another file in the repository does not resolve. The scan fails closed. | Make `.gitleaks.toml` self-contained: copy the extended rules into it, or use `[extend] useDefault = true`. |
 | `harness.output is …; it must be one of text, claude-stream-json` in a verb's step | `harness.output` names a format falconet does not know. | Step 6: `text`, `claude-stream-json`, or no key. |
 | `check: could not run [...]` in the agent job's loop step, and the run ends in **contain**'s hand-off | `check.command` names a program the runner does not have, or its first element is not on `PATH`. A check that could not run is neither a pass nor a failure the agent can act on, so the job stops. | Step 6: an argv the runner can start, or install it in `harness-setup`. Test it with `falconet check` from a clean checkout. |
 | `implement: could not run [...]` or `implement: the harness failed` in the loop step, and the run ends in **contain**'s hand-off | `harness.command` names a program the agent job does not have, or the harness exited non-zero: a bad model key, a model outage, a crash. The harness's own output is above the line. | `harness-setup` installs what `harness.command` names; the key is stored under the name `model-api-key-env` says. Test it with `falconet implement` from a clean checkout, with the key in your environment. |
